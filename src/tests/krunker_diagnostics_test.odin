@@ -34,6 +34,7 @@ test_krunker_diagnostics :: proc() -> bool {
 	defer delete(safe)
 	if safe != "game=FRA:test HTTP=403 error=invite expired" { fmt.eprintln("Network redaction removed useful diagnostics"); return false }
 	if !test_network_log_file() { return false }
+	if !test_network_log_rotation() { return false }
 	fmt.println("Krunker network diagnostic redaction tests OK")
 	return true
 }
@@ -75,5 +76,42 @@ test_network_log_file :: proc() -> bool {
 		return false
 	}
 	fmt.println("Krunker network log file tests OK")
+	return true
+}
+
+// A log bigger than the limit moves to .old.log at the first write of a run,
+// so the logs never grow without bound across games and versions.
+test_network_log_rotation :: proc() -> bool {
+	dir := fmt.tprintf("%sbin/network-log-rotate-test", project_root())
+	path := fmt.tprintf("%s/krunker-network.log", dir)
+	old := fmt.tprintf("%s/krunker-network.old.log", dir)
+	os.make_directory_all(dir)
+	krunker.network_log_close()
+	saved := krunker.network_log_path
+	krunker.network_log_path = path
+	defer {
+		krunker.network_log_close()
+		krunker.network_log_path = saved
+		os.remove(path)
+		os.remove(old)
+		os.remove(dir)
+	}
+	big := make([]byte, krunker.NETWORK_LOG_MAX_BYTES + 10, context.temp_allocator)
+	if os.write_entire_file(path, big) != nil { fmt.eprintln("rotation test: could not write the big log"); return false }
+	krunker.network_log_rotated = false
+	krunker.network_log("test", "fresh line")
+	krunker.network_log_close()
+	old_info, old_err := os.stat(old, context.temp_allocator)
+	new_info, new_err := os.stat(path, context.temp_allocator)
+	if old_err != nil || old_info.size != i64(len(big)) || new_err != nil || new_info.size > 512 {
+		fmt.eprintf("Network log over the limit must move to .old.log and start fresh (old=%v %v new=%v %v)\n", old_err, old_info.size, new_err, new_info.size)
+		return false
+	}
+	// A second run under the limit keeps appending to the same file.
+	krunker.network_log_rotated = false
+	krunker.network_log("test", "second run")
+	krunker.network_log_close()
+	again, _ := os.stat(path, context.temp_allocator)
+	if again.size <= new_info.size { fmt.eprintln("Network log under the limit must keep appending"); return false }
 	return true
 }

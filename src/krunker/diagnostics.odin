@@ -19,6 +19,19 @@ network_log_file: ^os.File
 // happens on the game thread. Opt in with SR_CONSOLE_LOG=1.
 network_log_console_checked: bool
 network_log_console: bool
+// The log never grows past about twice this: when it is bigger at the first
+// write of a run, it moves to krunker-network.old.log (replacing the previous
+// one) and a fresh log starts. Checked once per run, nothing per line.
+NETWORK_LOG_MAX_BYTES :: 1024 * 1024
+network_log_rotated: bool
+
+network_log_rotate :: proc(path: string) {
+	info, err := os.stat(path, context.temp_allocator)
+	if err != nil || info.size <= NETWORK_LOG_MAX_BYTES { return }
+	old := fmt.tprintf("%s.old.log", strings.trim_suffix(path, ".log"))
+	_ = os.remove(old)
+	_ = os.rename(path, old)
+}
 
 network_log_secret :: proc(secret: string) {
 	if len(secret) == 0 do return
@@ -108,6 +121,7 @@ network_log :: proc(stage, message: string) {
 	if network_log_console do fmt.print(line)
 	if network_log_file == nil {
 		os.make_directory_all(os.dir(network_log_path))
+		if !network_log_rotated { network_log_rotated = true; network_log_rotate(network_log_path) }
 		file, err := os.open(network_log_path, {.Write, .Append, .Create})
 		if err == nil { network_log_file = file }
 	}
