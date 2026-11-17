@@ -1,5 +1,6 @@
 package krunker
 
+import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -139,7 +140,7 @@ network_log_is_problem :: proc(stage, message: string) -> bool {
 
 @(private = "file")
 network_log_ring_clear :: proc() {
-	for &line in network_log_ring { delete(line); line = "" }
+	for &line in network_log_ring { delete(line, runtime.heap_allocator()); line = "" }
 	network_log_ring_next, network_log_ring_count = 0, 0
 }
 
@@ -159,8 +160,10 @@ network_log :: proc(stage, message: string) {
 	defer sync.mutex_unlock(&network_log_mutex)
 	if !network_log_everything {
 		if !network_log_is_problem(stage, safe) {
-			delete(network_log_ring[network_log_ring_next])
-			network_log_ring[network_log_ring_next] = strings.clone(line)
+			// The ring outlives any one caller's allocator (game, network
+			// thread, tests), so it always uses the plain heap.
+			delete(network_log_ring[network_log_ring_next], runtime.heap_allocator())
+			network_log_ring[network_log_ring_next] = strings.clone(line, runtime.heap_allocator())
 			network_log_ring_next = (network_log_ring_next + 1) % NETWORK_LOG_CONTEXT
 			network_log_ring_count = min(network_log_ring_count + 1, NETWORK_LOG_CONTEXT)
 			return
