@@ -797,11 +797,18 @@ import shared "../shared"
 		glfw.SwapInterval(on ? 1 : 0)
 	}
 
+	@(private = "file")
+	g_gl_swap_ms: f64
+
 	gl_gpu_present :: proc(window: glfw.WindowHandle) {
 		gpu_flush_deferred()
 		gl_gpu_pass_mark(.Present)
+		start := glfw.GetTime()
 		glfw.SwapBuffers(window)
+		g_gl_swap_ms = (glfw.GetTime() - start) * 1000
 	}
+
+	gl_gpu_last_vsync_wait_ms :: proc() -> f64 { return g_gl_swap_ms }
 
 	gl_gpu_backend_name :: proc() -> string { return "OpenGL" }
 

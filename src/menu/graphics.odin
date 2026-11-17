@@ -102,6 +102,20 @@ menu_fps_limit_index :: proc(limit: i32) -> i32 {
 // Unknown values fall back to the monitor's refresh rate.
 menu_fps_limit_validate :: proc(limit: i32) -> i32 { return MENU_FPS_LIMITS[menu_fps_limit_index(limit)] }
 
+// V-Sync with VRR: frames are held 3-5 FPS under the refresh rate so the
+// display keeps refreshing on each frame (client vrr.odin).
+VRR_CAP_LABELS := [3]string{"Auto", "Always", "Off"}
+
+settings_vrr_cap_row :: proc(state: ^State, view: View) {
+	if !settings_search_show(state, "VRR cap") { return }
+	if clay.UI(clay.ID("VrrCapRow"))(settings_row(state)) {
+		settings_label("VRR cap", state.scale)
+		spacer()
+		settings_dropdown_field(state, VRR_CAP_LABELS[clamp(state.settings_draft.hud.vrr_cap, 0, len(VRR_CAP_LABELS) - 1)], "VrrCap", .VRR_CAP)
+	}
+	if len(view.vrr_status) > 0 { settings_note(state, view.vrr_status) }
+}
+
 settings_menu_fps_limit_row :: proc(state: ^State) {
 	if !settings_search_show(state, "Menu FPS limit") { return }
 	if clay.UI(clay.ID("MenuFpsLimitRow"))(settings_row(state)) {

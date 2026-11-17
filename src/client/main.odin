@@ -81,6 +81,12 @@ Client :: struct {
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
 	max_msaa: i32, // gpu_max_msaa_samples
+	// VRR (vrr.odin): what is known about the window's monitor, re-detected
+	// when the window moves to another monitor or monitors change.
+	vrr: Vrr_Info,
+	vrr_monitor: glfw.MonitorHandle,
+	vrr_adapt: Vrr_Adapt,
+	vrr_check_frame: int,
 	msaa: struct { target: Gpu_Render_Target, samples, width, height: i32 }, // client_msaa_begin
 	bench_seconds: f32, // Benchmark mode only.
 	// Static map batching and frustum culling (map_batch.odin). On by default;
@@ -226,7 +232,67 @@ client_monitor_cache :: proc(client: ^Client) -> ^Monitor_Cache {
 }
 
 client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
-	if g_client != nil { g_client.monitor_cache.valid = false }
+	if g_client != nil { g_client.monitor_cache.valid = false; g_client.vrr_monitor = nil }
+}
+
+// The monitor showing the window: the fullscreen one, else the one holding
+// the window's centre (the primary when none does).
+client_window_monitor :: proc(window: glfw.WindowHandle) -> glfw.MonitorHandle {
+	if window == nil { return glfw.GetPrimaryMonitor() }
+	if monitor := glfw.GetWindowMonitor(window); monitor != nil { return monitor }
+	x, y := glfw.GetWindowPos(window)
+	w, h := glfw.GetWindowSize(window)
+	cx, cy := x + w/2, y + h/2
+	for monitor in glfw.GetMonitors() {
+		mx, my := glfw.GetMonitorPos(monitor)
+		mode := glfw.GetVideoMode(monitor)
+		if mode == nil { continue }
+		if cx >= mx && cx < mx + i32(mode.width) && cy >= my && cy < my + i32(mode.height) { return monitor }
+	}
+	return glfw.GetPrimaryMonitor()
+}
+
+// Re-detects VRR when the window's monitor changed (checked every 30 frames)
+// or `force`. A changed refresh rate restarts the cap's margin.
+client_vrr_update :: proc(client: ^Client, force := false) {
+	client.vrr_check_frame += 1
+	if !force && client.vrr_monitor != nil && client.vrr_check_frame % 30 != 0 { return }
+	monitor := client_window_monitor(client.window)
+	if !force && monitor == client.vrr_monitor && monitor != nil { return }
+	client.vrr_monitor = monitor
+	delete(client.vrr.name)
+	delete(client.vrr.source)
+	info := vrr_detect(monitor)
+	info.name, info.source = strings.clone(info.name), strings.clone(info.source)
+	if info.refresh_hz != client.vrr.refresh_hz { vrr_adapt_reset(&client.vrr_adapt, info.refresh_hz) }
+	client.vrr = info
+	fmt.printfln("[Display] %s", vrr_status_text(info, client_vrr_mode(client), client.vsync, client.vrr_adapt.margin))
+}
+
+// Settings > Video > VRR cap and V-Sync, previewing the Settings draft.
+client_vrr_mode :: proc(client: ^Client) -> Vrr_Mode {
+	value := client.hud_settings.vrr_cap
+	if client.menu.settings_active && (client.menu.page == .SETTINGS || client.menu.page == .CONTROLS) { value = client.menu.settings_draft.hud.vrr_cap }
+	return Vrr_Mode(clamp(value, 0, len(Vrr_Mode) - 1))
+}
+
+client_vrr_vsync :: proc(client: ^Client) -> bool {
+	if client.menu.settings_active && (client.menu.page == .SETTINGS || client.menu.page == .CONTROLS) { return client.menu.settings_draft.vsync }
+	return client.vsync
+}
+
+// Seconds per frame of the VRR cap, or 0 when not capping.
+client_vrr_interval :: proc(client: ^Client) -> f64 {
+	if !vrr_cap_active(client_vrr_mode(client), client_vrr_vsync(client), client.vrr) { return 0 }
+	return 1 / vrr_cap_fps(client.vrr.refresh_hz, client.vrr_adapt.margin)
+}
+
+// After a presented frame: widens the cap's margin if V-Sync still made it wait.
+client_vrr_frame :: proc(client: ^Client) {
+	if !vrr_cap_active(client_vrr_mode(client), client_vrr_vsync(client), client.vrr) { return }
+	if vrr_adapt_frame(&client.vrr_adapt, gpu_last_vsync_wait_ms()) {
+		fmt.printfln("[Display] Frames still waited for V-Sync under the VRR cap; capping at %.1f FPS now", vrr_cap_fps(client.vrr.refresh_hz, client.vrr_adapt.margin))
+	}
 }
 
 // Menus and loading screens wait between frames instead of spinning a core:
@@ -237,21 +303,23 @@ client_monitor_changed :: proc "c" (monitor: glfw.MonitorHandle, event: i32) {
 // moves, and capping then causes visible hitches. client_tick still runs every
 // frame, so sockets keep being polled.
 client_idle_frame_interval :: proc(client: ^Client) -> f64 {
+	// V-Sync on a VRR display: never faster than the VRR cap.
+	vrr := client_vrr_interval(client)
 	if client.mouse_state.locked {
 		// In game: Settings > Display > FPS limit (unlimited by default).
 		cap := menuui.game_fps_limit_validate(client.hud_settings.fps_limit)
-		return cap > 0 ? 1 / f64(cap) : 0
+		return max(cap > 0 ? 1 / f64(cap) : 0, vrr)
 	}
 	limit := client.menu_fps_limit
 	// Settings previews the staged limit; Cancel discards it with the draft.
 	if client.menu.settings_active && (client.menu.page == .SETTINGS || client.menu.page == .CONTROLS) { limit = client.menu.settings_draft.menu_fps_limit }
 	limit = menuui.menu_fps_limit_validate(limit)
 	switch limit {
-	case menuui.MENU_FPS_LIMIT_UNLIMITED: return 0
+	case menuui.MENU_FPS_LIMIT_UNLIMITED: return vrr
 	case menuui.MENU_FPS_LIMIT_MONITOR:
 		if !client.monitor_cache.valid || client.monitor_cache.index != client.monitor_index { client_monitor_cache_refresh(client) }
-		return client.monitor_cache.idle_frame_interval
-	case: return 1 / f64(limit)
+		return max(client.monitor_cache.idle_frame_interval, vrr)
+	case: return max(1 / f64(limit), vrr)
 	}
 }
 
@@ -1846,6 +1914,7 @@ main :: proc() {
 	print_startup_info(client)
 	free_all(context.temp_allocator)
 
+	client_vrr_update(client, force = true)
 	last_tick := f32(glfw.GetTime())
 	last_frame_start := glfw.GetTime()
 	prev_cpu_ms, prev_swap_ms, prev_events_ms: f32
@@ -1890,15 +1959,20 @@ main :: proc() {
 		gpu_frame_end()
 		client_collect_gpu_times(client)
 		swap_end := glfw.GetTime()
+		client_vrr_frame(client)
+		client_vrr_update(client)
+		// Wait first, then read window input, so the next frame starts from
+		// the newest keyboard state (mouse motion is read in client_tick).
+		phase_mark(.IDLE_WAIT)
+		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
+		events_start := glfw.GetTime()
 		phase_mark(.POLL_EVENTS)
 		client_poll_events()
 		client_alt_f4(client.window)
 		when SR_DEV {
 			prev_swap_ms = f32((swap_end-swap_start)*1000)
-			prev_events_ms = f32((glfw.GetTime()-swap_end)*1000)
+			prev_events_ms = f32((glfw.GetTime()-events_start)*1000)
 		}
-		phase_mark(.IDLE_WAIT)
-		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
 		free_all(context.temp_allocator)
 	}
 	phase_mark(.SHUTDOWN)
@@ -1908,6 +1982,8 @@ main :: proc() {
 
 	client_access_cancel(client)
 	delete(client.access.token)
+	delete(client.vrr.name)
+	delete(client.vrr.source)
 	delete(client.access.assignment_url)
 	client_unload_map(client)
 	net_client_disconnect(&client.net)

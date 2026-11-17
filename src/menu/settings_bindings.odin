@@ -98,6 +98,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 		labels, anchor, action = anisotropy_labels[:count], "Anisotropy", .ANISOTROPY
 	case .MENU_FPS_LIMIT: labels, anchor, action = MENU_FPS_LIMIT_LABELS[:], "MenuFpsLimit", .MENU_FPS_LIMIT
 	case .GAME_FPS_LIMIT: labels, anchor, action = GAME_FPS_LIMIT_LABELS[:], "GameFpsLimit", .GAME_FPS_LIMIT
+	case .VRR_CAP: labels, anchor, action = VRR_CAP_LABELS[:], "VrrCap", .VRR_CAP
 	case .MSAA:
 		count := 1
 		for level in MSAA_LEVELS[1:] { if level <= view.max_msaa { count += 1 } }

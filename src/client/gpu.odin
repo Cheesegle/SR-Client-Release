@@ -479,6 +479,14 @@ gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
 	gl_gpu_set_target(target, width, height)
 }
 
+// How long the last presented frame waited for the display (V-Sync): the
+// present-wait pacing on Vulkan, SwapBuffers on OpenGL. VRR capping uses it
+// to tell whether frames still reach the refresh rate.
+gpu_last_vsync_wait_ms :: proc() -> f64 {
+	if g_gpu_backend == .Vulkan { return vk_gpu_last_vsync_wait_ms() }
+	return gl_gpu_last_vsync_wait_ms()
+}
+
 gpu_set_vsync :: proc(on: bool) {
 	if g_gpu_backend == .Vulkan { vk_gpu_set_vsync(on); return }
 	gl_gpu_set_vsync(on)

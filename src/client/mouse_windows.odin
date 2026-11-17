@@ -507,21 +507,12 @@ client_poll_events :: proc() {
 	mouse_capture_update(mouse.window)
 }
 
-// Idle-frame wait. The input thread keeps reading on its own. On the fallback
-// path raw WM_INPUT still reaches native_mouse_window_proc while GLFW
-// dispatches messages, so buffered mouse motion is not lost.
+// Idle-frame wait: sleeps on a high-resolution timer (glfwWaitEventsTimeout
+// rounds to whole milliseconds) until the timeout or a window message, then
+// processes messages. The input thread keeps reading on its own. On the
+// fallback path raw WM_INPUT still reaches native_mouse_window_proc while
+// GLFW dispatches messages, so buffered mouse motion is not lost.
 client_wait_events :: proc(timeout: f64) {
-	if t := &g_raw_input_thread; t.handle != nil {
-		glfw.WaitEventsTimeout(timeout)
-		raw_input_thread_set_active(t, raw_input_thread_wanted(t.window))
-		mouse_capture_update(t.window)
-		return
-	}
-	mouse := &g_native_mouse
-	if mouse.previous_proc != nil {
-		native_mouse_sync(mouse)
-		if mouse.active { native_mouse_drain(mouse) }
-	}
-	glfw.WaitEventsTimeout(timeout)
-	mouse_capture_update(mouse.window)
+	client_wait_for_message(timeout)
+	client_poll_events()
 }

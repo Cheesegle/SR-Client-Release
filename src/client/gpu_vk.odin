@@ -298,6 +298,7 @@ Vk_Swapchain :: struct {
 	present_wait: bool,
 	present_id:   u64, // id of the last present
 	first_id:     u64, // first id presented on the current swapchain
+	last_wait_ms: f64, // vk_present_wait_pace's wait before the current frame
 }
 
 @(private = "file")
@@ -2348,6 +2349,7 @@ vk_present_wait_supported :: proc(physical: vk.PhysicalDevice) -> bool {
 @(private = "file")
 vk_present_wait_pace :: proc() {
 	sc := &g_vk.present
+	sc.last_wait_ms = 0
 	if !sc.present_wait || !sc.vsync || sc.swapchain == 0 || sc.dirty || sc.present_id < 2 { return }
 	target := sc.present_id - 1
 	if target < sc.first_id { return } // presented on an earlier swapchain
@@ -2358,9 +2360,12 @@ vk_present_wait_pace :: proc() {
 	case .ERROR_OUT_OF_DATE_KHR: sc.dirty = true
 	case: vk_ok(result, "vkWaitForPresentKHR")
 	}
+	sc.last_wait_ms = time.duration_milliseconds(time.tick_since(start))
 	g_vk_stats.present_waits += 1
-	g_vk_stats.present_wait_ms += time.duration_milliseconds(time.tick_since(start))
+	g_vk_stats.present_wait_ms += sc.last_wait_ms
 }
+
+vk_gpu_last_vsync_wait_ms :: proc() -> f64 { return g_vk.present.last_wait_ms }
 
 @(private = "file")
 vk_window_sync :: proc() {
