@@ -1,6 +1,6 @@
 # Changelog
 
-## SR Client 0.22.0
+## SR Client 0.23.0
 First public release of SR Client, a native Krunker client for competitive
 and custom lobbies.
 
@@ -17,3 +17,5 @@ and custom lobbies.
 - After a game: the final scoreboard stays until Esc, then a fresh start
   screen; Refresh (F5) any time
 - Krunker's 5-4-3-2-1 round countdown voice
+- Small and clean over time: logs are written only when something goes wrong
+  and never grow past about 2 MB

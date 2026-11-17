@@ -107,6 +107,39 @@ network_log_safe :: proc(input: string, limit: int = 16384) -> string {
 	return strings.clone(string(out[:]))
 }
 
+// Normal builds write the log only when something goes wrong: routine lines
+// are kept in memory (the last NETWORK_LOG_CONTEXT of them) and written to the
+// file together with the problem that follows them, so a failed join, a
+// server error or a disconnect still shows what led up to it. Developer
+// builds (-define:SR_DEV=true) write every line. Tests may switch this.
+NETWORK_LOG_EVERYTHING_DEFAULT :: #config(SR_DEV, false)
+network_log_everything := NETWORK_LOG_EVERYTHING_DEFAULT
+NETWORK_LOG_CONTEXT :: 48
+network_log_ring: [NETWORK_LOG_CONTEXT]string
+network_log_ring_next, network_log_ring_count: int
+
+// A line worth writing in normal builds: errors, failures, rejections, server
+// errors and HTTP failures. Plain progress lines ("HTTP=200 ... No error",
+// "limit_exceeded=false") are not.
+network_log_is_problem :: proc(stage, message: string) -> bool {
+	if stage == "server-error" || stage == "world-player" { return true }
+	if strings.has_prefix(message, "ERROR") || strings.has_prefix(message, "WARNING") { return true }
+	if strings.has_prefix(message, "HTTP=") {
+		status := message[5:]
+		return !(len(status) >= 3 && status[0] == '2')
+	}
+	lower := strings.to_lower(message, context.temp_allocator)
+	words := []string{"failed", "failure", "rejected", "could not", "cannot", "unavailable", "invalid", "unexpected", "missing", "denied", "kicked", "banned", "captcha"}
+	for word in words { if strings.contains(lower, word) { return true } }
+	return false
+}
+
+@(private = "file")
+network_log_ring_clear :: proc() {
+	for &line in network_log_ring { delete(line); line = "" }
+	network_log_ring_next, network_log_ring_count = 0, 0
+}
+
 network_log :: proc(stage, message: string) {
 	safe := network_log_safe(message)
 	defer delete(safe)
@@ -119,6 +152,26 @@ network_log :: proc(stage, message: string) {
 		network_log_console = found && flag == "1"
 	}
 	if network_log_console do fmt.print(line)
+	if !network_log_everything {
+		if !network_log_is_problem(stage, safe) {
+			delete(network_log_ring[network_log_ring_next])
+			network_log_ring[network_log_ring_next] = strings.clone(line)
+			network_log_ring_next = (network_log_ring_next + 1) % NETWORK_LOG_CONTEXT
+			network_log_ring_count = min(network_log_ring_count + 1, NETWORK_LOG_CONTEXT)
+			return
+		}
+		// A problem: write the lines that led up to it first, oldest first.
+		start := (network_log_ring_next - network_log_ring_count + NETWORK_LOG_CONTEXT) % NETWORK_LOG_CONTEXT
+		for i in 0 ..< network_log_ring_count {
+			network_log_write(network_log_ring[(start + i) % NETWORK_LOG_CONTEXT])
+		}
+		network_log_ring_clear()
+	}
+	network_log_write(line)
+}
+
+@(private = "file")
+network_log_write :: proc(line: string) {
 	if network_log_file == nil {
 		os.make_directory_all(os.dir(network_log_path))
 		if !network_log_rotated { network_log_rotated = true; network_log_rotate(network_log_path) }

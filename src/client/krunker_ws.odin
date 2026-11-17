@@ -484,7 +484,8 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 		opcode, is_text := packet[0].(string)
 		// Only suppress routine updates. A late disconnect/error/challenge must
 		// remain visible after the initial packet trace has reached its limit.
-		if state.rx_logged <= 40 || !krunker_ws_routine_packet(packet[0]) {
+		// The per-message trace is for developer builds; normal builds log only problems.
+		if kproto.network_log_everything && (state.rx_logged <= 40 || !krunker_ws_routine_packet(packet[0])) {
 			kproto.network_log("msgpack", fmt.tprintf("RECV opcode=%v args=%d trailer=%d complete_message_bytes=%d", packet[0], len(packet)-1, counter, len(payload)))
 			// SR Client: log the contents too (bounded) so packets the client does
 			// not read yet, such as chat, can be implemented from a log.
@@ -696,7 +697,7 @@ krunker_ws_poll :: proc(client: ^Client) {
 			break
 		}
 		state.rx_logged += 1
-		if meta != nil && state.rx_logged <= 40 { kproto.network_log("ws-recv", fmt.tprintf("frame=%d bytes=%d flags=%d offset=%d bytesleft=%d (frame logging limited to first 40)", state.rx_logged, received, meta.flags, meta.offset, meta.bytesleft)) }
+		if meta != nil && state.rx_logged <= 40 && kproto.network_log_everything { kproto.network_log("ws-recv", fmt.tprintf("frame=%d bytes=%d flags=%d offset=%d bytesleft=%d (frame logging limited to first 40)", state.rx_logged, received, meta.flags, meta.offset, meta.bytesleft)) }
 		if meta != nil && (meta.flags & curl.WS_CLOSE) == curl.WS_CLOSE {
 			close_code := -1
 			reason := ""

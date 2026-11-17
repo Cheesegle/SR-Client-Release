@@ -33,8 +33,12 @@ test_krunker_diagnostics :: proc() -> bool {
 	safe = krunker.network_log_safe("game=FRA:test HTTP=403 error=invite expired")
 	defer delete(safe)
 	if safe != "game=FRA:test HTTP=403 error=invite expired" { fmt.eprintln("Network redaction removed useful diagnostics"); return false }
-	if !test_network_log_file() { return false }
-	if !test_network_log_rotation() { return false }
+	everything := krunker.network_log_everything
+	krunker.network_log_everything = true
+	file_ok := test_network_log_file() && test_network_log_rotation()
+	krunker.network_log_everything = everything
+	if !file_ok { return false }
+	if !test_network_log_errors_only() { return false }
 	fmt.println("Krunker network diagnostic redaction tests OK")
 	return true
 }
@@ -113,5 +117,45 @@ test_network_log_rotation :: proc() -> bool {
 	krunker.network_log_close()
 	again, _ := os.stat(path, context.temp_allocator)
 	if again.size <= new_info.size { fmt.eprintln("Network log under the limit must keep appending"); return false }
+	return true
+}
+
+// Normal builds: routine lines stay in memory and are never written; a problem
+// writes itself plus the lines that led up to it.
+test_network_log_errors_only :: proc() -> bool {
+	dir := fmt.tprintf("%sbin/network-log-errors-test", project_root())
+	path := fmt.tprintf("%s/krunker-network.log", dir)
+	os.make_directory_all(dir)
+	os.remove(path)
+	krunker.network_log_close()
+	saved, everything := krunker.network_log_path, krunker.network_log_everything
+	krunker.network_log_path, krunker.network_log_everything = path, false
+	defer {
+		krunker.network_log_close()
+		krunker.network_log_path, krunker.network_log_everything = saved, everything
+		os.remove(path)
+		os.remove(dir)
+	}
+	krunker.network_log("seek-game", "HTTP=200 curl=E_OK (0: No error) detail=")
+	krunker.network_log("lobby-config", "limitClasses=false type=x")
+	krunker.network_log_close()
+	if _, err := os.stat(path, context.temp_allocator); err == nil {
+		fmt.eprintln("Normal builds must not write routine network log lines")
+		return false
+	}
+	krunker.network_log("join", "context line before the problem")
+	krunker.network_log("seek-game", "HTTP=403 curl=E_OK (0: No error) detail=")
+	krunker.network_log("join", "routine line after the problem")
+	krunker.network_log_close()
+	data, err := os.read_entire_file_from_path(path, context.temp_allocator)
+	text := string(data)
+	if err != nil || !strings.contains(text, "HTTP=403") || !strings.contains(text, "context line before the problem") || !strings.contains(text, "limitClasses") || strings.contains(text, "routine line after the problem") {
+		fmt.eprintf("A problem must be written with the lines before it, and nothing routine after it: %q\n", text)
+		return false
+	}
+	if !krunker.network_log_is_problem("spawn", "entry rejected; server_args=[]") || !krunker.network_log_is_problem("ws-recv", "ERROR curl=x") || krunker.network_log_is_problem("game-list", "response body bytes=47147 limit_exceeded=false") {
+		fmt.eprintln("network_log_is_problem misclassified a line")
+		return false
+	}
 	return true
 }
