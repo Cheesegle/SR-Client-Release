@@ -182,6 +182,7 @@ Vk_Target :: struct {
 	layer_view: vk.ImageView,
 	width:      u32,
 	height:     u32,
+	samples:    u32, // colour targets: 1, or 2/4/8 for MSAA (never read back or sampled)
 }
 
 @(private = "file")
@@ -212,6 +213,7 @@ Vk_Pipeline_Key :: struct {
 	blend:      bool,
 	wireframe:  bool,
 	depth_only: bool,
+	samples:    u8, // the pass's sample count (MSAA); 1 for depth passes
 }
 
 // The dynamic state last set in the frame's command buffer.
@@ -253,6 +255,7 @@ g_vk_stats: struct {
 	set0_binds:       int, // descriptor set 0 binds (per pass, not per draw)
 	barriers:         int, // image layout barriers recorded (vk_transition)
 	barriers_skipped: int, // transitions that needed none (already in a read-only layout)
+	resolves:         int, // MSAA resolves (gpu_resolve)
 }
 
 @(private = "file")
@@ -375,6 +378,8 @@ Vk_State :: struct {
 	// What the current command buffer has bound.
 	in_pass:          bool,
 	pass_depth_only:  bool,
+	pass_samples:     u32, // the colour pass's sample count
+	msaa_samples:     i32, // sample count of the last MSAA target (its pipelines are precompiled)
 	pass_cull_front:  bool,
 	depth_pass_target: Gpu_Render_Target,
 	bound_pipeline:   vk.Pipeline,
@@ -1105,13 +1110,13 @@ vk_format :: proc(format: Gpu_Format) -> vk.Format {
 }
 
 @(private = "file")
-vk_image_make :: proc(width, height, layers, mips: u32, array: bool, format: vk.Format, usage: vk.ImageUsageFlags) -> (img: Vk_Image) {
+vk_image_make :: proc(width, height, layers, mips: u32, array: bool, format: vk.Format, usage: vk.ImageUsageFlags, samples: u32 = 1) -> (img: Vk_Image) {
 	img.format, img.width, img.height, img.layers, img.mips, img.array = format, width, height, max(layers, 1), max(mips, 1), array
 	img.aspect = format == VK_DEPTH_FORMAT ? {.DEPTH} : {.COLOR}
 	info := vk.ImageCreateInfo{
 		sType = .IMAGE_CREATE_INFO, imageType = .D2, format = format,
 		extent = {width, height, 1}, mipLevels = img.mips, arrayLayers = img.layers,
-		samples = {._1}, tiling = .OPTIMAL, usage = usage, sharingMode = .EXCLUSIVE, initialLayout = .UNDEFINED,
+		samples = vk_sample_count(samples), tiling = .OPTIMAL, usage = usage, sharingMode = .EXCLUSIVE, initialLayout = .UNDEFINED,
 	}
 	vk_ok(vk.CreateImage(g_vk.device, &info, nil, &img.image), "vkCreateImage")
 	req: vk.MemoryRequirements
@@ -1122,6 +1127,16 @@ vk_image_make :: proc(width, height, layers, mips: u32, array: bool, format: vk.
 	}
 	img.view = vk_image_view(&img, 0, img.layers, array)
 	return
+}
+
+@(private = "file")
+vk_sample_count :: proc(samples: u32) -> vk.SampleCountFlags {
+	switch samples {
+	case 2: return {._2}
+	case 4: return {._4}
+	case 8: return {._8}
+	}
+	return {._1}
 }
 
 @(private = "file")
@@ -1457,15 +1472,51 @@ vk_color_set :: proc() -> vk.DescriptorSet {
 
 vk_gpu_render_target_create :: proc(width, height: i32) -> Gpu_Render_Target {
 	if !g_vk.ready || width <= 0 || height <= 0 { return 0 }
-	target: Vk_Target
+	target := Vk_Target{samples = 1}
 	vk_target_images_make(&target, u32(width), u32(height))
 	return Gpu_Render_Target(vk_table_add(&g_vk.targets, target))
+}
+
+vk_gpu_render_target_create_msaa :: proc(width, height, samples: i32) -> Gpu_Render_Target {
+	if !g_vk.ready || width <= 0 || height <= 0 { return 0 }
+	samples := u32(clamp(samples, 1, vk_gpu_max_msaa_samples()))
+	target := Vk_Target{samples = samples}
+	vk_target_images_make(&target, u32(width), u32(height))
+	if samples > 1 && u32(g_vk.msaa_samples) != samples {
+		// Compile the world pipelines for this sample count now, not at the
+		// first draw that needs each.
+		g_vk.msaa_samples = i32(samples)
+		for live, i in g_vk.programs.live {
+			if !live { continue }
+			p := &g_vk.programs.items[i]
+			if p.shadow || p.layout == .UI { continue }
+			handle := Gpu_Program(i + 1)
+			vk_pipeline_get({program = handle, samples = u8(samples)})
+			if p.layout != .Debug_Line { vk_pipeline_get({program = handle, blend = true, samples = u8(samples)}) }
+		}
+	}
+	return Gpu_Render_Target(vk_table_add(&g_vk.targets, target))
+}
+
+vk_gpu_max_msaa_samples :: proc() -> i32 {
+	if !g_vk.ready { return 1 }
+	counts := g_vk.props.limits.framebufferColorSampleCounts & g_vk.props.limits.framebufferDepthSampleCounts
+	if ._8 in counts { return 8 }
+	if ._4 in counts { return 4 }
+	if ._2 in counts { return 2 }
+	return 1
 }
 
 @(private = "file")
 vk_target_images_make :: proc(target: ^Vk_Target, width, height: u32) {
 	target.width, target.height = width, height
-	target.color = vk_image_make(width, height, 1, 1, false, VK_COLOR_FORMAT, {.COLOR_ATTACHMENT, .TRANSFER_SRC})
+	if target.samples > 1 {
+		// Resolved by vkCmdResolveImage (gpu_resolve); depth stays in the pass.
+		target.color = vk_image_make(width, height, 1, 1, false, VK_COLOR_FORMAT, {.COLOR_ATTACHMENT, .TRANSFER_SRC}, target.samples)
+		target.depth = vk_image_make(width, height, 1, 1, false, VK_DEPTH_FORMAT, {.DEPTH_STENCIL_ATTACHMENT}, target.samples)
+		return
+	}
+	target.color = vk_image_make(width, height, 1, 1, false, VK_COLOR_FORMAT, {.COLOR_ATTACHMENT, .TRANSFER_SRC, .TRANSFER_DST})
 	target.depth = vk_image_make(width, height, 1, 1, false, VK_DEPTH_FORMAT, {.DEPTH_STENCIL_ATTACHMENT, .TRANSFER_SRC})
 	// Layouts start UNDEFINED: the first pass (or readback) moves them, with
 	// contents undefined until drawn, as with a new GL renderbuffer.
@@ -1474,7 +1525,7 @@ vk_target_images_make :: proc(target: ^Vk_Target, width, height: u32) {
 vk_gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
 	t := vk_table_get(&g_vk.textures, u32(depth))
 	if t == nil { return 0 }
-	target := Vk_Target{depth_only = true, texture = depth, layer = u32(max(layer, 0)), width = t.image.width, height = t.image.height}
+	target := Vk_Target{depth_only = true, texture = depth, layer = u32(max(layer, 0)), width = t.image.width, height = t.image.height, samples = 1}
 	target.layer_view = vk_image_view(&t.image, target.layer, 1, false)
 	return Gpu_Render_Target(vk_table_add(&g_vk.targets, target))
 }
@@ -1675,7 +1726,16 @@ vk_program_add :: proc(program: Vk_Program) -> Gpu_Program {
 		// view, built on use).
 		append(&keys, Vk_Pipeline_Key{program = handle}, Vk_Pipeline_Key{program = handle, blend = true})
 	}
-	for key in keys { vk_pipeline_get(key) }
+	for &key in keys {
+		key.samples = 1
+		vk_pipeline_get(key)
+		// World programs also draw into the MSAA target, when there is one.
+		if g_vk.msaa_samples > 1 && !program.shadow && program.layout != .UI {
+			msaa := key
+			msaa.samples = u8(g_vk.msaa_samples)
+			vk_pipeline_get(msaa)
+		}
+	}
 	return handle
 }
 
@@ -1772,7 +1832,7 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 		frontFace = .CLOCKWISE, // GL's counter-clockwise, measured with y down
 		lineWidth = 1,
 	}
-	multisample := vk.PipelineMultisampleStateCreateInfo{sType = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples = {._1}}
+	multisample := vk.PipelineMultisampleStateCreateInfo{sType = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples = vk_sample_count(u32(max(key.samples, 1)))}
 	// Test, write and compare op are dynamic (vk_dynamic_state_apply).
 	depth := vk.PipelineDepthStencilStateCreateInfo{sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}
 	blend_attachment := vk.PipelineColorBlendAttachmentState{
@@ -1855,6 +1915,7 @@ vk_pass_begin_color :: proc() -> bool {
 	g_vk.bound_scissor = {extent = {min(vw, t.width), min(vh, t.height)}}
 	g_vk.pending_color, g_vk.pending_depth = false, false
 	g_vk.in_pass, g_vk.pass_depth_only, g_vk.pass_cull_front = true, false, false
+	g_vk.pass_samples = max(t.samples, 1)
 	return true
 }
 
@@ -1886,6 +1947,31 @@ vk_gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
 		g_vk.target = target
 	}
 	g_vk.viewport = {width, height}
+}
+
+// MSAA: averages the source's samples into the destination's colour. Draws
+// after it (the interface) go to the destination with its old depth, which
+// they do not test.
+vk_gpu_resolve :: proc(source, destination: Gpu_Render_Target, width, height: i32) {
+	gpu_flush_deferred()
+	src := vk_table_get(&g_vk.targets, u32(vk_resolve_target(source)))
+	dst := vk_table_get(&g_vk.targets, u32(vk_resolve_target(destination)))
+	if src == nil || dst == nil || src.depth_only || dst.depth_only || src.samples <= 1 || dst.samples > 1 { return }
+	// Clears pending for the current target (either side) land first.
+	vk_pass_end()
+	vk_flush_pending_clear()
+	cmd := vk_cmd()
+	vk_transition(cmd, &src.color, 0, 1, .TRANSFER_SRC_OPTIMAL)
+	vk_transition(cmd, &dst.color, 0, 1, .TRANSFER_DST_OPTIMAL)
+	w := u32(clamp(width, 0, i32(min(src.width, dst.width))))
+	h := u32(clamp(height, 0, i32(min(src.height, dst.height))))
+	region := vk.ImageResolve{
+		srcSubresource = {aspectMask = {.COLOR}, layerCount = 1},
+		dstSubresource = {aspectMask = {.COLOR}, layerCount = 1},
+		extent = {w, h, 1},
+	}
+	vk.CmdResolveImage(cmd, src.color.image, .TRANSFER_SRC_OPTIMAL, dst.color.image, .TRANSFER_DST_OPTIMAL, 1, &region)
+	g_vk_stats.resolves += 1
 }
 
 vk_gpu_set_clear_color :: proc(color: [3]f32) {
@@ -1974,7 +2060,7 @@ vk_gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 	set1 := vk_color_set()
 	if !g_vk.in_pass && !vk_pass_begin_color() { return }
 	state := g_vk.draw_state
-	key := Vk_Pipeline_Key{program = g_vk.program, blend = state.blend && !g_vk.pass_depth_only, wireframe = state.wireframe, depth_only = g_vk.pass_depth_only}
+	key := Vk_Pipeline_Key{program = g_vk.program, blend = state.blend && !g_vk.pass_depth_only, wireframe = state.wireframe, depth_only = g_vk.pass_depth_only, samples = g_vk.pass_depth_only ? 1 : u8(g_vk.pass_samples)}
 	pipeline := vk_pipeline_get(key)
 	if pipeline == 0 { return }
 	if pipeline != g_vk.bound_pipeline {
@@ -2353,7 +2439,7 @@ vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 vk_readback_copy :: proc(target: Gpu_Render_Target, depth: bool, width, height: i32) -> (data: [^]u8, ok: bool) {
 	target := vk_resolve_target(target)
 	t := vk_table_get(&g_vk.targets, u32(target))
-	if t == nil || t.depth_only { return }
+	if t == nil || t.depth_only || t.samples > 1 { return }
 	// Draws and clears still pending for it land first.
 	if g_vk.target == target { vk_pass_end(); vk_flush_pending_clear() }
 	size := int(width) * int(height) * 4

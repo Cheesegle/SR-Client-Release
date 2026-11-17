@@ -42,7 +42,7 @@ client_settings_defaults :: proc() -> Client_Settings {
 // The menu draft for a missing settings file, which Settings > Reset restores:
 // the loader's defaults (client_settings_defaults through
 // client_settings_validate) plus the audio defaults, shaped like menu_view.
-client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = nil, max_anisotropy: f32 = 16) -> menuui.Settings_Values {
+client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = nil, max_anisotropy: f32 = 16, max_msaa: i32 = 8) -> menuui.Settings_Values {
 	d := client_settings_validate(client_settings_defaults())
 	audio := audio_settings_clamp(DEFAULT_AUDIO_SETTINGS)
 	return {display_mode = d.display_mode, resolution_index = d.resolution_index, monitor_index = d.monitor_index,
@@ -51,7 +51,7 @@ client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = 
 		advanced_sensitivity = d.advanced_sensitivity, invert_mouse = d.invert_mouse,
 		audio_volumes = {audio.master, audio.effects, audio.footsteps, audio.ui},
 		show_fps = d.show_fps, vsync = d.vsync, vulkan = !d.opengl, menu_fps_limit = d.menu_fps_limit, bindings = d.bindings, hud = d.hud,
-		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage}
+		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy, max_msaa), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage}
 }
 
 client_settings_validate :: proc(settings: Client_Settings) -> Client_Settings {
@@ -90,6 +90,11 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 	if json.unmarshal(data, &settings) != nil || settings.version != 1 {
 		fmt.eprintln("[Settings] Invalid client preferences; using defaults.")
 		return client_settings_defaults()
+	}
+	// Before 0.26 anti-aliasing was on/off (4x, next start).
+	if settings.hud.anti_alias {
+		if settings.quality.msaa == 0 { settings.quality.msaa = 4 }
+		settings.hud.anti_alias = false
 	}
 	if !settings.map_details_hidden_default {
 		settings.visuals.hide_cats, settings.visuals.hide_extra_props = true, true

@@ -606,6 +606,34 @@ import shared "../shared"
 		return Gpu_Render_Target(fbo)
 	}
 
+	// Multisampled colour + depth renderbuffers (MSAA). glBlitFramebuffer
+	// resolves them (gl_gpu_resolve).
+	gl_gpu_render_target_create_msaa :: proc(width, height, samples: i32) -> Gpu_Render_Target {
+		fbo: u32
+		target: Gl_Color_Target
+		gl.CreateFramebuffers(1, &fbo)
+		gl.CreateRenderbuffers(1, &target.color)
+		gl.CreateRenderbuffers(1, &target.depth)
+		gl.NamedRenderbufferStorageMultisample(target.color, samples, gl.RGBA8, width, height)
+		gl.NamedRenderbufferStorageMultisample(target.depth, samples, gl.DEPTH24_STENCIL8, width, height)
+		gl.NamedFramebufferRenderbuffer(fbo, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, target.color)
+		gl.NamedFramebufferRenderbuffer(fbo, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, target.depth)
+		g_gl_color_targets[fbo] = target
+		return Gpu_Render_Target(fbo)
+	}
+
+	gl_gpu_resolve :: proc(source, destination: Gpu_Render_Target, width, height: i32) {
+		gpu_flush_deferred()
+		gl.BlitNamedFramebuffer(u32(source), u32(destination), 0, 0, width, height, 0, 0, width, height, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+	}
+
+	gl_gpu_max_msaa_samples :: proc() -> i32 {
+		value: i32
+		gl.GetIntegerv(gl.MAX_SAMPLES, &value)
+		for samples in ([3]i32{8, 4, 2}) { if value >= samples { return samples } }
+		return 1
+	}
+
 	// Draws go to `target` (0: the window) over a width x height viewport.
 	gl_gpu_set_target :: proc(target: Gpu_Render_Target, width, height: i32) {
 		gpu_flush_deferred()

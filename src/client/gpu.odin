@@ -363,6 +363,29 @@ gpu_render_target_create :: proc(width, height: i32) -> Gpu_Render_Target {
 	return gl_gpu_render_target_create(width, height)
 }
 
+// A multisampled colour + depth target (MSAA: the world and viewmodel pass).
+// It cannot be read back or sampled; gpu_resolve averages its colour into a
+// single-sample target, which the interface is then drawn into.
+gpu_render_target_create_msaa :: proc(width, height, samples: i32) -> Gpu_Render_Target {
+	if g_gpu_backend == .Vulkan { return vk_gpu_render_target_create_msaa(width, height, samples) }
+	return gl_gpu_render_target_create_msaa(width, height, samples)
+}
+
+// Resolves `source`'s (multisampled) colour into `destination` (0: the
+// window), both width x height. Depth is not resolved: what is drawn after
+// (the interface) does not test depth.
+gpu_resolve :: proc(source, destination: Gpu_Render_Target, width, height: i32) {
+	if g_gpu_backend == .Vulkan { vk_gpu_resolve(source, destination, width, height); return }
+	gl_gpu_resolve(source, destination, width, height)
+}
+
+// The highest MSAA sample count (1, 2, 4 or 8) both colour and depth targets
+// support.
+gpu_max_msaa_samples :: proc() -> i32 {
+	if g_gpu_backend == .Vulkan { return vk_gpu_max_msaa_samples() }
+	return gl_gpu_max_msaa_samples()
+}
+
 gpu_render_target_create_depth :: proc(depth: Gpu_Texture, layer: i32 = -1) -> Gpu_Render_Target {
 	if g_gpu_backend == .Vulkan { return vk_gpu_render_target_create_depth(depth, layer) }
 	return gl_gpu_render_target_create_depth(depth, layer)

@@ -32,6 +32,9 @@ Quality_Settings :: struct {
 	// SR Client additions, beyond Krunker parity.
 	shadow_quality:  i32,  // Shadow_Quality: 0 Krunker (whole-map map), 1 Sharp (cascades).
 	self_shadow:     bool, // Your own body casts a shadow (default on).
+	// MSAA sample count for the world and viewmodel (the interface is never
+	// multisampled): 0 = off, else 2, 4 or 8. Applies immediately.
+	msaa:            i32,
 }
 Shadow_Quality :: enum i32 { KRUNKER, SHARP }
 SHADOW_QUALITY_LABELS := [Shadow_Quality]string{.KRUNKER = "Krunker", .SHARP = "Sharp"}
@@ -44,6 +47,12 @@ DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .C
 VISUAL_LABELS := #partial [Visual_Control]string{.BRIGHTNESS="Brightness", .GAMMA="Gamma", .CONTRAST="Contrast", .SATURATION="Saturation", .AMBIENT="Ambient strength", .SUNLIGHT="Sunlight strength"}
 VISUAL_LIMITS := [Visual_Control][2]f32{.BRIGHTNESS={0.5,1.5}, .GAMMA={0.5,2}, .CONTRAST={0.5,1.5}, .SATURATION={0,2}, .AMBIENT={0,2}, .SUNLIGHT={0,2}, .FOG_DISTANCE={1,1}}
 ANISOTROPY_LEVELS := [5]i32{0, 2, 4, 8, 16}
+MSAA_LEVELS := [4]i32{0, 2, 4, 8}
+MSAA_LABELS := [4]string{"Off", "2x", "4x", "8x"}
+msaa_index :: proc(samples: i32) -> i32 {
+	for value, i in MSAA_LEVELS { if value == samples { return i32(i) } }
+	return 0
+}
 // Frame cap while the cursor is free (menus, loading, end screen); gameplay is
 // never capped. Stored as frames per second: 0 is the monitor's refresh rate,
 // so settings files without the key keep the default, and -1 is unlimited.
@@ -105,6 +114,7 @@ settings_menu_fps_limit_row :: proc(state: ^State) {
 quality_settings_validate :: proc(settings: Quality_Settings) -> Quality_Settings {
 	result := settings
 	switch result.anisotropy { case 0, 2, 4, 8, 16: case: result.anisotropy = 0 }
+	result.msaa = MSAA_LEVELS[msaa_index(result.msaa)]
 	if result.lighting < i32(Lighting_Quality.LOW) || result.lighting > i32(Lighting_Quality.PHYSICAL) { result.lighting = DEFAULT_QUALITY_SETTINGS.lighting }
 	if result.shadow_quality < 0 || result.shadow_quality > i32(Shadow_Quality.SHARP) { result.shadow_quality = DEFAULT_QUALITY_SETTINGS.shadow_quality }
 	return result
@@ -154,6 +164,15 @@ settings_quality :: proc(state: ^State, view: View) {
 		}
 	}
 	settings_note(state, "Sharp keeps the pixelated texture style. Smooth blends texels. Anisotropic filtering improves textures viewed at an angle.")
+	if settings_search_show(state, "Anti-aliasing") {
+		if clay.UI(clay.ID("MsaaRow"))(settings_row(state)) {
+			settings_label("Anti-aliasing (MSAA)", state.scale)
+			spacer()
+			label := view.max_msaa < 2 ? "Unavailable" : MSAA_LABELS[msaa_index(state.settings_draft.quality.msaa)]
+			settings_dropdown_field(state, label, "Msaa", .MSAA, view.max_msaa >= 2)
+		}
+	}
+	settings_note(state, "Anti-aliasing smooths the edges of the world and your weapon; the HUD and menus stay sharp. Higher levels cost more FPS.")
 	quality := state.settings_draft.quality
 	settings_toggle_row(state, "Shadows", "QualityShadows", quality.shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SHADOWS)})
 	settings_toggle_row(state, "Soft Shadows", "QualitySoftShadows", quality.soft_shadows, {kind=.QUALITY_TOGGLE, index=i32(Quality_Toggle.SOFT_SHADOWS)})

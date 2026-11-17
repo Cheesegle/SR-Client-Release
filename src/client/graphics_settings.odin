@@ -9,12 +9,14 @@ g_visual_settings := menuui.DEFAULT_VISUAL_SETTINGS
 
 client_graphics_init :: proc(client: ^Client) {
 	client.max_anisotropy = gpu_max_anisotropy()
+	client.max_msaa = gpu_max_msaa_samples()
 	// Always Sharp (nearest, nearest mip): Krunker's pixelated look.
 	client.graphics_sampler = gpu_sampler_create(GPU_SAMPLER_WORLD)
 }
 
 client_graphics_fini :: proc(client: ^Client) {
 	gpu_sampler_destroy(&client.graphics_sampler)
+	gpu_render_target_destroy(&client.msaa.target)
 }
 
 client_graphics_values :: proc(client: ^Client) -> (visuals: menuui.Visual_Settings, quality: menuui.Quality_Settings) {
@@ -25,14 +27,47 @@ client_graphics_values :: proc(client: ^Client) -> (visuals: menuui.Visual_Setti
 	return
 }
 
-client_supported_quality :: proc(settings: menuui.Quality_Settings, max_anisotropy: f32) -> menuui.Quality_Settings {
+client_supported_quality :: proc(settings: menuui.Quality_Settings, max_anisotropy: f32, max_msaa: i32 = 8) -> menuui.Quality_Settings {
 	result := menuui.quality_settings_validate(settings)
 	requested := result.anisotropy
 	result.anisotropy = 0
 	for level in ([4]i32{2, 4, 8, 16}) {
 		if level <= requested && f32(level) <= max_anisotropy { result.anisotropy = level }
 	}
+	requested = result.msaa
+	result.msaa = 0
+	for level in menuui.MSAA_LEVELS[1:] {
+		if level <= requested && level <= max_msaa { result.msaa = level }
+	}
 	return result
+}
+
+// MSAA: the world and viewmodel draw into a multisampled target of the
+// viewport's size (made on first use and when the size or sample count
+// changes), resolved into `client.render_target` before the interface.
+// Returns the target to draw the world into: the MSAA one, or render_target.
+client_msaa_begin :: proc(client: ^Client, quality: menuui.Quality_Settings) -> Gpu_Render_Target {
+	samples := client_supported_quality(quality, client.max_anisotropy, client.max_msaa).msaa
+	w, h := client.viewport_width, client.viewport_height
+	m := &client.msaa
+	if samples < 2 || w <= 0 || h <= 0 {
+		if m.target != 0 { gpu_render_target_destroy(&m.target); m^ = {} }
+		return client.render_target
+	}
+	if m.target == 0 || m.samples != samples || m.width != w || m.height != h {
+		gpu_render_target_destroy(&m.target)
+		m^ = {target = gpu_render_target_create_msaa(w, h, samples), samples = samples, width = w, height = h}
+		if m.target == 0 { return client.render_target }
+	}
+	gpu_set_target(m.target, w, h)
+	return m.target
+}
+
+// Resolves the MSAA target into render_target and draws there from now on.
+client_msaa_end :: proc(client: ^Client, world_target: Gpu_Render_Target) {
+	if world_target == client.render_target { return }
+	gpu_resolve(world_target, client.render_target, client.viewport_width, client.viewport_height)
+	gpu_set_target(client.render_target, client.viewport_width, client.viewport_height)
 }
 
 // Keep background correction in step with basic.frag; HUD is drawn afterwards.

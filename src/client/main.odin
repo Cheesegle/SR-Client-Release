@@ -80,6 +80,8 @@ Client :: struct {
 	graphics_sampler_ready: bool,
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
+	max_msaa: i32, // gpu_max_msaa_samples
+	msaa: struct { target: Gpu_Render_Target, samples, width, height: i32 }, // client_msaa_begin
 	bench_seconds: f32, // Benchmark mode only.
 	// Static map batching and frustum culling (map_batch.odin). On by default;
 	// `--no-batching` turns it off for A/B comparisons.
@@ -1542,16 +1544,19 @@ client_render_world :: proc(client: ^Client) {
 	phase_mark(.PREVIEW_GRAPHICS)
 	client_update_graphics(client)
 	phase_mark(.RENDER_SCENE)
+	_, quality := client_graphics_values(client)
+	quality = menuui.quality_settings_validate(quality)
+	// MSAA: the world and viewmodel go to a multisampled target, resolved at
+	// the end; the interface is drawn after, single-sampled.
+	world_target := client_msaa_begin(client, quality)
 	gpu_clear(color = true, depth = true)
 	g_draw_stats = {}
 	client.scene.batching_enabled = client.render_batching
 	// After batching_enabled: the shadow pass draws the static map through the
 	// same batches. Its draw calls count towards this frame's stats.
-	_, quality := client_graphics_values(client)
-	quality = menuui.quality_settings_validate(quality)
 	// Self shadow: your third-person rig, drawn only into the player shadow map.
 	g_shadow_extra_casters = self_shadow_update(client, quality)
-	shadow_prepare(client.scene, client.game.map_inst, quality, client.render_target, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
+	shadow_prepare(client.scene, client.game.map_inst, quality, world_target, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
 	g_shadow_extra_casters = nil
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
@@ -1569,6 +1574,7 @@ client_render_world :: proc(client: ^Client) {
 	scene_render(client.fps_scene, &weapon_camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	g_shadow_viewmodel_pass = false
 	when SR_DEV { debug_render_after_viewmodel(client) }
+	client_msaa_end(client, world_target)
 }
 
 // The graphics API a run starts with: --vulkan / --opengl, else the saved
@@ -1708,8 +1714,8 @@ main :: proc() {
 			glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
 		}
 
-		// Settings > Render > Anti-aliasing (MSAA, applies on start).
-		if preferences.hud.anti_alias { glfw.WindowHint(glfw.SAMPLES, 4) }
+		// No multisampled default framebuffer: MSAA (Settings > Visuals) renders
+		// the world into its own target, resolved before the interface.
 		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
 	}
 	if client.window == nil {

@@ -136,8 +136,6 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_damage(state)
 	case .VISUALS:
 		settings_quality(state, view)
-		settings_toggle_row(state, "Anti-aliasing", "AntiAlias", values.hud.anti_alias, {kind = .HUD_TOGGLE, index = 15})
-		settings_note(state, "Anti-aliasing smooths edges (4x MSAA). It costs some FPS and applies when SR Client starts next time.")
 		settings_visuals(state)
 	case .GAMEPLAY:
 		settings_viewmodel(state)
@@ -269,14 +267,13 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		hud := defaults.hud
 		hud.hide_ping, hud.manual_respawn, hud.hide_enemy_counter = draft.hud.hide_ping, draft.hud.manual_respawn, draft.hud.hide_enemy_counter
 		hud.hide_leaderboard, hud.hide_chat, hud.network_thread = draft.hud.hide_leaderboard, draft.hud.hide_chat, draft.hud.network_thread
-		hud.hide_bullet_holes, hud.anti_alias = draft.hud.hide_bullet_holes, draft.hud.anti_alias
+		hud.hide_bullet_holes = draft.hud.hide_bullet_holes
 		hud.hide_kill_counter, hud.hide_death_counter = draft.hud.hide_kill_counter, draft.hud.hide_death_counter
 		draft.hud = hud
 		draft.crosshair, draft.hitmarker, draft.damage = defaults.crosshair, defaults.hitmarker, defaults.damage
 	case .VISUALS:
 		night, strength := draft.visuals.night_mode, draft.visuals.night_strength
 		draft.visuals, draft.quality = defaults.visuals, defaults.quality
-		draft.hud.anti_alias = defaults.hud.anti_alias
 		draft.visuals.night_mode, draft.visuals.night_strength = night, strength
 	case .GAMEPLAY:
 		draft.fov, draft.viewmodel, draft.trails = defaults.fov, defaults.viewmodel, defaults.trails
