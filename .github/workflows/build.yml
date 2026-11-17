@@ -1,0 +1,94 @@
+name: Build SR Client
+
+# Every push builds the client. Pushing a tag like v0.1.0 also publishes a
+# GitHub Release with the installer and portable zip.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC linker
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Odin dev-2026-10
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -UseBasicParsing "https://github.com/odin-lang/Odin/releases/download/dev-2026-10/odin-windows-amd64-dev-2026-10.zip" -OutFile odin.zip
+          Expand-Archive odin.zip -DestinationPath odin-dist
+          $odin = (Get-ChildItem -Recurse odin-dist -Filter odin.exe | Select-Object -First 1).DirectoryName
+          Add-Content $env:GITHUB_PATH $odin
+          Remove-Item odin.zip
+
+      - name: Build
+        shell: cmd
+        run: build.bat all
+
+      - name: Get game files
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Prefer the copy in the repo (game-files/), else a release tagged 'game-files'.
+          if (Test-Path game-files\sr-game-files.zip) {
+            New-Item -ItemType Directory gf | Out-Null
+            Copy-Item game-files\sr-game-files.zip gf\
+          } else {
+            gh release download game-files --repo "${{ github.repository }}" --pattern "sr-game-files.zip" --dir gf
+            if ($LASTEXITCODE -ne 0) { throw "Game files missing: add game-files/sr-game-files.zip or a 'game-files' release (see README)." }
+          }
+          Expand-Archive gf\sr-game-files.zip -DestinationPath gf
+
+      - name: Stage
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          New-Item -ItemType Directory stage | Out-Null
+          # 1) Krunker game files (models, textures, sounds) from the pack
+          Copy-Item -Recurse gf\sr-game-files\* stage\
+          # 2) This repo's files win: maps, shaders, configs, lighting configs
+          Copy-Item -Recurse -Force assets\* stage\assets\
+          Copy-Item -Recurse -Force krunker-configs\* stage\krunker-configs\
+          # 3) Binaries
+          Copy-Item bin\sr_client.exe, bin\sr_server.exe, bin\sr_browser.exe, bin\WebView2Loader.dll, bin\WebView2-LICENSE.txt, bin\WebView2-NOTICE.txt, VERSION stage\
+          "version=$version" >> $env:GITHUB_ENV
+
+      - name: Installer + portable zip
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:version" "/DStageDir=..\stage" installer\sr-client.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
+          Compress-Archive -Path stage\* -DestinationPath "dist\SR-Client-Portable-$env:version.zip"
+          Get-ChildItem dist
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SR-Client-${{ env.version }}-${{ github.sha }}
+          path: dist/*
+          retention-days: 30
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Works whether the release was made on the website or only the tag was pushed.
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "${{ github.ref_name }}" (Get-ChildItem dist\*).FullName --clobber --repo "${{ github.repository }}"
+          } else {
+            gh release create "${{ github.ref_name }}" (Get-ChildItem dist\*).FullName --repo "${{ github.repository }}" --title "SR Client ${{ github.ref_name }}" --notes-file CHANGELOG.md
+          }

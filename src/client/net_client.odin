@@ -1,0 +1,215 @@
+package main
+
+import "core:fmt"
+import "core:net"
+import "core:strings"
+import shared "../shared"
+
+Net_Client_State :: struct {
+	socket:    net.TCP_Socket,
+	connected: bool,
+	recv_buffer: [4096]byte,
+	recv_len: int,
+	match_state_received: bool,
+	lobby_received: bool,
+	lobby: shared.Lobby_State,
+	send_queue: shared.Net_Send_Queue,
+	ping: shared.Net_Ping_State,
+}
+
+net_client_flush :: proc(nc: ^Net_Client_State) -> bool {
+	if !nc.connected {
+		return false
+	}
+
+	for {
+		pending := shared.net_send_queue_pending(&nc.send_queue)
+		if len(pending) == 0 {
+			return true
+		}
+
+		count, err := net.send_tcp(nc.socket, pending)
+		shared.net_send_queue_consume(&nc.send_queue, count)
+
+		if err != nil {
+			if err == .Would_Block || err == .Timeout {
+				return true
+			}
+			return false
+		}
+		if count == 0 {
+			return false
+		}
+	}
+}
+
+net_client_send :: proc(nc: ^Net_Client_State, data: []byte) -> bool {
+	if !nc.connected || len(data) == 0 {
+		return false
+	}
+	if !shared.net_send_queue_push(&nc.send_queue, data) {
+		fmt.eprintf("[Net Client] Send queue overflow; disconnecting\n")
+		return false
+	}
+	return net_client_flush(nc)
+}
+
+net_client_connect :: proc(host: string, port: int) -> (nc: Net_Client_State, ok: bool) {
+	// Resolve the requested host instead of silently forcing every connection
+	// to localhost.  This is important for pasted custom-lobby links, where
+	// the assigned game server is a remote hostname.  The net package handles
+	// both DNS names and dotted IPv4 literals through this overload.
+	socket, err := net.dial_tcp(host, port)
+	if err != nil {
+		fmt.printf("[Net Client] Offline mode (server at %s:%d not reachable)\n", host, port)
+		return nc, false
+	}
+
+	net.set_blocking(socket, false)
+	// Small snapshots must not wait on Nagle + delayed ACK (40 ms on Windows).
+	net.set_option(socket, .TCP_Nodelay, true)
+	nc.socket = socket
+	nc.connected = true
+	fmt.printf("[Net Client] Connected to Dedicated Server at %s:%d!\n", host, port)
+	return nc, true
+}
+
+net_client_send_input :: proc(nc: ^Net_Client_State, input: ^shared.Input) {
+	if !nc.connected {
+		return
+	}
+
+	buf: [32]byte
+	n := shared.packet_serialize_input(buf[:], input)
+	if n > 0 {
+		if !net_client_send(nc, buf[:n]) {
+			nc.connected = false
+		}
+	}
+}
+
+net_client_send_spawn :: proc(nc: ^Net_Client_State, class_id: i32, secondary_id: i32 = 2) {
+	if !nc.connected {
+		return
+	}
+	buf: [32]byte
+	size := shared.packet_serialize_connect(buf[:], class_id, secondary_id)
+	if size > 0 {
+		if !net_client_send(nc, buf[:size]) {
+			nc.connected = false
+		}
+	}
+}
+
+net_client_poll :: proc(client: ^Client, now: f64) {
+	nc := &client.net
+	if !nc.connected {
+		return
+	}
+	if seq, due := shared.net_ping_due(&nc.ping, now); due {
+		buf: [shared.NET_PING_PACKET_SIZE]byte
+		if size := shared.packet_serialize_ping(buf[:], seq); size > 0 && !net_client_send(nc, buf[:size]) {
+			nc.connected = false
+			return
+		}
+	}
+	if !net_client_flush(nc) {
+		fmt.printf("[Net Client] Send error\n")
+		nc.connected = false
+		return
+	}
+
+	bytes_read, err := net.recv_tcp(nc.socket, nc.recv_buffer[nc.recv_len:])
+
+	if bytes_read > 0 {
+		nc.recv_len += bytes_read
+		for nc.recv_len >= shared.PACKET_HEADER_SIZE {
+			header, h_ok := shared.packet_deserialize_header(nc.recv_buffer[:nc.recv_len])
+			if !h_ok {
+				nc.connected = false
+				return
+			}
+			packet_size := shared.PACKET_HEADER_SIZE + int(header.payload_len)
+			if packet_size > len(nc.recv_buffer) {
+				nc.connected = false
+				return
+			}
+			if nc.recv_len < packet_size {
+				break
+			}
+			packet := nc.recv_buffer[:packet_size]
+			#partial switch header.packet_type {
+			case .LOBBY_STATE:
+				if lobby, valid := shared.packet_deserialize_lobby(packet); valid {
+					for name in nc.lobby.team_names { delete(name) }
+					nc.lobby = lobby
+					for &name in nc.lobby.team_names { name = strings.clone(name) }
+					nc.lobby_received = true
+					client.lobby_team = lobby.team
+					if client.team_pending && lobby.team_result != 0 {
+						client.team_pending = false
+						client.requested_team = lobby.team
+						client_selection_status(client, lobby.team_result == 1 ? "Team confirmed by server." : "Team change rejected: team full or selection disabled.")
+					}
+				}
+			case .GAME_STATE:
+				if state, state_ok := shared.packet_deserialize_state(packet); state_ok {
+					client_apply_player_state(client, &state)
+				}
+			case .MATCH_STATE:
+				if state, state_ok := shared.packet_deserialize_match_state(packet); state_ok {
+					client_apply_match_state(client, &state)
+					nc.match_state_received = true
+				}
+			case .PING:
+				if seq, ping_ok := shared.packet_deserialize_ping(packet); ping_ok {
+					shared.net_ping_receive(&nc.ping, seq, now)
+				}
+			case .BULLET_IMPACT:
+				if impact, impact_ok := shared.packet_deserialize_bullet_impact(packet); impact_ok {
+					if len(client.game.impacts) >= 256 {
+						ordered_remove(&client.game.impacts, 0)
+					}
+					append(&client.game.impacts, impact)
+					client_hit_marker_native_impact(client, impact)
+				}
+			case .KILL_FEED:
+				if event, event_ok := shared.packet_deserialize_kill_feed(packet); event_ok {
+					shared.game_push_kill_event(&client.game, event)
+				}
+			}
+			nc.recv_len -= packet_size
+			if nc.recv_len > 0 {
+				copy(nc.recv_buffer[:nc.recv_len], nc.recv_buffer[packet_size:packet_size + nc.recv_len])
+			}
+		}
+	} else if err == nil {
+		// 0 bytes with no error is a graceful FIN from the server.
+		fmt.printf("[Net Client] Server closed the connection\n")
+		nc.connected = false
+	} else if err != .Would_Block && err != .Timeout {
+		fmt.printf("[Net Client] Connection error: %v\n", err)
+		nc.connected = false
+	}
+}
+
+net_client_send_team :: proc(nc: ^Net_Client_State, team: i32) -> bool {
+	buf: [11]byte
+	size := shared.packet_serialize_team_request(buf[:], team)
+	return size > 0 && net_client_send(nc, buf[:size])
+}
+
+net_client_disconnect :: proc(nc: ^Net_Client_State) {
+	for name in nc.lobby.team_names { delete(name) }
+	nc.lobby = {}
+	nc.lobby_received = false
+	nc.ping = {}
+	if nc.connected {
+		buf: [shared.PACKET_HEADER_SIZE]byte
+		if size := shared.packet_serialize_disconnect(buf[:]); size > 0 {
+			net_client_send(nc, buf[:size])
+		}
+		net.close(nc.socket)
+		nc.connected = false
+	}
+}

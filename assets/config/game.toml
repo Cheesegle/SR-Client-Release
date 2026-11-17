@@ -1,0 +1,35 @@
+# SR Client gameplay configuration.
+#
+# Weapons and classes are defined by NAME inside the [weapons] and [classes]
+# tables. The section key determines which built-in weapon/class is being
+# configured (weapon indices are preserved internally).
+#
+# Omitted fields keep the built-in defaults (classes come from the JSON export).
+# Weapon models and rigs inherit the current browser defaults; override them explicitly if needed.
+# Asset paths (model/texture/sound) are resolved relative to the assets directory; set a
+# section-scoped directory with `weapons-dir` / `classes-dir` if desired.
+
+[game]
+tick_rate = 64
+max_players = 8
+select_team = true
+game_time = 4
+warmup_time = 0.0
+auto_respawn = 1
+score_limit = 250
+health_regen = true
+objective_rotation_time = 60.0
+objective_score_rate = 1.0 # Scoring ticks per second, 10 points per tick.
+regen_delay = 5.0
+respawn_delay = 3.0
+
+[weapons]
+# weapons-dir = "mods/weapons/"
+
+# Weapon gameplay, model, and rig defaults follow the current browser registry.
+# Add [weapons.<name>] sections only for intentional custom overrides, e.g.:
+# [weapons.smg]
+# ammo = 24
+
+# Class defaults come from krunker-configs/class-configs.json.
+# Add [classes.<name>] sections here only for intentional custom overrides.

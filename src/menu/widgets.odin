@@ -1,0 +1,50 @@
+package menu
+
+import clay "../third_party/clay"
+
+WHITE :: clay.Color{242, 246, 248, 255}
+MUTED :: clay.Color{155, 170, 182, 255}
+ACCENT :: clay.Color{236, 239, 244, 255}
+PANEL :: clay.Color{18, 21, 27, 210}
+SURFACE :: clay.Color{34, 38, 46, 240}
+SELECTED :: clay.Color{48, 54, 65, 240}
+
+text :: proc(label: string, size, scale: f32, color: clay.Color = WHITE) {
+	// Rajdhani needs larger type to keep labels comfortable to read.
+	font_size := size * scale * 1.25
+	clay.Text(label, {fontSize = u16(font_size), lineHeight = u16(font_size * 1.1), textColor = color})
+}
+
+button :: proc(state: ^State, label, id_label: string, action: Action, selected: bool = false, primary: bool = false, enabled: bool = true) {
+	id := clay.ID(id_label, u32(action.index))
+	register(state, {id = id, action = action, enabled = enabled})
+	color := selected ? SELECTED : SURFACE
+	if clay.PointerOver(id) && enabled { color = {45, 57, 68, 255} }
+	if state.pressed == id.id { color = {59, 72, 83, 255} }
+	if primary { color = enabled ? ACCENT : SURFACE }
+	label_color := !enabled ? MUTED : primary ? clay.Color{16, 25, 18, 255} : selected ? ACCENT : WHITE
+	if clay.UI(id)({
+		layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(52 * state.scale)}, padding = {left = u16(16 * state.scale), right = u16(16 * state.scale), top = u16(10 * state.scale), bottom = u16(10 * state.scale)}, childAlignment = {x = .Center, y = .Center}},
+		backgroundColor = color,
+		cornerRadius = clay.CornerRadiusAll(5 * state.scale),
+		border = {color = state.focus == id.id ? ACCENT : clay.Color{}, width = clay.BorderOutside(state.focus == id.id ? 1 : 0)},
+	}) {
+		text(label, 20, state.scale, label_color)
+	}
+}
+
+spacer :: proc() {
+	if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}}}) {}
+}
+
+rule :: proc(scale: f32) {
+	if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(1)}}, backgroundColor = {65, 79, 90, 150}}) {}
+}
+
+stat :: proc(label, value: string, scale: f32) {
+	if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childAlignment = {y = .Center}}}) {
+		text(label, 13, scale, MUTED)
+		spacer()
+		text(value, 16, scale)
+	}
+}
