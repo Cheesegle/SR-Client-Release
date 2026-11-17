@@ -97,3 +97,5 @@ stage/
 gf/
 odin-dist/
 /client
+# Vulkan pipeline cache written by the client next to its settings.
+vk-pipeline-cache.bin

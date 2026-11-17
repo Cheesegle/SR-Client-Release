@@ -3,7 +3,6 @@ package main
 import "core:fmt"
 import "core:math"
 import "core:slice"
-import gl "vendor:OpenGL"
 import shared "../shared"
 
 // Static map batching.
@@ -47,7 +46,7 @@ BATCH_FLAG_CAST_SHADOW    :: 64 // Mesh.shadow_caster == .STATIC (shadow depth p
 // buffer as a plain `vec4 objects[]` (std430 stride 16 on every driver; no
 // struct, matrix or vec3 alignment rules involved) and reads field F of object
 // i at objects[i * BATCH_OBJECT_VEC4S + BATCH_SLOT_F]. Those numbers are
-// generated from this struct by map_batch_shader_defines, so the two sides
+// generated from this struct by basic_shader_defines, so the two sides
 // cannot drift apart. Every field is a vec4 of plain floats; integers are
 // stored as exact float values, never as bit patterns.
 Batch_Object :: struct {
@@ -63,27 +62,13 @@ Batch_Object :: struct {
 #assert(size_of(Batch_Object) % 16 == 0)
 BATCH_OBJECT_VEC4S :: size_of(Batch_Object) / 16
 
-// The #defines basic.vert/basic.frag are compiled with for the BATCHED variants
-// (colour pass, and the shadow depth pass with SHADOW_DEPTH_PASS added).
+// The #defines of the BATCHED colour variant (basic_shader_defines).
 map_batch_shader_defines :: proc(allocator := context.allocator) -> string {
-	return fmt.aprintf(
-		"#define BATCHED\n#define BATCH_OBJECT_VEC4S %d\n#define BATCH_SLOT_TRANSFORM %d\n#define BATCH_SLOT_COLOR %d\n#define BATCH_SLOT_EMISSIVE %d\n#define BATCH_SLOT_FACE_SCALE %d\n#define BATCH_SLOT_TEX_ROW0 %d\n#define BATCH_SLOT_TEX_ROW1 %d\n#define BATCH_SLOT_PARAMS %d\n#define BATCH_FLAG_RECEIVE_SHADOW %d\n#define BATCH_FLAG_CAST_SHADOW %d\n",
-		BATCH_OBJECT_VEC4S,
-		offset_of(Batch_Object, transform) / 16,
-		offset_of(Batch_Object, color) / 16,
-		offset_of(Batch_Object, emissive) / 16,
-		offset_of(Batch_Object, face_scale) / 16,
-		offset_of(Batch_Object, tex_row0) / 16,
-		offset_of(Batch_Object, tex_row1) / 16,
-		offset_of(Batch_Object, params) / 16,
-		BATCH_FLAG_RECEIVE_SHADOW,
-		BATCH_FLAG_CAST_SHADOW,
-		allocator = allocator,
-	)
+	return basic_shader_defines(true, false, allocator)
 }
 
 Map_Batch_Key :: struct {
-	texture:   u32,
+	texture:   Gpu_Texture,
 	wireframe: bool,
 	detail:    Map_Detail,
 	chunk_x:   i32,
@@ -102,8 +87,11 @@ Map_Batch :: struct {
 }
 
 Map_Batch_Set :: struct {
-	vao, vbo, ebo, ssbo: u32,
-	program:      u32,
+	input:         Gpu_Vertex_Input, // .Batched layout over vertex_buffer/index_buffer
+	vertex_buffer: Gpu_Buffer,
+	index_buffer:  Gpu_Buffer,
+	objects:       Gpu_Buffer, // []Batch_Object, storage binding 0
+	program:      Gpu_Program,
 	batches:      [dynamic]Map_Batch,
 	members:      [dynamic]^Mesh, // Grouped by slot, in draw order.
 	vertex_count: int,
@@ -198,34 +186,6 @@ mesh_world_bounds :: proc(mesh: ^Mesh) -> (lo, hi: shared.Vec3) {
 		}
 	}
 	return
-}
-
-@(private = "file")
-Geometry_Data :: struct {
-	vertices: []Vertex,
-	indices:  []u32,
-}
-
-@(private = "file")
-geometry_read_back :: proc(geometry: ^Geometry) -> (data: Geometry_Data, ok: bool) {
-	size: i32
-	gl.GetNamedBufferParameteriv(geometry.vbo, gl.BUFFER_SIZE, &size)
-	vertex_count := int(size) / size_of(Vertex)
-	if vertex_count <= 0 || geometry.index_count <= 0 {
-		return {}, false
-	}
-	data.vertices = make([]Vertex, vertex_count)
-	data.indices = make([]u32, int(geometry.index_count))
-	gl.GetNamedBufferSubData(geometry.vbo, 0, vertex_count * size_of(Vertex), raw_data(data.vertices))
-	gl.GetNamedBufferSubData(geometry.ebo, 0, len(data.indices) * size_of(u32), raw_data(data.indices))
-	for index in data.indices {
-		if int(index) >= vertex_count {
-			delete(data.vertices)
-			delete(data.indices)
-			return {}, false
-		}
-	}
-	return data, true
 }
 
 @(private = "file")
@@ -460,14 +420,6 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 	}
 	slice.stable_sort_by(slotted[:], proc(a, b: Batch_Entry) -> bool { return a.node < b.node })
 
-	geometry_data := make(map[^Geometry]Geometry_Data)
-	defer {
-		for _, data in geometry_data {
-			delete(data.vertices)
-			delete(data.indices)
-		}
-		delete(geometry_data)
-	}
 
 	set := new(Map_Batch_Set)
 	set.program = program
@@ -483,22 +435,13 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 	current := -1
 	for entry in slotted {
 		mesh := entry.mesh
-		data: Geometry_Data
-		if !entry.single {
-			cached: bool
-			data, cached = geometry_data[mesh.geometry]
-			if !cached {
-				ok: bool
-				data, ok = geometry_read_back(mesh.geometry)
-				if !ok {
-					// Unreadable geometry: draw it on its own instead.
-					append(&set.batches, Map_Batch{key = entry.key, single = true, bounds_min = entry.lo, bounds_max = entry.hi, member_start = len(set.members), member_count = 1})
-					append(&set.members, mesh)
-					current = -1
-					continue
-				}
-				geometry_data[mesh.geometry] = data
-			}
+		data := mesh.geometry
+		if !entry.single && (len(data.vertices) == 0 || len(data.indices) == 0) {
+			// No mesh data to merge: draw it on its own instead.
+			append(&set.batches, Map_Batch{key = entry.key, single = true, bounds_min = entry.lo, bounds_max = entry.hi, member_start = len(set.members), member_count = 1})
+			append(&set.members, mesh)
+			current = -1
+			continue
 		}
 		if entry.node != current || entry.single {
 			current = entry.node
@@ -539,8 +482,7 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 		batch.index_count = i32(u32(len(indices)) - batch.first_index)
 	}
 
-	max_block_size: i64
-	gl.GetInteger64v(gl.MAX_SHADER_STORAGE_BLOCK_SIZE, &max_block_size)
+	max_block_size := gpu_max_storage_buffer_size()
 	if len(objects) >= MAP_BATCH_MAX_OBJECTS || i64(len(objects) * size_of(Batch_Object)) > max_block_size {
 		fmt.eprintf("[Render] Map batching skipped: %d objects exceed GL_MAX_SHADER_STORAGE_BLOCK_SIZE %d\n", len(objects), max_block_size)
 		map_batch_set_free(set, members_alive = false)
@@ -558,23 +500,10 @@ map_batch_build :: proc(scene: ^Scene, map_inst: ^shared.Map) -> bool {
 	}
 	set.vertex_count, set.index_count = len(vertices), len(indices)
 	if len(vertices) > 0 && len(indices) > 0 {
-		gl.CreateVertexArrays(1, &set.vao)
-		gl.CreateBuffers(1, &set.vbo)
-		gl.CreateBuffers(1, &set.ebo)
-		gl.CreateBuffers(1, &set.ssbo)
-		gl.NamedBufferStorage(set.vbo, len(vertices) * size_of(Batched_Vertex), raw_data(vertices), 0)
-		gl.NamedBufferStorage(set.ebo, len(indices) * size_of(u32), raw_data(indices), 0)
-		gl.NamedBufferStorage(set.ssbo, len(objects) * size_of(Batch_Object), raw_data(objects), 0)
-		gl.VertexArrayVertexBuffer(set.vao, 0, set.vbo, 0, size_of(Batched_Vertex))
-		gl.VertexArrayElementBuffer(set.vao, set.ebo)
-		gl.VertexArrayAttribFormat(set.vao, 0, 3, gl.FLOAT, false, u32(offset_of(Batched_Vertex, position)))
-		gl.VertexArrayAttribFormat(set.vao, 1, 2, gl.FLOAT, false, u32(offset_of(Batched_Vertex, tex_coord)))
-		gl.VertexArrayAttribFormat(set.vao, 2, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, face_idx)))
-		gl.VertexArrayAttribFormat(set.vao, 3, 1, gl.FLOAT, false, u32(offset_of(Batched_Vertex, object_index)))
-		for attrib in u32(0) ..< 4 {
-			gl.EnableVertexArrayAttrib(set.vao, attrib)
-			gl.VertexArrayAttribBinding(set.vao, attrib, 0)
-		}
+		set.vertex_buffer = gpu_buffer_create(.Vertex, slice.to_bytes(vertices[:]))
+		set.index_buffer = gpu_buffer_create(.Index, slice.to_bytes(indices[:]))
+		set.objects = gpu_buffer_create(.Storage, slice.to_bytes(objects[:]))
+		set.input = gpu_vertex_input_create(.Batched, set.vertex_buffer, set.index_buffer)
 	}
 	scene.batches = set
 	return true
@@ -588,10 +517,10 @@ map_batch_set_free :: proc(set: ^Map_Batch_Set, members_alive := true) {
 			mesh.batched = false
 		}
 	}
-	if set.vao != 0 { gl.DeleteVertexArrays(1, &set.vao) }
-	if set.vbo != 0 { gl.DeleteBuffers(1, &set.vbo) }
-	if set.ebo != 0 { gl.DeleteBuffers(1, &set.ebo) }
-	if set.ssbo != 0 { gl.DeleteBuffers(1, &set.ssbo) }
+	gpu_vertex_input_destroy(&set.input)
+	gpu_buffer_destroy(&set.vertex_buffer)
+	gpu_buffer_destroy(&set.index_buffer)
+	gpu_buffer_destroy(&set.objects)
 	delete(set.batches)
 	delete(set.members)
 	free(set)

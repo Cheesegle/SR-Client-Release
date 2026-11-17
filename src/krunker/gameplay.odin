@@ -482,6 +482,13 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		kills, valid := krunker_world_bounded_number(packet[3], 0, 2147483647); if !valid { return false }
 		player := krunker_world_upsert_player(state, state.local_sid)
 		player.kills = u32(kills); player.revision += 1
+		// GET_KILL (medals, kill sound index, kills): -1 when kill rewards are
+		// off. getKillSnd answers headshot_0 for every headshot kill.
+		sound := krunker_world_i32(packet[2], -1)
+		if sound >= 0 {
+			state.kill_sound_headshot = sound == KRUNKER_HEADSHOT_SOUND_INDEX || state.hit_headshot && state.hit_lethal
+			state.kill_revision += 1
+		}
 		return true
 	case "5", "noc", "frz", "spb", "unl", "p", "mp", "lv":
 		if len(packet) < 2 || state.local_sid < 0 { return false }
@@ -510,3 +517,6 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 	}
 	return false
 }
+
+// "headshot_0" in Krunker's sound list (the index GET_KILL sends).
+KRUNKER_HEADSHOT_SOUND_INDEX :: 37

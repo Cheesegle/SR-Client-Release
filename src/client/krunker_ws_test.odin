@@ -111,6 +111,31 @@ when ODIN_TEST {
 	}
 
 	@(test)
+	refresh_in_game_rejoins_the_lobby :: proc(t: ^testing.T) {
+		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
+		defer glfw.Terminate()
+		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
+		glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
+		window := glfw.CreateWindow(320, 240, "F5 rejoin", nil, nil)
+		if !testing.expect(t, window != nil, "hidden window failed") do return
+		defer glfw.DestroyWindow(window)
+		client := Client{window = window}
+		defer {
+			delete(client.join_status)
+			delete(client.selection_status)
+			shared.join_link_free(&client.join_link)
+		}
+		// In a game joined by its code (the invite box may hold anything).
+		menuui.set_invite(&client.menu, "FRA:fixture")
+		client_join_invite(&client, join_test_connect)
+		menuui.set_invite(&client.menu, "")
+		client.end_screen_active = true
+		client_refresh_rejoin(&client, join_test_connect)
+		testing.expect(t, client.join_link.game_id == "FRA:fixture", "F5 must join the same game again")
+		testing.expect(t, menuui.invite(&client.menu) == "https://krunker.io/?game=FRA:fixture" && !client.end_screen_active, "F5 must rejoin through the game's invite link")
+	}
+
+	@(test)
 	krunker_lobby_waits_for_explicit_entry :: proc(t: ^testing.T) {
 		client: Client
 		client.krunker.connected=true

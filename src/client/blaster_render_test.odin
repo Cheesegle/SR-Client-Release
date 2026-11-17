@@ -76,8 +76,10 @@ when ODIN_TEST {
 				testing.expect(t, abs(mesh.arms[0].anchor.rotation.x - player.weapon.rotation_offset_aim) < 0.0001, "ADS rig must use the calibrated rotation without residual idle or step bob")
 			}
 			gl.ClearColor(0, 0, 0, 1)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.fps_scene, &weapon_camera, 960, 540)
+			ui_flush()
 			gl.ReadPixels(0, 0, 960, 540, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			visible := 0
 			for i := 0; i < len(pixels); i += 3 {

@@ -107,3 +107,30 @@ mods_apply_live_without_restart :: proc(t: ^testing.T) {
 	testing.expect_value(t, g_texture_by_id[texture].width, i32(4))
 	testing.expect_value(t, geometry.index_count, i32(3))
 }
+
+// A mod's sound files replace SR's: a mod that blanks the hurt sound (an
+// empty or undecodable takedmg file) makes getting shot silent, also when the
+// mod is loaded while SR runs.
+@(test)
+mods_replace_sounds :: proc(t: ^testing.T) {
+	context = runtime.default_context()
+	audio := audio_create(nil, DEFAULT_AUDIO_SETTINGS, no_device = true)
+	if audio == nil { return } // No audio backend on this machine.
+	defer audio_destroy(audio)
+	client: Client
+	client.audio = audio
+	shared.mods_init()
+	defer { shared.mods_remove(); _ = os.remove_all(shared.g_mods.directory); shared.mods_shutdown() }
+	path := fmt.tprintf("%ssound/takedmg_0.mp3", shared.assets_path())
+	testing.expect(t, audio_play_effect(audio, "takedmg_0", .EFFECTS, 0.45), "the game's hurt sound plays without a mod")
+	zip := test_zip({"Silent/Sound/takedmg_0.mp3", "Silent/sound/takedmg_1.mp3"}, {{}, {0, 1, 2, 3}})
+	defer delete(zip)
+	directory := strings.clone(shared.g_mods.directory)
+	defer delete(directory)
+	testing.expect_value(t, shared.mods_prepare(directory, zip, "https://example.invalid/silent.zip"), "")
+	mods_reload_live(&client)
+	testing.expect(t, shared.mod_resolve(path) != path, "the mod's takedmg_0 must replace the game's")
+	testing.expect(t, !audio_play_effect(audio, "takedmg_0", .EFFECTS, 0.45), "a blank mod sound must be silent")
+	testing.expect(t, !audio_play_effect(audio, "takedmg_1", .EFFECTS, 0.45), "a blank mod sound must be silent")
+	client.audio = nil
+}

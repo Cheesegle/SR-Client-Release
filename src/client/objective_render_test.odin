@@ -11,9 +11,11 @@ import shared "../shared"
 
 when ODIN_TEST {
 	objective_test_render :: proc(scene: ^Scene, camera: ^Camera, y: i32) -> [4]u8 {
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(scene, camera, 320, 180)
 		pixel: [4]u8
+		ui_flush()
 		gl.ReadPixels(160, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, &pixel[0])
 		return pixel
 	}
@@ -66,6 +68,7 @@ when ODIN_TEST {
 		testing.expect(t, lower[0] > 40 && lower[1] > lower[2] && lower[0] > upper[0]*3 && upper[0] > 0,
 			"the yellow perimeter must fade upward across the wall instead of tiling or filling the floor")
 		depth: f32
+		ui_flush()
 		gl.ReadPixels(160, 84, 1, 1, gl.DEPTH_COMPONENT, gl.FLOAT, &depth)
 		testing.expect(t, depth == 1, "translucent objective walls must leave world depth untouched")
 		depth_write: bool
@@ -105,6 +108,7 @@ when ODIN_TEST {
 			objective_test_render(scene, &camera, 90)
 			pixels := make([]u8, 320*180*3)
 			defer delete(pixels)
+			ui_flush()
 			gl.ReadPixels(0, 0, 320, 180, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			file := make([dynamic]u8)
 			defer delete(file)

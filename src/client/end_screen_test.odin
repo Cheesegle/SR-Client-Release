@@ -228,16 +228,20 @@ when ODIN_TEST {
 		gl.Viewport(0, 0, 1280, 720)
 		testing.expect(t, client_end_screen_update(&client, 10, false))
 		snapshot :: proc(client: ^Client, now: f64, pixels: []u8) {
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 			end_screen_render(client, now)
+			ui_flush()
 			gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		}
 		blank := make([]u8, 1280*720*3)
 		title := make([]u8, len(blank))
 		standings := make([]u8, len(blank))
 		defer { delete(blank); delete(title); delete(standings) }
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
+		ui_flush()
 		gl.ReadPixels(0, 0, 1280, 720, gl.RGB, gl.UNSIGNED_BYTE, raw_data(blank))
 		snapshot(&client, 11, title)
 		snapshot(&client, 10+END_SCREEN_PANEL_DELAY+0.1, standings)

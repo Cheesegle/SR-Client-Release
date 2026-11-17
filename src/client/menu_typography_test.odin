@@ -289,14 +289,17 @@ when ODIN_TEST {
 					}
 				}
 				gl.ClearColor(0.17, 0.17, 0.17, 1)
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT)
 				menu_render_commands(ui, commands)
 				if page == .SETTINGS && state.settings_tab == .VIDEO && state.settings_dropdown == .NONE && !menuui.settings_searching(&state) {
 					box := clay.GetElementData(clay.ID("CrosshairPreview")).boundingBox
 					pixel: [3]u8
+					ui_flush()
 					gl.ReadPixels(i32(box.x+box.width*0.5), size[1]-1-i32(box.y+box.height*0.5), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
 					testing.expectf(t, pixel[0]>240 && pixel[1]>240 && pixel[2]>240, "the Precision reticle must actually render in the preview at %v (scenario %d)", size, scenario)
 					if scenario == 44 {
+						ui_flush()
 						gl.ReadPixels(i32(box.x-4), size[1]-1-i32(box.y+box.height*0.5), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
 						testing.expect(t, pixel[0]<100 && pixel[1]<100 && pixel[2]<100, "extreme crosshair sizes must stay clipped to the preview")
 					}
@@ -395,6 +398,7 @@ when ODIN_TEST {
 				if #config(MENU_PREVIEW, false) && (#config(MENU_PREVIEW_SCENARIO, -1) < 0 || scenario == #config(MENU_PREVIEW_SCENARIO, -1)) {
 					pixels := make([]u8, int(size[0] * size[1] * 3))
 					gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+					ui_flush()
 					gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 					header := fmt.aprintf("P6\n%d %d\n255\n", size[0], size[1])
 					file := make([dynamic]u8)

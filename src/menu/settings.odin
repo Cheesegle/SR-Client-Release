@@ -107,10 +107,11 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_section(state, "Display")
 		settings_display_rows(state, view)
 		settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
+		settings_toggle_row(state, "Vulkan Renderer", "Vulkan", values.vulkan, {kind = .GRAPHICS_API})
 		settings_game_fps_limit_row(state)
 		if values.show_fps { settings_slider(state, "FPS update rate (ms)", "FpsUpdateRate", f32(fps_update_ms(values.hud)), FPS_UPDATE_MIN_MS, FPS_UPDATE_MAX_MS, {kind = .FPS_UPDATE_RATE}, step = 10) }
 		settings_menu_fps_limit_row(state)
-		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution. FPS limit caps the game (Unlimited by default); Menu FPS limit caps menus only.")
+		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution. FPS limit caps the game (Unlimited by default); Menu FPS limit caps menus only. Vulkan Renderer (on by default) applies the next time SR Client starts; without Vulkan 1.3 it uses OpenGL.")
 		settings_section(state, "Interface")
 		// Krunker's UI Scale: same values as Krunker (and Krunker settings imports).
 		settings_toggle_row(state, "UI Scaling", "UiScaling", !values.hud.ui_scaling_off, {kind = .HUD_TOGGLE, index = 16})
@@ -230,7 +231,7 @@ settings_reset_popup :: proc(state: ^State) {
 		text("Reset Settings", 28, s)
 		text("Are you sure you want to reset all your settings?", 19, s)
 		text("Every tab returns to its default, key binds included.", 17, s, SETTINGS_MUTED)
-		text("Save keeps the reset; Cancel restores your settings.", 17, s, SETTINGS_MUTED)
+		text("Reset all settings applies and saves at once.", 17, s, SETTINGS_MUTED)
 		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, "Reset all settings", "ResetConfirm", {kind = .SETTINGS_RESET}, selected = true) }
 		if !settings_searching(state) {
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(380*s)}}}) { settings_button(state, fmt.tprintf("Reset %s only", SETTINGS_TABS[state.settings_tab]), "ResetTab", {kind = .SETTINGS_RESET, index = 1}) }
@@ -262,7 +263,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .VIDEO:
 		draft.display_mode, draft.monitor_index = defaults.display_mode, defaults.monitor_index
 		draft.resolution_index, draft.fullscreen_index = defaults.resolution_index, defaults.fullscreen_index
-		draft.vsync, draft.menu_fps_limit = defaults.vsync, defaults.menu_fps_limit
+		draft.vsync, draft.vulkan, draft.menu_fps_limit = defaults.vsync, defaults.vulkan, defaults.menu_fps_limit
 		hud := defaults.hud
 		hud.hide_ping, hud.manual_respawn, hud.hide_enemy_counter = draft.hud.hide_ping, draft.hud.manual_respawn, draft.hud.hide_enemy_counter
 		hud.hide_leaderboard, hud.hide_chat, hud.network_thread = draft.hud.hide_leaderboard, draft.hud.hide_chat, draft.hud.network_thread

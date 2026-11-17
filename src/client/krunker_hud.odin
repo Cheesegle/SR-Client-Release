@@ -54,7 +54,7 @@ kh_box :: proc(ui: ^UI, x, y, w, h: f32, radius: f32 = 4, alpha: f32 = 1) {
 	ui_fill_rect(ui, kh_fade(KH_GREY, alpha), x+3*s, y+3*s, w-6*s, h-6*s)
 }
 
-kh_load :: proc(texture: ^u32, path: string, smooth := false) -> u32 {
+kh_load :: proc(texture: ^Gpu_Texture, path: string, smooth := false) -> Gpu_Texture {
 	if texture^ == 0 {
 		full := shared.concat(shared.assets_path(), path)
 		texture^ = load_texture(full)
@@ -64,13 +64,10 @@ kh_load :: proc(texture: ^u32, path: string, smooth := false) -> u32 {
 	return texture^
 }
 
-kh_texture_aspect :: proc(texture: u32) -> f32 {
+kh_texture_aspect :: proc(texture: Gpu_Texture) -> f32 {
 	if texture == 0 { return 1 }
 	w, h: i32
-	gl.BindTexture(gl.TEXTURE_2D, texture)
-	gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_WIDTH, &w)
-	gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_HEIGHT, &h)
-	g_active_texture = 0
+	if entry, ok := g_texture_by_id[texture]; ok { w, h = entry.width, entry.height }
 	return h > 0 ? f32(w)/f32(h) : 1
 }
 
@@ -226,7 +223,7 @@ kh_player_render :: proc(client: ^Client) {
 
 	// #bottomLeftPlayerLeft
 	ui_fill_rect(ui, KH_GREY, x + 3*s, y + 3*s, 90*s, 90*s)
-	if class_icons == nil { class_icons = make(map[i32]u32) }
+	if class_icons == nil { class_icons = make(map[i32]Gpu_Texture) }
 	icon := class_icons[class.icon_index]
 	if icon == 0 {
 		path := shared.concat(shared.assets_path(), fmt.tprintf("textures/classes/icon_%d.png", class.icon_index))

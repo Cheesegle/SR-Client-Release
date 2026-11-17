@@ -27,7 +27,9 @@ when ODIN_TEST {
 				if meshes[i].map_detail == .EXTRA_PROP { extra_count += 1 }
 			}
 			testing.expect(t, cat_count>0 && extra_count>0, "both real maps must exercise cats and loose decorative props")
-			client := Client{visual_settings=menuui.DEFAULT_VISUAL_SETTINGS}
+			shown := menuui.DEFAULT_VISUAL_SETTINGS
+			shown.hide_cats, shown.hide_extra_props = false, false
+			client := Client{visual_settings=shown}
 			client.game.map_inst = map_inst
 			client.menu.page = .SETTINGS
 			menuui.prepare_settings(&client.menu, {visuals=client.visual_settings})

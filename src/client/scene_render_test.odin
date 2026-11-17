@@ -46,9 +46,11 @@ when ODIN_TEST {
 	}
 
 	scene_test_pixel :: proc(t: ^testing.T, scene: ^Scene, camera: ^Camera, x, y: i32, expected: [3]u8) {
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(scene, camera, 64, 64)
 		pixel: [4]u8
+		ui_flush()
 		gl.ReadPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, &pixel[0])
 		for value, i in expected {
 			testing.expect(t, abs(i32(pixel[i]) - i32(value)) <= 3, "each render pass must use its current camera, environment, material and GL state")
@@ -120,6 +122,7 @@ when ODIN_TEST {
 		material.transparent = false
 		material.color.w = 1
 		material.wireframe = true
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(scene, &camera, 64, 64)
 		polygon_modes: [2]i32

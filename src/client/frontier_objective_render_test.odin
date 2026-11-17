@@ -23,6 +23,7 @@ when ODIN_TEST {
 		client_update_objective_visuals(client)
 		client_render_world(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, SITE_W, SITE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 
@@ -127,9 +128,11 @@ when ODIN_TEST {
 			gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 			gl.Viewport(0, 0, SITE_W, SITE_H)
 			gl.ClearColor(0, 0, 0, 1)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(marker_only, &top, SITE_W, SITE_H)
 			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+			ui_flush()
 			gl.ReadPixels(0, 0, SITE_W, SITE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			scene_fini(marker_only)
 			lo := [2]f32{SITE_W, SITE_H}

@@ -130,8 +130,8 @@ when ODIN_TEST {
 			"existing files must retain allowed preferences while discarding retired fog and color settings")
 		testing.expect(t, os.write_entire_file(path, `{"version":1,"sensitivity":1.235}`) == nil)
 		migrated := client_settings_load(path)
-		testing.expect(t, migrated.bindings[.INSPECT] == ([2]i32{'F', 0}) && !migrated.visuals.hide_cats && !migrated.visuals.hide_extra_props,
-			"older preferences must default inspect to F and keep all map details visible")
+		testing.expect(t, migrated.bindings[.INSPECT] == ([2]i32{'F', 0}) && migrated.visuals.hide_cats && migrated.visuals.hide_extra_props,
+			"older preferences must default inspect to F and hide cats and extra props once")
 		testing.expect(t, migrated.sensitivity == 1.235 && migrated.mouse_dpi == menuui.DEFAULT_MOUSE_DPI && migrated.fov == menuui.DEFAULT_FOV, "existing preferences must retain turn speed and use the original world FOV")
 		testing.expect(t, !migrated.advanced_sensitivity && !migrated.invert_mouse, "older preferences must retain automatic ADS scaling and normal vertical look")
 		testing.expect(t, migrated.viewmodel == menuui.DEFAULT_VIEWMODEL_SETTINGS, "older preferences must retain the existing weapon pose, hands, ADS animation and zoom")

@@ -33,7 +33,7 @@ Crosshair_Image_Job :: struct {
 Crosshair_Image :: struct {
 	url:     string, // the setting this state belongs to
 	state:   Crosshair_Image_State,
-	texture: u32,
+	texture: Gpu_Texture,
 	job:     ^Crosshair_Image_Job,
 }
 
@@ -68,7 +68,7 @@ crosshair_image_local_path :: proc(url: string) -> string {
 }
 
 // The texture to draw for this setting, or 0 while loading or after a failure.
-crosshair_image_texture :: proc(url: string, image: ^Crosshair_Image = nil) -> u32 {
+crosshair_image_texture :: proc(url: string, image: ^Crosshair_Image = nil) -> Gpu_Texture {
 	image := image != nil ? image : &g_crosshair_image
 	crosshair_image_poll(image)
 	if len(url) == 0 { return 0 }
@@ -134,12 +134,7 @@ crosshair_image_finish :: proc(image: ^Crosshair_Image, path: string) {
 		return
 	}
 	// Smooth scaling, like the HUD's ammo icon.
-	gl.BindTexture(gl.TEXTURE_2D, texture)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-	g_active_texture = 0
+	gpu_texture_set_filter(texture, .Linear)
 	image.texture, image.state = texture, .READY
 }
 

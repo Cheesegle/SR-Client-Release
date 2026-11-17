@@ -2,7 +2,7 @@ package shared
 
 // Optional, client-consumed effects. Dedicated servers never enable this queue.
 // These events do not affect simulation or go over the network.
-Presentation_Kind :: enum { FIRE, RELOAD, SWAP, STEP, JUMP, LAND, SLIDE, DAMAGE, HIT, EXPLOSION }
+Presentation_Kind :: enum { FIRE, RELOAD, RELOAD_END, SWAP, STEP, JUMP, LAND, SLIDE, DAMAGE, HIT, EXPLOSION }
 Presentation_Event :: struct {
 	kind: Presentation_Kind,
 	uid, weapon_id: i32,

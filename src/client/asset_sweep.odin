@@ -23,6 +23,7 @@ asset_sweep_output_paths :: proc(manifest: string) -> (missing, optional: string
 }
 
 asset_sweep_run :: proc(manifest: string) -> int {
+	g_gpu_backend = .OpenGL // the sweep renders in its own hidden GL context
 	shared.asset_trace_begin()
 	defer shared.asset_trace_end()
 

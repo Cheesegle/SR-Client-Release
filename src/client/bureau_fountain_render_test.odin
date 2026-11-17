@@ -21,6 +21,7 @@ when ODIN_TEST {
 		gl.Viewport(0, 0, FT_W, FT_H)
 		client_render_world(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, FT_W, FT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 
@@ -107,7 +108,7 @@ when ODIN_TEST {
 				"the sphere at %v must fill its box %v (got %v, %v)", object.position, object.scale, mesh.transform.position, mesh.transform.scale)
 			// No `t` and tv=1: Krunker's WALL texture, variant 1 (wall_0_1).
 			width: i32
-			gl.BindTexture(gl.TEXTURE_2D, material.texture)
+			gl.BindTexture(gl.TEXTURE_2D, u32(material.texture))
 			gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_WIDTH, &width)
 			testing.expectf(t, material.texture != 0 && width > 1, "the sphere at %v must use the map texture, not the white fallback", object.position)
 			testing.expect(t, !material.base.transparent && material.color.w == 1, "fountain spheres are opaque")
@@ -118,10 +119,8 @@ when ODIN_TEST {
 		geometry := g_sphere_geometry
 		if testing.expect(t, geometry != nil && geometry.index_count == 6 * SPHERE_WIDTH_SEGMENTS * (SPHERE_HEIGHT_SEGMENTS - 1), "sphere has 12x8 segments") {
 			count := (SPHERE_WIDTH_SEGMENTS + 1) * (SPHERE_HEIGHT_SEGMENTS + 1)
-			vertices := make([]Vertex, count)
-			defer delete(vertices)
-			gl.BindBuffer(gl.ARRAY_BUFFER, geometry.vbo)
-			gl.GetBufferSubData(gl.ARRAY_BUFFER, 0, count * size_of(Vertex), raw_data(vertices))
+			vertices := geometry.vertices
+			testing.expect_value(t, len(vertices), count)
 			lo, hi := shared.Vec3{1e9, 1e9, 1e9}, shared.Vec3{-1e9, -1e9, -1e9}
 			for vertex in vertices {
 				lo = {min(lo.x, vertex.position.x), min(lo.y, vertex.position.y), min(lo.z, vertex.position.z)}

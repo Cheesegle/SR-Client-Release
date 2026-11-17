@@ -350,6 +350,7 @@ gl_error_name :: proc(error: u32) -> string {
 // threaded drivers may sync with their worker thread, so it stays rare. The
 // first error of each site is logged with its phase; later ones are counted.
 gl_check :: proc(site: string, per_phase := false) -> bool {
+	if g_gpu_backend == .Vulkan { return true }
 	if g_diag.gl_debug_output || per_phase && !g_diag.gl_check_detailed { return true }
 	clean := true
 	for _ in 0 ..< 8 {
@@ -448,4 +449,19 @@ g_crash_buffer: [16384]u8
 crash_log_write :: proc(path: string, info: Crash_Info) -> bool {
 	report := crash_report_format(g_crash_buffer[:], info)
 	return crash_file_write(path, transmute([]u8)report)
+}
+
+// The Vulkan device's strings for crash reports (diagnostics_capture_gl_info
+// on OpenGL).
+diagnostics_capture_gpu_info :: proc() {
+	info := gpu_device_info()
+	g_diag.gl_vendor_len = copy(g_diag.gl_vendor[:], info.vendor)
+	g_diag.gl_renderer_len = copy(g_diag.gl_renderer[:], info.renderer)
+	g_diag.gl_version_len = copy(g_diag.gl_version[:], fmt.tprintf("%s %s", info.api, info.version))
+	g_diag.gl_debug_context = false
+	if g_gpu_backend == .OpenGL {
+		flags: i32
+		gl.GetIntegerv(gl.CONTEXT_FLAGS, &flags)
+		g_diag.gl_debug_context = flags & gl.CONTEXT_FLAG_DEBUG_BIT != 0
+	}
 }

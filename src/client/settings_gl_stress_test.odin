@@ -105,7 +105,7 @@ when ODIN_TEST {
 		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
 		old_diag := g_diag
 		defer g_diag = old_diag
-		diagnostics_capture_gl_info()
+		diagnostics_capture_gpu_info()
 		testing.expect(t, g_diag.gl_debug_context, "the test needs a debug context")
 		gl_debug_reset_counts()
 		log_path := "bin/settings-gl-stress.log"

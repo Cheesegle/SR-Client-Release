@@ -10,6 +10,7 @@ rem   build.bat browser           build browser helper and restore WebView2 load
 rem   build.bat server            build the server      -> bin\sr_server.exe
 rem   build.bat tests             build + run the sim tests
 rem   build.bat check             typecheck client + server without linking
+rem   build.bat spirv             recompile the Vulkan shaders (needs glslc; the .spv files are committed)
 rem   build.bat all               build client + server
 rem   build.bat clean             remove built binaries
 rem   build.bat (no args)         same as "all"
@@ -31,13 +32,14 @@ if "%SERVER_PROFILE%"=="" set "SERVER_PROFILE=%PROFILE%"
 
 if /i "%TARGET%"=="help" goto usage
 set "VALID_TARGET="
-for %%T in (client dev browser server tests check all clean) do if /i "%TARGET%"=="%%T" (
+for %%T in (client dev browser server tests check spirv all clean) do if /i "%TARGET%"=="%%T" (
     set "TARGET=%%T"
     set "VALID_TARGET=1"
 )
 if not defined VALID_TARGET goto bad_arguments
 if not "%~4"=="" goto bad_arguments
 if not "%TARGET%"=="all" if not "%~3"=="" goto bad_arguments
+if "%TARGET%"=="spirv" if not "%~2"=="" goto bad_arguments
 if "%TARGET%"=="check" if not "%~2"=="" goto bad_arguments
 if "%TARGET%"=="clean" if not "%~2"=="" goto bad_arguments
 
@@ -86,6 +88,10 @@ if errorlevel 1 exit /b %errorlevel%
 call :browser
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% build src/client -out:%BIN_DIR%\sr_client.exe -o:%PROFILE% -subsystem:windows -resource:installer\sr-client.rc
+exit /b %errorlevel%
+
+:spirv
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build-spirv.ps1
 exit /b %errorlevel%
 
 :dev

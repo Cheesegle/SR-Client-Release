@@ -5,12 +5,12 @@ import glfw "vendor:glfw"
 import gl "vendor:OpenGL"
 import shared "../shared"
 
-ammo_icon: u32
-timer_icon: u32
-health_icon: u32
-class_icons: map[i32]u32
-weapon_icons: map[i32]u32
-scope_icon: u32
+ammo_icon: Gpu_Texture
+timer_icon: Gpu_Texture
+health_icon: Gpu_Texture
+class_icons: map[i32]Gpu_Texture
+weapon_icons: map[i32]Gpu_Texture
+scope_icon: Gpu_Texture
 
 // Use the same interpolated aim as the first-person rig and camera.
 overlay_scope_active :: proc(client: ^Client) -> bool {
@@ -52,21 +52,18 @@ overlay_numeric_baseline :: proc(top, height, text_size: f32) -> f32 {
 	return top + (height + text_height) * 0.5
 }
 
-overlay_icon_filter :: proc(icon: u32) {
+overlay_icon_filter :: proc(icon: Gpu_Texture) {
 	if icon == 0 { return }
-	gl.BindTexture(gl.TEXTURE_2D, icon)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-	g_active_texture = 0
+	gpu_texture_set_filter(icon, .Linear)
 }
 
 // HUD silhouettes (textures/weapons or textures/melee), shared by the loadout
 // list and the killfeed. Returns 0 when the icon is missing.
-overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (u32, ^shared.Weapon) {
+overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (Gpu_Texture, ^shared.Weapon) {
 	if weapon_id < 0 || int(weapon_id) >= len(client.game.weapons) { return 0, nil }
 	weapon := client.game.weapons[weapon_id]
 	if weapon == nil { return 0, nil }
-	if weapon_icons == nil { weapon_icons = make(map[i32]u32) }
+	if weapon_icons == nil { weapon_icons = make(map[i32]Gpu_Texture) }
 	icon, cached := weapon_icons[weapon_id]
 	if !cached {
 		folder := "melee" if weapon.melee else "weapons"
@@ -79,8 +76,7 @@ overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (u32, ^shared.We
 	return icon, weapon
 }
 
-// The window's UI scale before Krunker's UI Scale: the crosshair and
-// hitmarker keep Krunker's pixel sizes whatever the UI Scale is.
+// The window's UI scale before Krunker's UI Scale (restored after the HUD).
 g_hud_base_scale: f32 = 1
 
 overlay_render :: proc(client: ^Client, delta: f32) {
@@ -96,10 +92,10 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	if client.hud_settings.hide_hud {
 		// Settings > Display > Show HUD off: only what aiming needs.
 		crosshair := client_crosshair_values(client)
-		if !client.scoreboard_open { crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, g_hud_base_scale, client_crosshair_opacity(client, crosshair)) }
+		if !client.scoreboard_open { crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale, client_crosshair_opacity(client, crosshair)) }
 		hitmarker := client_hitmarker_values(client)
 		hit_marker_tick(&client.hit_marker, hitmarker, delta)
-		hit_marker_render(client.ui, client.hit_marker, hitmarker, client.ui.width*0.5, client.ui.height*0.5, g_hud_base_scale)
+		hit_marker_render(client.ui, client.hit_marker, hitmarker, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale)
 		if chat_typing() { kill_chat_render(client) }
 		death_cam_render(client)
 		return
@@ -115,12 +111,12 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	// and custom opacity can explicitly keep Precision visible over the scope.
 	// The browser also hides its crosshair while the leaderboard is open.
 	crosshair := client_crosshair_values(client)
-	if !client.scoreboard_open { crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, g_hud_base_scale, client_crosshair_opacity(client, crosshair)) }
+	if !client.scoreboard_open { crosshair_render(client.ui, crosshair, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale, client_crosshair_opacity(client, crosshair)) }
 
 	// Server-confirmed hits; Krunker draws the marker even with the board open.
 	hitmarker := client_hitmarker_values(client)
 	hit_marker_tick(&client.hit_marker, hitmarker, delta)
-	hit_marker_render(client.ui, client.hit_marker, hitmarker, client.ui.width*0.5, client.ui.height*0.5, g_hud_base_scale)
+	hit_marker_render(client.ui, client.hit_marker, hitmarker, client.ui.width*0.5, client.ui.height*0.5, client.ui.scale)
 	if client.krunker.connected {
 		progress := client.krunker_world.interact_progress
 		if client.krunker_world.interact_manual_visible { progress = client.krunker_world.interact_manual_progress }
@@ -161,56 +157,9 @@ hud_cache_draw :: proc(client: ^Client) {
 }
 
 hud_cache_render :: proc(client: ^Client) {
-	cache := &g_hud_cache
-	width, height := i32(client.ui.width), i32(client.ui.height)
-	if width <= 0 || height <= 0 { return }
-	if cache.framebuffer == 0 || cache.width != width || cache.height != height {
-		if cache.texture == 0 { gl.GenTextures(1, &cache.texture) }
-		if cache.framebuffer == 0 { gl.GenFramebuffers(1, &cache.framebuffer) }
-		gl.BindTexture(gl.TEXTURE_2D, cache.texture)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-		g_active_texture = 0
-		previous: i32
-		gl.GetIntegerv(gl.FRAMEBUFFER_BINDING, &previous)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, cache.framebuffer)
-		gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cache.texture, 0)
-		complete := gl.CheckFramebufferStatus(gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE
-		gl.BindFramebuffer(gl.FRAMEBUFFER, u32(previous))
-		cache.width, cache.height, cache.valid = width, height, false
-		if !complete {
-			// No offscreen target on this driver: draw the HUD directly.
-			gl.DeleteFramebuffers(1, &cache.framebuffer); cache.framebuffer = 0
-			cache.width = -1
-		}
-	}
-	if cache.framebuffer == 0 { hud_cache_draw(client); return }
-	now := glfw.GetTime()
-	signature := hud_signature(client)
-	// While typing, the chat's cursor and text change every frame.
-	if !cache.valid || signature != cache.signature || now - cache.drawn_at >= 1.0/HUD_CACHE_MIN_RATE || chat_typing() || ODIN_TEST {
-		previous: i32
-		gl.GetIntegerv(gl.FRAMEBUFFER_BINDING, &previous)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, cache.framebuffer)
-		clear_color: [4]f32
-		gl.GetFloatv(gl.COLOR_CLEAR_VALUE, &clear_color[0])
-		gl.ClearColor(0, 0, 0, 0)
-		gl.Clear(gl.COLOR_BUFFER_BIT)
-		gl.ClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3])
-		// Premultiplied alpha in the texture: colour blends as usual, alpha
-		// accumulates coverage.
-		gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-		hud_cache_draw(client)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, u32(previous))
-		cache.drawn_at, cache.valid, cache.signature = now, true, signature
-	}
-	gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-	ui_draw_image(client.ui, cache.texture, 0, 0, client.ui.width, client.ui.height)
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	// The interface is batched (a handful of draws for the whole HUD), so the
+	// HUD is drawn directly every frame on both renderers.
+	hud_cache_draw(client)
 }
 
 // Everything the cached HUD shows, folded into one number (FNV-1a). Cheap:

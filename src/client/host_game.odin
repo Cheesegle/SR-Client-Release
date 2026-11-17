@@ -35,6 +35,12 @@ HOST_CREATE_TIMEOUT :: 20 * time.Second
 HOST_SEND_DELAY :: 1500 * time.Millisecond
 HOST_RETRY_DELAY :: 2500 * time.Millisecond
 HOST_TRIES :: 4
+// Longest wait for Krunker's account answer before trying anyway.
+HOST_ACCOUNT_WAIT :: 8 * time.Second
+// Shown instead of a stale "Creating your custom game..." when the lobby
+// connection closes before the game exists ("failed" also keeps it in the log).
+HOST_LOST_CONNECTION :: "Hosting failed: the connection to Krunker closed before the game was created. Press Host game to try again."
+
 HOST_IMAGE_DIR :: "img/maps/"
 HOST_BANNER_FILE :: "img/maps/comp_banner.png"
 HOST_IMAGE_HOST :: "https://assets.krunker.io/img/"
@@ -46,10 +52,13 @@ Host_Game :: struct {
 	queued:   int, // frames until the lobby connection starts (the status shows first)
 	since:    time.Time,
 	loaded:   bool, // saved host settings were read
-	textures: [menuui.HOST_MAP_COUNT]u32,
-	banner:   u32,
+	textures: [menuui.HOST_MAP_COUNT]Gpu_Texture,
+	banner:   Gpu_Texture,
 	images_tried: bool, // textures were looked for after the download finished
 	tries:    int, // custom messages sent for this game
+	// Krunker's page sends "custom" only once the socket has logged the
+	// account in (ACCOUNT_RESPONSE "a"); sending earlier is "Invalid User".
+	account_ready: bool,
 }
 g_host: Host_Game
 
@@ -267,6 +276,7 @@ host_game_on_custom :: proc(client: ^Client, packet: []kproto.Krunker_Msgpack_Va
 	kproto.network_log("host", fmt.tprintf("Krunker answered custom (try %d): %s", g_host.tries, text))
 	if text == "Invalid User" && g_host.tries < HOST_TRIES {
 		g_host.phase, g_host.since = .WAITING, time.now()
+		krunker_ws_set_status(client, fmt.tprintf("Creating your custom game (Krunker is still loading your account, try %d of %d)...", g_host.tries + 1, HOST_TRIES))
 		return
 	}
 	host_game_fail(client, fmt.tprintf("Krunker: %s", text))
@@ -296,18 +306,20 @@ host_game_tick :: proc(client: ^Client) {
 		kproto.krunker_world_reset(&client.krunker_world)
 		net_client_disconnect(&client.net)
 		g_host.phase, g_host.since = .SEEKING, time.now()
+		g_host.account_ready = false
 		if !krunker_ws_connect(client, &client.join_link) && g_host.phase == .SEEKING { g_host.phase = .NONE }
 	case .SEEKING:
 		// Waiting for the lobby (or for the verification window).
 		if !client.krunker.connected && client.access.status != .PENDING && client.join_queued == 0 { g_host.phase = .NONE }
 	case .WAITING:
-		if !client.krunker.connected { g_host.phase = .NONE; return }
-		if time.since(g_host.since) < (g_host.tries == 0 ? HOST_SEND_DELAY : HOST_RETRY_DELAY) { return }
+		if !client.krunker.connected { host_game_fail(client, HOST_LOST_CONNECTION); return }
+		if !g_host.account_ready && g_host.tries == 0 && time.since(g_host.since) < HOST_ACCOUNT_WAIT { return }
+		if time.since(g_host.since) < (g_host.tries == 0 ? (g_host.account_ready ? 300*time.Millisecond : 0) : HOST_RETRY_DELAY) { return }
 		if !host_send_custom(&client.krunker, &client.menu.host) { host_game_fail(client, "Could not send the host setup to Krunker."); return }
 		g_host.tries += 1
 		g_host.phase, g_host.since = .CREATING, time.now()
 	case .CREATING:
-		if !client.krunker.connected { g_host.phase = .NONE; return }
+		if !client.krunker.connected { host_game_fail(client, HOST_LOST_CONNECTION); return }
 		if time.since(g_host.since) > HOST_CREATE_TIMEOUT { host_game_fail(client, "Krunker did not create the game. Press Host game to try again.") }
 	}
 }
@@ -392,4 +404,18 @@ host_images_download :: proc() {
 	for host_map in menuui.HOST_MAPS { download(fmt.tprintf("%smaps/map_%d.png", HOST_IMAGE_HOST, host_map.id), host_image_path(host_map.id)) }
 	download(fmt.tprintf("%sbackgrounds/gamecats/c_1.png", HOST_IMAGE_HOST), fmt.tprintf("%s%s", shared.assets_path(), HOST_BANNER_FILE))
 	free_all(context.temp_allocator)
+}
+
+// ACCOUNT_RESPONSE "a" [error, id, name, data...]: the socket's login result.
+host_game_on_account :: proc(client: ^Client, packet: []kproto.Krunker_Msgpack_Value) {
+	if !host_game_active() { return }
+	error := ""
+	if len(packet) > 1 { error, _ = packet[1].(string) }
+	if len(error) > 0 {
+		kproto.network_log("host", fmt.tprintf("ERROR Krunker did not log the account in on the lobby connection: %s", error))
+		host_game_fail(client, "Hosting failed: Krunker did not log you in on this connection. Press Login, then Host game again.")
+		return
+	}
+	g_host.account_ready = true
+	kproto.network_log("host", "account loaded on the lobby connection")
 }

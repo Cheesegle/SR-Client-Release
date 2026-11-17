@@ -1,6 +1,5 @@
 package main
 
-import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 
 // Menu cursor in exclusive fullscreen.
@@ -24,7 +23,7 @@ import glfw "vendor:glfw"
 // as part of the frame, and gives Windows a transparent cursor for the window
 // so the two never show at once. Gameplay (CURSOR_DISABLED) is untouched.
 Software_Cursor :: struct {
-	texture: u32,
+	texture: Gpu_Texture,
 	width, height: i32,
 	hot_x, hot_y: i32,
 	loaded, load_failed: bool,
@@ -89,19 +88,8 @@ software_cursor_pixels_from_backgrounds :: proc(on_black, on_white: []u8, width,
 	return rgba
 }
 
-software_cursor_upload :: proc(rgba: []u8, width, height: i32) -> u32 {
-	texture: u32
-	gl.GenTextures(1, &texture)
-	gl.BindTexture(gl.TEXTURE_2D, texture)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, raw_data(rgba))
-	gl.BindTexture(gl.TEXTURE_2D, 0)
-	g_active_texture = 0
-	return texture
+software_cursor_upload :: proc(rgba: []u8, width, height: i32) -> Gpu_Texture {
+	return gpu_texture_create({width = width, height = height, format = .RGBA8, sampler = GPU_SAMPLER_UI_NEAREST}, rgba)
 }
 
 // Reads the user's arrow cursor (their pointer scheme and size) into a
@@ -120,8 +108,7 @@ software_cursor_load :: proc(cursor: ^Software_Cursor) {
 }
 
 software_cursor_unload_image :: proc(cursor: ^Software_Cursor) {
-	if cursor.texture != 0 { gl.DeleteTextures(1, &cursor.texture) }
-	cursor.texture = 0
+	gpu_texture_destroy(&cursor.texture)
 	cursor.loaded, cursor.load_failed = false, false
 }
 

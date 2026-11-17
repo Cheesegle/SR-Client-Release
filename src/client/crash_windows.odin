@@ -146,6 +146,7 @@ crash_filter :: proc "system" (pointers: ^win.EXCEPTION_POINTERS) -> win.LONG {
 
 @(private = "file")
 crash_watchdog :: proc(t: ^thread.Thread) {
+	cpu_pin_current_thread_off_game_core()
 	last_frame := sync.atomic_load_explicit(&g_diag.frame, .Acquire)
 	last_change := time.tick_now()
 	reported := false

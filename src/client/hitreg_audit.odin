@@ -33,6 +33,10 @@ Hitreg_Shot :: struct {
 	weapon:      string,
 	aimed_sid:   i32,  // player under the crosshair at the drawn pose, -1 none
 	aimed_part:  shared.Krunker_Hurtbox_Part,
+	// The real bullet (Krunker's seeded spread and recoil), as the server
+	// fires it from the same inputs: '-' none, else H/B on the drawn pose.
+	fired:       u8,
+	fired_sid:   i32,
 	nearest_sid: i32,  // closest player to the ray when it missed
 	miss:        f32,  // distance from the ray to that player's nearest box centre
 	offsets:     [len(HITREG_OFFSETS_MS)]u8, // per offset: '.', 'H' head, 'B' body
@@ -143,6 +147,14 @@ hitreg_audit_shot :: proc(client: ^Client, now: f64) {
 		range * math.sin(angles.x),
 		range * math.cos(angles.y + math.PI) * math.cos(angles.x),
 	}
+	spread_angles := me.last_shot_angles
+	fired_direction := shared.Vec3{
+		range * math.sin(spread_angles.y + math.PI) * math.cos(spread_angles.x),
+		range * math.sin(spread_angles.x),
+		range * math.cos(spread_angles.y + math.PI) * math.cos(spread_angles.x),
+	}
+	shot.fired, shot.fired_sid = '-', -1
+	fired_t: f32 = 2
 	display_time := kproto.krunker_display_time(now, world.send_rate)
 	best_t: f32 = 2
 	for &source in world.players {
@@ -156,6 +168,9 @@ hitreg_audit_shot :: proc(client: ^Client, now: f64) {
 		if part, t, hit := hitreg_test(origin, direction, pose); hit && t < best_t {
 			best_t, shot.aimed_sid, shot.aimed_part = t, source.sid, part
 			shot.moving, shot.target_speed, shot.target_step = pose.moving, speed, source.server_step
+		}
+		if part, t, hit := hitreg_test(origin, fired_direction, pose); hit && t < fired_t {
+			fired_t, shot.fired_sid, shot.fired = t, source.sid, part == .HEAD ? 'H' : 'B'
 		}
 		if miss := hitreg_miss_distance(origin, direction, pose); miss < shot.miss {
 			shot.miss, shot.nearest_sid = miss, source.sid
@@ -195,7 +210,7 @@ hitreg_audit_resolve :: proc(client: ^Client, now: f64, all: bool) {
 	if !g_hitreg.started {
 		g_hitreg.lines = strings.builder_make()
 		g_hitreg.started = true
-		fmt.sbprintf(&g_hitreg.lines, "# SR Client hit registration log. One line per shot.\n# aimed: player/part under your crosshair as drawn (H head, B body, - none); server: Krunker's confirmation;\n# offsets %v ms: would the shot hit if the player were drawn that much earlier(-)/later(+)\n", HITREG_OFFSETS_MS)
+		fmt.sbprintf(&g_hitreg.lines, "# SR Client hit registration log. One line per shot.\n# aimed: player/part under your crosshair as drawn (H head, B body, - none); fired: where the real bullet (with spread/recoil) goes on the drawn pose; server: Krunker's confirmation;\n# offsets %v ms: would the shot hit if the player were drawn that much earlier(-)/later(+)\n", HITREG_OFFSETS_MS)
 	}
 	resolved := 0
 	for i in 0 ..< g_hitreg.count {
@@ -216,9 +231,10 @@ hitreg_audit_resolve :: proc(client: ^Client, now: f64, all: bool) {
 		if aimed { g_hitreg.predicted += 1 }
 		if server_sid >= 0 { g_hitreg.confirmed += 1 }
 		if aimed == (server_sid >= 0) { g_hitreg.agreed += 1 }
-		fmt.sbprintf(&g_hitreg.lines, "t=%.3f %s aimed=%s server=%s target=%d moving=%v speed=%.3f step=%.2f miss=%.2f offsets=%s\n",
+		fmt.sbprintf(&g_hitreg.lines, "t=%.3f %s aimed=%s fired=%s server=%s target=%d moving=%v speed=%.3f step=%.2f miss=%.2f offsets=%s\n",
 			shot.time, shot.weapon,
 			aimed ? fmt.tprintf("%d%s", shot.aimed_sid, shot.aimed_part == .HEAD ? "H" : "B") : "-",
+			shot.fired_sid >= 0 ? fmt.tprintf("%d%c", shot.fired_sid, rune(shot.fired)) : "-",
 			server_sid >= 0 ? fmt.tprintf("%d%s", server_sid, server_head ? "H" : "B") : "-",
 			aimed ? shot.aimed_sid : shot.nearest_sid, shot.moving, shot.target_speed, shot.target_step,
 			shot.miss < 1e8 ? shot.miss : -1, string(shot.offsets[:]))

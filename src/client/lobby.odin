@@ -12,7 +12,7 @@ import menuui "../menu"
 import clay "../third_party/clay"
 import kproto "../krunker"
 
-menu_portraits: map[i32]u32
+menu_portraits: map[i32]Gpu_Texture
 
 menu_character :: proc "c" (window: glfw.WindowHandle, codepoint: rune) {
 	context = runtime.default_context()
@@ -148,7 +148,7 @@ menu_weapon_icon :: proc(client: ^Client, id: i32) -> rawptr {
 
 menu_view :: proc(client: ^Client) -> menuui.View {
 	classes := make([]menuui.Class, len(client.game.classes), context.temp_allocator)
-	if menu_portraits == nil { menu_portraits = make(map[i32]u32) }
+	if menu_portraits == nil { menu_portraits = make(map[i32]Gpu_Texture) }
 	secondaries := make([dynamic]menuui.Secondary, context.temp_allocator)
 	secondary_id := client_secondary_choice(client)
 	secondary_name := "None"
@@ -277,7 +277,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		resolution_index = client.resolution_index, resolution_options = resolution_options,
 		fullscreen_index = fullscreen_index, fullscreen_options = fullscreen_options,
-		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
+		monitor_index = client.monitor_index, monitor_names = monitor_names[:], vsync = client.vsync, vulkan = !client.opengl, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		visuals = client.visual_settings, quality = client_supported_quality(client.quality_settings, client.max_anisotropy), max_anisotropy = client.max_anisotropy,
 		viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings,
 		settings_defaults = client_settings_default_values(fullscreen_sizes, client.max_anisotropy),
@@ -307,7 +307,10 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 			if is_you && !view.active { view.confirmed_class = player.class_index }
 			class_name := menu_class_name(client, player.class_index)
 			if !is_you && lobby_hides_class(client, player.team) { class_name = "???" } // as in Krunker's comp lobby
-			view.players[i] = {name = len(player.name)>0 ? player.name : (is_you ? "You" : "Player"), class_name = class_name, team = player.team, is_you = is_you}
+			name := len(player.name)>0 ? player.name : (is_you ? "You" : "Player")
+			// Krunker's lobby list puts the clan before the name: "[CLAN] name".
+			if len(player.clan) > 0 { name = fmt.tprintf("[%s] %s", player.clan, name) }
+			view.players[i] = {name = name, class_name = class_name, team = player.team, is_you = is_you}
 		}
 	}
 	if client.net.connected && client.net.lobby_received {
@@ -359,8 +362,11 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	client.last_swap_key = 0
 	if client.vsync != values.vsync {
 		client.vsync = values.vsync
-		if client.window != nil { glfw.SwapInterval(client.vsync ? 1 : 0) }
+		// The renderer applies at the next start (saved now).
+		client.opengl = !values.vulkan
+		if client.window != nil { gpu_set_vsync(client.vsync) }
 	}
+	client.opengl = !values.vulkan // takes effect at the next start
 	client.settings_dirty = true
 	settings := audio_settings_clamp({values.audio_volumes[0], values.audio_volumes[1], values.audio_volumes[2], values.audio_volumes[3]})
 	if client.audio_settings != settings {
@@ -375,7 +381,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .CROSSHAIR_IMAGE_CLEAR, .HUD_SCALE, .GAME_FPS_LIMIT, .IMPORT_PART, .FPS_UPDATE_RATE, .HOST_TAB, .HOST_MAP, .HOST_VALUE, .HOST_TOGGLE, .HOST_TEAM_SIZE, .HOST_CLASS_LIMIT, .HOST_TEXT, .HOST_CLOSE, .DEFAULT_REGION, .HITMARKER_IMAGE_CLEAR:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .GRAPHICS_API, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .CROSSHAIR_IMAGE_CLEAR, .HUD_SCALE, .GAME_FPS_LIMIT, .IMPORT_PART, .FPS_UPDATE_RATE, .HOST_TAB, .HOST_MAP, .HOST_VALUE, .HOST_TOGGLE, .HOST_TEAM_SIZE, .HOST_CLASS_LIMIT, .HOST_TEXT, .HOST_CLOSE, .DEFAULT_REGION, .HITMARKER_IMAGE_CLEAR:
 	case .HITMARKER_IMAGE_PASTE:
 		link := strings.trim_space(string(glfw.GetClipboardString(client.window)))
 		if len(link) == 0 || len(link) > menuui.CROSSHAIR_IMAGE_URL_MAX {
@@ -573,4 +579,15 @@ client_refresh :: proc(client: ^Client) {
 	client.menu.invite_selected = false
 	client.menu.page = .HOME
 	krunker_ws_set_status(client, "")
+}
+
+// F5 inside a Krunker game: leave and join the same lobby again, like
+// refreshing Krunker's page on the game's link.
+client_refresh_rejoin :: proc(client: ^Client, connect_live: proc(^Client, ^shared.Join_Link) -> bool = krunker_ws_connect) {
+	if len(client.join_link.game_id) == 0 { client_refresh(client); return }
+	invite := fmt.tprintf("https://krunker.io/?game=%s", client.join_link.game_id)
+	client.end_hold = false
+	client.end_screen_active, client.end_screen_dismissed = false, false
+	menuui.set_invite(&client.menu, invite)
+	client_join_invite(client, connect_live)
 }

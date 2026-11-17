@@ -103,3 +103,10 @@ shader_insert_defines :: proc(source, defines: string) -> string {
 	}
 	return strings.concatenate({source[:line_end + 1], defines, source[line_end + 1:]})
 }
+
+// The HUD and menu program (ui.vert / ui.frag). `dir` ends with a slash.
+shader_compile_ui :: proc(dir, vertex_name, fragment_name: string) -> u32 {
+	vert := strings.concatenate({dir, vertex_name}, context.temp_allocator)
+	frag := strings.concatenate({dir, fragment_name}, context.temp_allocator)
+	return shader_compile(vert, frag)
+}

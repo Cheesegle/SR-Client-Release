@@ -51,6 +51,7 @@ Krunker_WS_State :: struct {
 	input_elapsed: f64,
 	input_duration_remainder_ms: f64,
 	send_elapsed: f64,
+	send_seconds: f64, // 1 / the lobby's tickFrequency (browser input send interval)
 	input_commands: [dynamic]shared.Input,
 	input_reset: bool,
 	input_swap: u8,
@@ -543,6 +544,8 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				host_game_on_instance(client, packet)
 			case "cust":
 				host_game_on_custom(client, packet)
+			case "a":
+				host_game_on_account(client, packet)
 			case "start":
 				kproto.network_log("spawn", fmt.tprintf("server start received; local_sid=%d players=%d; waiting for renderer handoff", client.krunker_world.local_sid, len(client.krunker_world.players)))
 				state.input_sequence = max(state.input_sequence, 13)
@@ -634,14 +637,15 @@ krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8)
 	state.input_reset = false
 	copy(state.input_commands[:], state.input_commands[count:])
 	resize(&state.input_commands, len(state.input_commands)-count)
-	state.send_elapsed = max(0, state.send_elapsed - KRUNKER_SEND_SECONDS)
+	state.send_elapsed = max(0, state.send_elapsed - krunker_send_seconds(state))
 	state.input_logged += 1
 }
 
 krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected || !state.spawned || !state.bootstrapped do return
-	if state.send_elapsed < KRUNKER_SEND_SECONDS || len(state.pending) > 0 || len(state.input_commands) == 0 do return
+	state.send_seconds = client.krunker_world.tick_frequency > 0 ? 1 / f64(client.krunker_world.tick_frequency) : KRUNKER_SEND_SECONDS
+	if state.send_elapsed < krunker_send_seconds(state) || len(state.pending) > 0 || len(state.input_commands) == 0 do return
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
@@ -866,4 +870,10 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 	state.secondary_index = client_secondary_request(client, client.selected_class)
 	krunker_ws_set_status(client, "Krunker WebSocket connected; waiting for server load…")
 	return true
+}
+
+// The browser sends its batched inputs every 1000/tickFrequency ms (30 per
+// second unless the lobby sets "tf"); SR sends on the same clock.
+krunker_send_seconds :: proc(state: ^Krunker_WS_State) -> f64 {
+	return state.send_seconds > 0 ? state.send_seconds : KRUNKER_SEND_SECONDS
 }

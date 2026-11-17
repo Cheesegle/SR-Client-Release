@@ -155,6 +155,7 @@ when ODIN_TEST {
 		settings := menuui.DEFAULT_HITMARKER_SETTINGS
 		settings.colors[.HEADSHOT] = 0xffd000
 		gl.ClearColor(56.0/255, 61.0/255, 69.0/255, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 		crosshair := menuui.DEFAULT_CROSSHAIR_SETTINGS
 		for kind in 0..<3 {
@@ -165,6 +166,7 @@ when ODIN_TEST {
 			hit_marker_render(ui, marker, settings, cx, 100, 1)
 		}
 		pixel :: proc(x, y: int) -> (p: [3]u8) {
+			ui_flush()
 			gl.ReadPixels(i32(x), i32(H-1-y), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &p[0])
 			return
 		}
@@ -180,6 +182,7 @@ when ODIN_TEST {
 		pixels := make([]u8, W*H*3)
 		defer delete(pixels)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		testing.expect(t, stbi.write_png("bin/hit_feedback/hitmarkers.png", W, H, 3, &pixels[(H-1)*W*3], -W*3) != 0)
 		testing.expect(t, gl.GetError() == gl.NO_ERROR)

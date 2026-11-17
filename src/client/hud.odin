@@ -75,15 +75,6 @@ client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.
 
 menu_color :: proc(color: clay.Color) -> shared.Vec4 { return {color[0] / 255, color[1] / 255, color[2] / 255, color[3] / 255} }
 
-// glScissor rejects negative sizes (GL_INVALID_VALUE), and NaN converts to
-// INT_MIN; an empty or invalid clip becomes a zero-size scissor.
-menu_scissor :: proc(ui: ^UI, box: clay.BoundingBox) {
-	finite :: proc(value: f32) -> f32 { return math.is_nan(value) || math.is_inf(value) ? 0 : value }
-	x, y := finite(box.x), finite(ui.height - box.y - box.height)
-	width, height := max(finite(box.width), 0), max(finite(box.height), 0)
-	gl.Scissor(i32(clamp(x, -65536, 65536)), i32(clamp(y, -65536, 65536)), i32(min(width, 65536)), i32(min(height, 65536)))
-}
-
 menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderCommand)) {
 	clips: [32]clay.BoundingBox
 	clip_count := 0
@@ -119,14 +110,13 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 			}
 			clips[clip_count] = box
 			clip_count += 1
-			gl.Enable(gl.SCISSOR_TEST)
-			menu_scissor(ui, box)
+			ui_clip_set(ui, box)
 		case .ScissorEnd:
 			clip_count = max(0, clip_count - 1)
-			if clip_count == 0 { gl.Disable(gl.SCISSOR_TEST) }
-			else { menu_scissor(ui, clips[clip_count - 1]) }
+			if clip_count == 0 { ui_clip_clear(ui) }
+			else { ui_clip_set(ui, clips[clip_count - 1]) }
 		case .Image:
-			texture := u32(uintptr(command.renderData.image.imageData))
+			texture := Gpu_Texture(uintptr(command.renderData.image.imageData))
 			if texture != 0 { ui_draw_image(ui, texture, box.x, box.y, box.width, box.height) }
 		case .Custom:
 			if command.id == clay.ID("CrosshairPreview").id && command.renderData.custom.customData != nil {
@@ -141,23 +131,21 @@ menu_render_commands :: proc(ui: ^UI, commands: clay.ClayArray(clay.RenderComman
 					clip.x, clip.y = max(clip.x,parent.x), max(clip.y,parent.y)
 					clip.width, clip.height = max(0,right-clip.x), max(0,bottom-clip.y)
 				}
-				gl.Enable(gl.SCISSOR_TEST)
-				menu_scissor(ui, clip)
+				ui_clip_set(ui, clip)
 				crosshair_render(ui, preview.settings, box.x+box.width*0.5, box.y+box.height*0.5, preview.scale, menuui.crosshair_opacity(preview.settings, 1))
 				hit_marker_preview(ui, preview.hitmarker, box.x+box.width*0.5, box.y+box.height*0.5, preview.scale, glfw.GetTime())
-				if clip_count > 0 { menu_scissor(ui, clips[clip_count-1]) } else { gl.Disable(gl.SCISSOR_TEST) }
+				if clip_count > 0 { ui_clip_set(ui, clips[clip_count-1]) } else { ui_clip_clear(ui) }
 			}
 			if command.id == clay.ID("DamagePreview").id && command.renderData.custom.customData != nil {
 				preview := cast(^menuui.Damage_Preview)command.renderData.custom.customData
-				gl.Enable(gl.SCISSOR_TEST)
-				menu_scissor(ui, box)
+				ui_clip_set(ui, box)
 				damage_preview_render(ui, preview.settings, box.x, box.y, box.width, box.height, glfw.GetTime())
-				if clip_count > 0 { menu_scissor(ui, clips[clip_count-1]) } else { gl.Disable(gl.SCISSOR_TEST) }
+				if clip_count > 0 { ui_clip_set(ui, clips[clip_count-1]) } else { ui_clip_clear(ui) }
 			}
 		case .None, .OverlayColorStart, .OverlayColorEnd:
 		}
 	}
-	gl.Disable(gl.SCISSOR_TEST)
+	ui_clip_clear(ui)
 }
 
 // pointer_blocked is set while the pointer is over (or dragging) the debug

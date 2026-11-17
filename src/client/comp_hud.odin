@@ -92,15 +92,14 @@ leaderboard_render :: proc(client: ^Client) {
 		score := score_column >= 0 ? row.cells[score_column] : ""
 		score_w := kh_measure(ui, score, 18)
 		name_x := left + 28*s + 5*s
-		name := scoreboard_fit_text(ui, row.name, 18*KH_EM*s, x + width - 18*s - score_w - 8*s - name_x)
-		kh_text(ui, color, name, name_x, top, 18)
+		scoreboard_name_with_clan(ui, row^, color, KH_WHITE, name_x, top, 18, x + width - 18*s - score_w - 8*s - name_x)
 		kh_text(ui, KH_MUTED, score, x + width - 18*s - score_w, top, 18)
 	}
 	g_leaderboard_bottom = y + height
 	stats_row_render(client, right, g_leaderboard_bottom + 10*s)
 }
 
-skull_icon_kills, skull_icon_deaths: u32
+skull_icon_kills, skull_icon_deaths: Gpu_Texture
 
 // .topRightCounters under the leaderboard, right-aligned: .statIcon boxes
 // (black, a grey inner with 5px padding) with your kills and deaths (24px
@@ -113,7 +112,7 @@ stats_row_render :: proc(client: ^Client, right, top: f32) {
 	kills, deaths: u32
 	for player in world.players { if player.sid == world.local_sid { kills, deaths = player.kills, player.deaths } }
 	if client.me != nil { kills, deaths = max(kills, client.me.kills), max(deaths, client.me.deaths) }
-	Cell :: struct { icon: u32, label, text: string }
+	Cell :: struct { icon: Gpu_Texture, label, text: string }
 	cells := make([dynamic]Cell, 0, 3, context.temp_allocator)
 	if !client.hud_settings.hide_kill_counter { append(&cells, Cell{kill_feed_load_icon(&skull_icon_kills, "img/skull_0.png"), "", fmt.tprintf("%d", kills)}) }
 	if !client.hud_settings.hide_death_counter { append(&cells, Cell{kill_feed_load_icon(&skull_icon_deaths, "img/skull_1.png"), "", fmt.tprintf("%d", deaths)}) }

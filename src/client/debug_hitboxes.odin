@@ -2,7 +2,8 @@ package main
 
 import "core:math"
 import "core:math/linalg"
-import gl "vendor:OpenGL"
+import "core:mem"
+import "core:slice"
 import glfw "vendor:glfw"
 import shared "../shared"
 
@@ -50,10 +51,7 @@ Debug_Render :: struct {
 	shot_count: int,
 	shot_next:  int,
 	lines: [dynamic]Debug_Line_Vertex,
-	// Lazily created GL objects (zero until something is first drawn).
-	program, vao, vbo: u32,
-	view_proj_location: i32,
-	vbo_capacity: int,
+	program: Gpu_Program, // debug_line.vert/.frag, created when first drawn
 }
 
 DEBUG_COLOR_BODY         :: shared.Vec4{0.2, 1.0, 0.35, 1}
@@ -214,79 +212,25 @@ debug_render_build :: proc(client: ^Client, now: f64) {
 	}
 }
 
-DEBUG_LINE_VS :: `#version 450 core
-layout(location = 0) in vec3 a_position;
-layout(location = 1) in vec4 a_color;
-uniform mat4 u_view_proj;
-out vec4 v_color;
-void main() {
-	v_color = a_color;
-	gl_Position = u_view_proj * vec4(a_position, 1.0);
-}
-`
-
-DEBUG_LINE_FS :: `#version 450 core
-in vec4 v_color;
-out vec4 frag_color;
-void main() { frag_color = v_color; }
-`
-
-@(private="file")
-debug_render_gl_init :: proc(dr: ^Debug_Render) -> bool {
-	if dr.program != 0 { return true }
-	program, ok := gl.load_shaders_source(DEBUG_LINE_VS, DEBUG_LINE_FS)
-	if !ok { return false }
-	dr.program = program
-	dr.view_proj_location = gl.GetUniformLocation(program, "u_view_proj")
-	gl.GenVertexArrays(1, &dr.vao)
-	gl.GenBuffers(1, &dr.vbo)
-	gl.BindVertexArray(dr.vao)
-	gl.BindBuffer(gl.ARRAY_BUFFER, dr.vbo)
-	gl.EnableVertexAttribArray(0)
-	gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, size_of(Debug_Line_Vertex), offset_of(Debug_Line_Vertex, position))
-	gl.EnableVertexAttribArray(1)
-	gl.VertexAttribPointer(1, 4, gl.FLOAT, gl.FALSE, size_of(Debug_Line_Vertex), offset_of(Debug_Line_Vertex, color))
-	gl.BindVertexArray(0)
-	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
-	return true
-}
-
 // Draws the line list with the world camera. The depth-tested pass runs right
 // after the world (before the view model clears depth); with x-ray on, the
 // lines are drawn last instead, with no depth test, over everything.
 debug_render_lines :: proc(dr: ^Debug_Render, view_projection: shared.Mat4, depth_test: bool) -> (vertices: int) {
-	if len(dr.lines) == 0 || !debug_render_gl_init(dr) { return }
-	// Keep the renderer's bound-program cache in sync (scene_draw_mesh skips
-	// UseProgram when it thinks its program is still bound).
-	if g_active_shader != dr.program {
-		gl.UseProgram(dr.program)
-		g_active_shader = dr.program
-	}
+	if len(dr.lines) == 0 { return }
+	if dr.program == 0 { dr.program = gpu_program_create_debug_lines() }
+	if dr.program == 0 { return }
+	indices := make([]u32, len(dr.lines), context.temp_allocator)
+	for &index, i in indices { index = u32(i) }
+	if !gpu_transient_bind(.Debug_Line, slice.to_bytes(dr.lines[:]), indices) { return }
+	gpu_program_bind(dr.program)
 	view_projection := view_projection
-	gl.UniformMatrix4fv(dr.view_proj_location, 1, gl.FALSE, &view_projection[0, 0])
-	gl.BindVertexArray(dr.vao)
-	gl.BindBuffer(gl.ARRAY_BUFFER, dr.vbo)
-	bytes := len(dr.lines) * size_of(Debug_Line_Vertex)
-	if bytes > dr.vbo_capacity {
-		dr.vbo_capacity = max(bytes, 64 * 1024)
-		gl.BufferData(gl.ARRAY_BUFFER, dr.vbo_capacity, nil, gl.STREAM_DRAW)
-	}
-	gl.BufferSubData(gl.ARRAY_BUFFER, 0, bytes, raw_data(dr.lines))
-	if depth_test {
-		gl.Enable(gl.DEPTH_TEST)
-		gl.DepthFunc(gl.LEQUAL)
-	} else {
-		gl.Disable(gl.DEPTH_TEST)
-	}
-	gl.DepthMask(gl.FALSE)
-	gl.Disable(gl.BLEND)
-	gl.DrawArrays(gl.LINES, 0, i32(len(dr.lines)))
+	gpu_uniform_push(GPU_BINDING_DRAW, mem.ptr_to_bytes(&view_projection))
+	// Opaque lines that never write depth: on surfaces (LEQUAL) or, x-ray,
+	// through them.
+	gpu_draw_state_set({depth_test = depth_test ? .Less_Equal : .Off})
+	gpu_draw_indexed(i32(len(dr.lines)), 0)
 	g_draw_calls += 1
-	gl.DepthMask(gl.TRUE)
-	gl.DepthFunc(gl.LESS)
-	gl.Enable(gl.DEPTH_TEST)
-	gl.BindVertexArray(0)
-	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
+	gpu_draw_state_reset()
 	return len(dr.lines)
 }
 
@@ -312,12 +256,7 @@ debug_render_after_viewmodel :: proc(client: ^Client) {
 }
 
 debug_render_fini :: proc(dr: ^Debug_Render) {
-	if dr.program != 0 {
-		if g_active_shader == dr.program { g_active_shader = 0 }
-		gl.DeleteProgram(dr.program)
-		gl.DeleteVertexArrays(1, &dr.vao)
-		gl.DeleteBuffers(1, &dr.vbo)
-	}
+	gpu_program_destroy(&dr.program)
 	delete(dr.lines)
 	dr^ = {}
 }

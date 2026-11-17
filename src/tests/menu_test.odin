@@ -600,7 +600,8 @@ test_graphics_menu :: proc() -> bool {
 	if state.focus != clay.ID("HideExtraProps", 1).id { fmt.println("Hide extra props must be independently reachable"); return false }
 	menu_test_frame(&state, view, {enter=true})
 	menu_test_frame(&state, view, {})
-	if !state.settings_draft.visuals.hide_cats || !state.settings_draft.visuals.hide_extra_props || view.visuals.hide_cats || view.visuals.hide_extra_props { fmt.println("Map detail toggles must stage changes without modifying saved preferences"); return false }
+	// Both default on; Enter turns them off.
+	if state.settings_draft.visuals.hide_cats || state.settings_draft.visuals.hide_extra_props || !view.visuals.hide_cats || !view.visuals.hide_extra_props { fmt.println("Map detail toggles must stage changes without modifying saved preferences"); return false }
 	menu_test_frame(&state, view, {tab=true})
 	menu_test_frame(&state, view, {})
 	box := clay.GetElementData(clay.ID("ResetVisuals")).boundingBox
@@ -802,29 +803,24 @@ test_menu_settings_reset :: proc() -> bool {
 	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("SettingsSave")).kind != .NONE || state.page != .SETTINGS { fmt.println("The confirmation must block the footer"); return false }
 
-	// Confirm: every tab, key binds included, returns to the defaults.
+	// Confirm: every tab, key binds included, returns to the defaults and is
+	// saved at once (it must work even if a broken setting hides Save).
 	menu_test_click(&state, view, clay.ID("SettingsReset"))
 	menu_test_frame(&state, view, {})
-	if menu_test_click(&state, view, clay.ID("ResetConfirm")).kind != .NONE || state.reset_open || state.settings_draft != defaults || state.page != .SETTINGS {
-		fmt.println("Reset all must restore every default in the draft"); return false
+	if menu_test_click(&state, view, clay.ID("ResetConfirm")).kind != .SETTINGS_SAVE || state.reset_open || state.settings_draft != defaults || state.page == .SETTINGS {
+		fmt.println("Reset all must restore every default and save it at once"); return false
 	}
-	if view.bindings[.JUMP] != ([2]i32{'V', -4}) { fmt.println("Reset must not touch the saved settings"); return false }
 	menu_test_frame(&state, view, {})
-	// Cancel reverts the reset.
-	menu_test_click(&state, view, clay.ID("SettingsCancel"))
-	menu_test_frame(&state, view, {})
-	state.page = .SETTINGS
-	menu_test_frame(&state, view, {})
-	if state.settings_draft != edited { fmt.println("Cancel must discard a reset"); return false }
 
-	// Enter confirms from the keyboard; Save then hands the defaults to the client.
+	// Enter confirms from the keyboard too.
+	state.page = .SETTINGS
+	state.settings_draft = edited
+	menu_test_frame(&state, view, {})
 	menu_test_click(&state, view, clay.ID("SettingsReset"))
 	menu_test_frame(&state, view, {})
 	menu_test_frame(&state, view, {enter = true})
 	menu_test_frame(&state, view, {})
-	if state.settings_draft != defaults { fmt.println("Enter must confirm the reset"); return false }
-	if menu_test_click(&state, view, clay.ID("SettingsSave")).kind != .SETTINGS_SAVE { fmt.println("Save must apply the reset"); return false }
-	menu_test_frame(&state, view, {})
+	if state.settings_draft != defaults || state.page == .SETTINGS { fmt.println("Enter must confirm and save the reset"); return false }
 
 	// "Reset <tab> only" on Controls restores the binds and sensitivity.
 	state.page = .SETTINGS

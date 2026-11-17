@@ -129,8 +129,8 @@ when ODIN_TEST {
 		krunker_client_apply_motion(&client, peer, source, false)
 		testing.expect(t, peer.position.x == 0, "a newly arrived k must not snap a visible remote player")
 		krunker_client_interpolate_remotes(&client, 1.15, 0.005)
-		testing.expect(t, abs(peer.position.x-5) < 0.001 && abs(peer.crouch_val-0.5) < 0.001 && abs(peer.aim_val-0.5) < 0.001,
-			"remote position, crouch, and ADS must render between the buffered samples")
+		testing.expectf(t, abs(peer.position.x-5) < 0.001 && peer.crouch_val == 1 && peer.aim_val == 1, // wire aim 0 = fully aimed
+			"remote position renders between the buffered samples; crouch and ADS are the newest, as in Krunker (crouch %v, aim %v)", peer.crouch_val, peer.aim_val)
 		testing.expect(t, abs(abs(peer.direction.y)-math.PI) < 0.001, "yaw interpolation must cross 180 degrees by the short path")
 		previous := peer.position.x
 		for frame in 1..=9 {
@@ -210,8 +210,10 @@ when ODIN_TEST {
 		for pass in 0..<2 {
 			gl.Viewport(0, 0, 640, 360)
 			gl.ClearColor(0, 0, 0, 1)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &client.camera, 640, 360)
+			ui_flush()
 			gl.ReadPixels(0, 0, 640, 360, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			visible := 0
 			for i := 0; i < len(pixels); i += 3 {

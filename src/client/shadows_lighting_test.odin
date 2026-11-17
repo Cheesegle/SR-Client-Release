@@ -60,9 +60,11 @@ when ODIN_TEST {
 	shadow_test_pixel :: proc(scene: ^Scene, camera: ^Camera, map_inst: ^shared.Map, quality: menuui.Quality_Settings, x, y: i32) -> [4]u8 {
 		shadow_prepare(scene, map_inst, quality, 0, {0, 0, 64, 64}, camera.position)
 		gl.Viewport(0, 0, 64, 64)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(scene, camera, 64, 64)
 		pixel: [4]u8
+		ui_flush()
 		gl.ReadPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, &pixel[0])
 		return pixel
 	}

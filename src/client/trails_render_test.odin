@@ -58,10 +58,12 @@ when ODIN_TEST {
 		client.camera.position = {0, 0, 40}
 		gl.Viewport(0, 0, 640, 360)
 		gl.ClearColor(0, 0, 0, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(client.scene, &client.camera, 640, 360)
 		pixels := make([]u8, 640 * 360 * 3)
 		defer delete(pixels)
+		ui_flush()
 		gl.ReadPixels(0, 0, 640, 360, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		visible := 0
 		for i := 0; i < len(pixels); i += 3 {

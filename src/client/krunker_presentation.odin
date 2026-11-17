@@ -43,9 +43,13 @@ krunker_client_interpolate_remotes :: proc(client: ^Client, now: f64, delta: f32
 		player.position = a.position + (b.position-a.position)*alpha
 		player.direction.x = a.direction.x + (b.direction.x-a.direction.x)*alpha
 		player.direction.y = a.direction.y + shared.normalize_angle(b.direction.y-a.direction.y)*alpha
-		player.crouch_val = a.crouch + (b.crouch-a.crouch)*alpha
+		// Krunker writes crouchVal and aimVal straight from the newest snapshot
+		// (only position, look and step are interpolated), so the crouched
+		// model and its nametag drop as soon as the crouch arrives.
+		newest := source.poses[source.pose_count-1]
+		player.crouch_val = newest.crouch
 		player.server_crouch, player.server_crouch_valid = math.round(clamp(b.crouch, 0, 1)), true
-		player.aim_val = a.aim + (b.aim-a.aim)*alpha
+		player.aim_val = newest.aim
 		player.server_step_valid = source.step_fraction_seen && !source.step_out_of_range
 		if player.server_step_valid { player.server_step = a.step + (b.step-a.step)*alpha }
 		player.on_ground = alpha < 0.5 ? a.on_ground : b.on_ground

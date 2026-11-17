@@ -1,5 +1,7 @@
 # Short effects preloaded at startup and refreshed by both packagers.
 # Paths are relative to assets/. Music/ambient loops are not loaded.
+# Krunker sounds missing from the package (jump_1, whizz_0/1, reload_2) are
+# downloaded from Krunker at start-up (round_hud.odin) and load on first use.
 sound/weapon_1.mp3
 sound/weapon_2.mp3
 sound/weapon_3.mp3
@@ -35,6 +37,5 @@ sound/crit_0.mp3
 sound/hit_0.mp3
 sound/headshot_0.mp3
 sound/explosion.mp3
-sound/impact_0.mp3
 sound/tick_0.mp3
 sound/menu_open.mp3

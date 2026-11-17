@@ -4,12 +4,13 @@ import "core:strings"
 
 Krunker_Lobby_Player :: struct {
 	id, name: string,
+	clan: string, // "cl"; "" without a clan.
 	team, class_index: i32,
 	active: bool,
 }
 
 krunker_lobby_clear :: proc(state: ^Krunker_World_State) {
-	for player in state.lobby_players { delete(player.id); delete(player.name) }
+	for player in state.lobby_players { delete(player.id); delete(player.name); delete(player.clan) }
 	clear(&state.lobby_players)
 }
 
@@ -20,6 +21,7 @@ krunker_lobby_record :: proc(state: ^Krunker_World_State, id: string, value: Kru
 		if index >= 0 {
 			delete(state.lobby_players[index].id)
 			delete(state.lobby_players[index].name)
+			delete(state.lobby_players[index].clan)
 			ordered_remove(&state.lobby_players, index)
 		}
 		return true
@@ -33,6 +35,7 @@ krunker_lobby_record :: proc(state: ^Krunker_World_State, id: string, value: Kru
 	player := &state.lobby_players[index]
 	// cda replaces the complete record. A team change can remove its class.
 	delete(player.name)
+	delete(player.clan)
 	player^ = Krunker_Lobby_Player{id = player.id, class_index = -1}
 	for entry in entries {
 		key, textual := entry.key.(string); if !textual { continue }
@@ -42,6 +45,8 @@ krunker_lobby_record :: proc(state: ^Krunker_World_State, id: string, value: Kru
 		case "a": player.active = krunker_world_bool(entry.value)
 		case "n":
 			if name, named := entry.value.(string); named { delete(player.name); player.name = strings.clone(name) }
+		case "cl":
+			if clan, named := entry.value.(string); named { delete(player.clan); player.clan = strings.clone(clan) }
 		}
 	}
 	return true

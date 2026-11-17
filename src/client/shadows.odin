@@ -3,9 +3,8 @@ package main
 import "core:encoding/json"
 import "core:math"
 import "core:math/linalg"
-import "core:strings"
+import "core:mem"
 import gl "vendor:OpenGL"
-import glfw "vendor:glfw"
 import menuui "../menu"
 import shared "../shared"
 
@@ -130,13 +129,11 @@ Shadow_Cascade :: struct {
 }
 
 Shadow_State :: struct {
-	program:          u32, // basic.vert/frag with SHADOW_DEPTH_PASS.
-	uniforms:         Shader_Uniforms,
-	batched_program:  u32, // The same with BATCHED, for the static map batches.
-	batched_uniforms: Shader_Uniforms,
+	program:          Gpu_Program, // basic.vert/frag with SHADOW_DEPTH_PASS.
+	batched_program:  Gpu_Program, // The same with BATCHED, for the static map batches.
 	// Sun map(s).
-	texture:          u32, // DEPTH_COMPONENT24 2D array, `layers` layers.
-	fbos:             [SHADOW_CASCADES]u32,
+	texture:          Gpu_Texture, // Depth 2D array, `layers` layers.
+	fbos:             [SHADOW_CASCADES]Gpu_Render_Target,
 	layers:           int,
 	size:             i32,
 	soft:             bool,
@@ -145,8 +142,8 @@ Shadow_State :: struct {
 	light_key:        shared.Mat4, // Sun view; a change invalidates every layer.
 	world_bias:       f32,         // Krunker's bias in world units.
 	// Player map.
-	player_fbo:       u32,
-	player_texture:   u32,
+	player_fbo:       Gpu_Render_Target,
+	player_texture:   Gpu_Texture,
 	player_matrix:    shared.Mat4,
 	player_bias:      f32,
 	// Map data.
@@ -322,7 +319,7 @@ shadow_map_size :: proc(config: shared.Lighting_Config, high_res: bool) -> i32 {
 	size := config.shadow_resolution > 0 ? config.shadow_resolution : shared.SHADOW_DEFAULT_RESOLUTION
 	// Query once: a glGet every frame makes threaded drivers sync with the GPU.
 	@(static) max_size: i32
-	if max_size == 0 { gl.GetIntegerv(gl.MAX_TEXTURE_SIZE, &max_size) }
+	if max_size == 0 { max_size = gpu_max_texture_size() }
 	return clamp(size, 1, max(max_size, 1))
 }
 
@@ -335,29 +332,17 @@ sun_casts_light :: proc(config: shared.Lighting_Config) -> bool {
 @(private = "file")
 shadow_program_init :: proc() -> bool {
 	if g_shadow.program != 0 { return true }
-	vert := shared.concat(shared.assets_path(), "shaders/basic.vert")
-	frag := shared.concat(shared.assets_path(), "shaders/basic.frag")
-	defer { delete(vert); delete(frag) }
-	g_shadow.program = shader_compile(vert, frag, "#define SHADOW_DEPTH_PASS\n")
+	g_shadow.program = gpu_program_create_basic(false, true)
 	if g_shadow.program == 0 { return false }
-	g_shadow.uniforms = cache_uniforms(g_shadow.program)
 	// Optional: without it the static map is drawn object by object.
-	// The portable batch layout's slot #defines (map_batch_shader_defines).
-	batched_defines := strings.concatenate({map_batch_shader_defines(context.temp_allocator), "#define SHADOW_DEPTH_PASS\n"}, context.temp_allocator)
-	g_shadow.batched_program = shader_compile(vert, frag, batched_defines)
-	if g_shadow.batched_program != 0 { g_shadow.batched_uniforms = cache_uniforms(g_shadow.batched_program) }
+	g_shadow.batched_program = gpu_program_create_basic(true, true)
 	return true
 }
 
+// Soft shadows filter the comparison results (hardware PCF).
 @(private = "file")
-shadow_texture_params :: proc(texture: u32, soft: bool) {
-	filter := i32(soft ? gl.LINEAR : gl.NEAREST)
-	gl.TextureParameteri(texture, gl.TEXTURE_MIN_FILTER, filter)
-	gl.TextureParameteri(texture, gl.TEXTURE_MAG_FILTER, filter)
-	gl.TextureParameteri(texture, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.TextureParameteri(texture, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	gl.TextureParameteri(texture, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE)
-	gl.TextureParameteri(texture, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL)
+shadow_sampler :: proc(soft: bool) -> Gpu_Sampler_Desc {
+	return {filter = soft ? .Linear : .Nearest, wrap = .Clamp, compare = true}
 }
 
 @(private = "file")
@@ -365,21 +350,17 @@ shadow_sun_target_init :: proc(size: i32, layers: int, soft: bool, mode: menuui.
 	if g_shadow.texture != 0 && g_shadow.size == size && g_shadow.layers == layers && g_shadow.mode == mode {
 		if g_shadow.soft != soft {
 			// The filter is a texture parameter; no redraw needed.
-			shadow_texture_params(g_shadow.texture, soft)
-			if g_shadow.player_texture != 0 { shadow_texture_params(g_shadow.player_texture, soft) }
+			filter := shadow_sampler(soft).filter
+			gpu_texture_set_filter(g_shadow.texture, filter)
+			gpu_texture_set_filter(g_shadow.player_texture, filter)
 			g_shadow.soft = soft
 		}
 		return
 	}
 	shadow_release_target()
-	gl.CreateTextures(gl.TEXTURE_2D_ARRAY, 1, &g_shadow.texture)
-	gl.TextureStorage3D(g_shadow.texture, 1, gl.DEPTH_COMPONENT24, size, size, i32(layers))
-	shadow_texture_params(g_shadow.texture, soft)
+	g_shadow.texture = gpu_texture_create({width = size, height = size, format = .Depth, layers = i32(layers), sampler = shadow_sampler(soft)})
 	for layer in 0 ..< layers {
-		gl.CreateFramebuffers(1, &g_shadow.fbos[layer])
-		gl.NamedFramebufferTextureLayer(g_shadow.fbos[layer], gl.DEPTH_ATTACHMENT, g_shadow.texture, 0, i32(layer))
-		gl.NamedFramebufferDrawBuffer(g_shadow.fbos[layer], gl.NONE)
-		gl.NamedFramebufferReadBuffer(g_shadow.fbos[layer], gl.NONE)
+		g_shadow.fbos[layer] = gpu_render_target_create_depth(g_shadow.texture, i32(layer))
 	}
 	g_shadow.size, g_shadow.layers, g_shadow.soft, g_shadow.mode = size, layers, soft, mode
 	g_shadow.cascades = {}
@@ -389,24 +370,15 @@ shadow_sun_target_init :: proc(size: i32, layers: int, soft: bool, mode: menuui.
 @(private = "file")
 shadow_player_target_init :: proc(soft: bool) {
 	if g_shadow.player_texture != 0 { return }
-	gl.CreateTextures(gl.TEXTURE_2D, 1, &g_shadow.player_texture)
-	gl.TextureStorage2D(g_shadow.player_texture, 1, gl.DEPTH_COMPONENT24, PLAYER_SHADOW_SIZE, PLAYER_SHADOW_SIZE)
-	shadow_texture_params(g_shadow.player_texture, soft)
-	gl.CreateFramebuffers(1, &g_shadow.player_fbo)
-	gl.NamedFramebufferTexture(g_shadow.player_fbo, gl.DEPTH_ATTACHMENT, g_shadow.player_texture, 0)
-	gl.NamedFramebufferDrawBuffer(g_shadow.player_fbo, gl.NONE)
-	gl.NamedFramebufferReadBuffer(g_shadow.player_fbo, gl.NONE)
+	g_shadow.player_texture = gpu_texture_create({width = PLAYER_SHADOW_SIZE, height = PLAYER_SHADOW_SIZE, format = .Depth, sampler = shadow_sampler(soft)})
+	g_shadow.player_fbo = gpu_render_target_create_depth(g_shadow.player_texture)
 }
 
 shadow_release_target :: proc() {
-	for &fbo in g_shadow.fbos {
-		if fbo != 0 { gl.DeleteFramebuffers(1, &fbo) }
-		fbo = 0
-	}
-	if g_shadow.texture != 0 { gl.DeleteTextures(1, &g_shadow.texture) }
-	if g_shadow.player_fbo != 0 { gl.DeleteFramebuffers(1, &g_shadow.player_fbo) }
-	if g_shadow.player_texture != 0 { gl.DeleteTextures(1, &g_shadow.player_texture) }
-	g_shadow.texture, g_shadow.player_fbo, g_shadow.player_texture = 0, 0, 0
+	for &fbo in g_shadow.fbos { gpu_render_target_destroy(&fbo) }
+	gpu_texture_destroy(&g_shadow.texture)
+	gpu_render_target_destroy(&g_shadow.player_fbo)
+	gpu_texture_destroy(&g_shadow.player_texture)
 	g_shadow.size, g_shadow.layers = 0, 0
 	g_shadow.cascades = {}
 }
@@ -422,11 +394,8 @@ shadow_release_map :: proc() {
 // Shutdown: everything, including the depth programs.
 shadow_fini :: proc() {
 	shadow_release_map()
-	for program in ([2]u32{g_shadow.program, g_shadow.batched_program}) {
-		if program == 0 { continue }
-		gl.DeleteProgram(program)
-		if g_active_shader == program { g_active_shader = 0 }
-	}
+	gpu_program_destroy(&g_shadow.program)
+	gpu_program_destroy(&g_shadow.batched_program)
 	g_shadow = {}
 	g_render_quality = {lighting = .NORMAL}
 }
@@ -513,7 +482,7 @@ cascade_fit :: proc(view: shared.Mat4, center: shared.Vec3, radius: f32, near, f
 // does no GL work at all.
 // `framebuffer` and `viewport` are restored after a shadow-map render; they are
 // passed in because reading them back with glGet stalls threaded drivers.
-shadow_prepare :: proc(scene: ^Scene, map_inst: ^shared.Map, quality: menuui.Quality_Settings, framebuffer: u32 = 0, viewport: [4]i32 = {}, camera_position := shared.Vec3{}) {
+shadow_prepare :: proc(scene: ^Scene, map_inst: ^shared.Map, quality: menuui.Quality_Settings, framebuffer: Gpu_Render_Target = 0, viewport: [4]i32 = {}, camera_position := shared.Vec3{}) {
 	lighting := menuui.Lighting_Quality(clamp(quality.lighting, 0, 3))
 	mode := menuui.Shadow_Quality(clamp(quality.shadow_quality, 0, 1))
 	g_render_quality = {lighting = lighting, mode = mode}
@@ -586,74 +555,50 @@ shadow_prepare :: proc(scene: ^Scene, map_inst: ^shared.Map, quality: menuui.Qua
 	shadow_end_pass(&pass)
 }
 
-// GL state of one shadow pass sequence; restored by shadow_end_pass.
+// The frame's target, restored by shadow_end_pass.
 Shadow_Pass :: struct {
-	framebuffer: u32,
+	framebuffer: Gpu_Render_Target,
 	viewport:    [4]i32,
 	active:      bool,
 }
 
 @(private = "file")
-shadow_begin_target :: proc(pass: ^Shadow_Pass, fbo: u32, size: i32, cull_front: bool) {
+shadow_begin_target :: proc(pass: ^Shadow_Pass, target: Gpu_Render_Target, size: i32, cull_front: bool) {
 	pass.active = true
-	gl.BindFramebuffer(gl.FRAMEBUFFER, fbo)
-	gl.Viewport(0, 0, size, size)
-	gl.Enable(gl.DEPTH_TEST)
-	gl.DepthMask(gl.TRUE)
-	gl.Disable(gl.BLEND)
-	gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
-	gl.Clear(gl.DEPTH_BUFFER_BIT)
-	if cull_front {
-		gl.Enable(gl.CULL_FACE)
-		gl.CullFace(gl.FRONT)
-	} else {
-		gl.Disable(gl.CULL_FACE)
-	}
-	gl.ActiveTexture(gl.TEXTURE0)
+	gpu_depth_pass_begin(target, size, cull_front)
 }
 
 @(private = "file")
 shadow_end_pass :: proc(pass: ^Shadow_Pass) {
 	if !pass.active { return }
 	pass.active = false
-	gl.Disable(gl.CULL_FACE)
-	gl.CullFace(gl.BACK)
-	gl.BindFramebuffer(gl.FRAMEBUFFER, pass.framebuffer)
-	gl.Viewport(pass.viewport[0], pass.viewport[1], pass.viewport[2], pass.viewport[3])
+	gpu_depth_pass_end(pass.framebuffer, pass.viewport)
 }
 
 @(private = "file")
-shadow_bind_program :: proc(program: u32, u: ^Shader_Uniforms, view, projection: shared.Mat4) {
-	gl.UseProgram(program)
-	g_active_shader = program
-	view_matrix, projection_matrix := view, projection
-	gl.UniformMatrix4fv(u.camera_world_inverse, 1, gl.FALSE, &view_matrix[0, 0])
-	gl.UniformMatrix4fv(u.camera_projection, 1, gl.FALSE, &projection_matrix[0, 0])
-	gl.Uniform1f(u.world_uv_scale, shared.GAME_CONSTANTS.world_uv_scale)
-	gl.Uniform1i(u.tex, 0)
+shadow_bind_program :: proc(program: Gpu_Program, view, projection: shared.Mat4) {
+	gpu_program_bind(program)
+	// The depth pass reads only the camera and the UV scale (alpha tests).
+	pass := Basic_Pass_Uniforms{camera_world_inverse = view, camera_projection = projection, world_uv_scale = shared.GAME_CONSTANTS.world_uv_scale}
+	gpu_uniform_push(GPU_BINDING_PASS, mem.ptr_to_bytes(&pass))
 }
 
 // One mesh through the per-object depth program (already bound), unless its
 // bounds are outside the light frustum.
 @(private = "file")
-shadow_draw_mesh :: proc(mesh: ^Mesh, vao: ^u32, frustum: ^Frustum) -> bool {
+shadow_draw_mesh :: proc(mesh: ^Mesh, input: ^Gpu_Vertex_Input, frustum: ^Frustum) -> bool {
 	if mesh.material == nil || mesh.material.vtable != &basic_material_vtable || mesh.geometry == nil { return false }
 	mesh_update_transform_matrix(mesh)
 	if frustum != nil && mesh.geometry.has_bounds {
 		lo, hi := mesh_world_bounds(mesh)
 		if !frustum_aabb_visible(frustum, lo, hi) { return false }
 	}
-	if vao^ != mesh.geometry.vao {
-		gl.BindVertexArray(mesh.geometry.vao)
-		vao^ = mesh.geometry.vao
+	if input^ != mesh.geometry.input {
+		gpu_vertex_input_bind(mesh.geometry.input)
+		input^ = mesh.geometry.input
 	}
-	// basic_material_update_uniforms writes through u_basic.
-	saved := u_basic
-	u_basic = g_shadow.uniforms
-	basic_material_update_uniforms(mesh.material)
-	u_basic = saved
-	gl.UniformMatrix4fv(g_shadow.uniforms.transform, 1, gl.FALSE, &mesh.transform_matrix[0, 0])
-	gl.DrawElements(gl.TRIANGLES, mesh.geometry.index_count, gl.UNSIGNED_INT, nil)
+	basic_material_push_draw(cast(^Basic_Material)mesh.material, mesh.transform_matrix)
+	gpu_draw_indexed(mesh.geometry.index_count, 0)
 	g_draw_stats.draw_calls += 1
 	return true
 }
@@ -679,31 +624,31 @@ shadow_render_layer :: proc(scene: ^Scene, pass: ^Shadow_Pass, layer: int, view,
 	shadow_begin_target(pass, g_shadow.fbos[layer], g_shadow.size, true)
 	frustum := frustum_from_matrix(projection * view)
 	set := scene.batches
-	batched := set != nil && scene.batching_enabled && g_shadow.batched_program != 0 && set.vao != 0
-	vao: u32
+	batched := set != nil && scene.batching_enabled && g_shadow.batched_program != 0 && set.input != 0
+	input: Gpu_Vertex_Input
 	if batched {
-		shadow_bind_program(g_shadow.batched_program, &g_shadow.batched_uniforms, view, projection)
-		gl.BindVertexArray(set.vao)
-		gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, set.ssbo)
+		shadow_bind_program(g_shadow.batched_program, view, projection)
+		gpu_vertex_input_bind(set.input)
+		gpu_buffer_bind_storage(0, set.objects)
 		for &batch in set.batches {
 			if !shadow_batch_whole(set, &batch) || !frustum_aabb_visible(&frustum, batch.bounds_min, batch.bounds_max) { continue }
 			basic_bind_texture(batch.key.texture)
-			gl.DrawElements(gl.TRIANGLES, batch.index_count, gl.UNSIGNED_INT, rawptr(uintptr(batch.first_index) * size_of(u32)))
+			gpu_draw_indexed(batch.index_count, batch.first_index)
 			g_draw_stats.draw_calls += 1
 		}
 	}
-	shadow_bind_program(g_shadow.program, &g_shadow.uniforms, view, projection)
+	shadow_bind_program(g_shadow.program, view, projection)
 	if batched {
 		for &batch in set.batches {
 			if shadow_batch_whole(set, &batch) || !frustum_aabb_visible(&frustum, batch.bounds_min, batch.bounds_max) { continue }
 			for mesh in set.members[batch.member_start:][:batch.member_count] {
-				if mesh.visible && mesh.shadow_caster == .STATIC { shadow_draw_mesh(mesh, &vao, &frustum) }
+				if mesh.visible && mesh.shadow_caster == .STATIC { shadow_draw_mesh(mesh, &input, &frustum) }
 			}
 		}
 	}
 	for mesh in scene.meshes {
 		if !mesh.visible || mesh.shadow_caster != .STATIC || batched && mesh.batched { continue }
-		shadow_draw_mesh(mesh, &vao, &frustum)
+		shadow_draw_mesh(mesh, &input, &frustum)
 	}
 	g_shadow.renders += 1
 }
@@ -759,11 +704,11 @@ shadow_render_players :: proc(scene: ^Scene, pass: ^Shadow_Pass, view: shared.Ma
 	// should touch the ground (no gap at the feet); the bias keeps them free of
 	// acne on themselves.
 	shadow_begin_target(pass, g_shadow.player_fbo, PLAYER_SHADOW_SIZE, false)
-	shadow_bind_program(g_shadow.program, &g_shadow.uniforms, view, projection)
-	vao: u32
+	shadow_bind_program(g_shadow.program, view, projection)
+	input: Gpu_Vertex_Input
 	drawn := 0
 	for mesh in casters {
-		if shadow_draw_mesh(mesh, &vao, nil) { drawn += 1 }
+		if shadow_draw_mesh(mesh, &input, nil) { drawn += 1 }
 	}
 	g_shadow.casters_drawn = drawn
 	g_shadow.player_renders += 1
@@ -778,12 +723,12 @@ shadow_render_players :: proc(scene: ^Scene, pass: ^Shadow_Pass, view: shared.Ma
 // (resource_cache_fini) with the rest of the context's objects. They belong to
 // the context that made them: tests destroy and recreate contexts, and a name
 // from a dead context may already name another object in the new one.
-g_shadow_placeholder_array, g_shadow_placeholder_2d: u32
-g_shadow_placeholder_context: glfw.WindowHandle
+g_shadow_placeholder_array, g_shadow_placeholder_2d: Gpu_Texture
+g_shadow_placeholder_context: rawptr
 
 @(private = "file")
 shadow_placeholders_current :: proc() -> bool {
-	current := glfw.GetCurrentContext()
+	current := gpu_context_token()
 	if current != g_shadow_placeholder_context {
 		// The old context (and its textures) is gone or not current: forget them.
 		g_shadow_placeholder_array, g_shadow_placeholder_2d = 0, 0
@@ -793,85 +738,66 @@ shadow_placeholders_current :: proc() -> bool {
 }
 
 @(private = "file")
-shadow_placeholder_texture :: proc(target: u32) -> u32 {
-	texture: u32
-	gl.CreateTextures(target, 1, &texture)
-	far := f32(1) // Fully lit.
-	if target == gl.TEXTURE_2D_ARRAY {
-		gl.TextureStorage3D(texture, 1, gl.DEPTH_COMPONENT24, 1, 1, 1)
-		gl.TextureSubImage3D(texture, 0, 0, 0, 0, 1, 1, 1, gl.DEPTH_COMPONENT, gl.FLOAT, &far)
-	} else {
-		gl.TextureStorage2D(texture, 1, gl.DEPTH_COMPONENT24, 1, 1)
-		gl.TextureSubImage2D(texture, 0, 0, 0, 1, 1, gl.DEPTH_COMPONENT, gl.FLOAT, &far)
-	}
-	shadow_texture_params(texture, false)
-	return texture
+shadow_placeholder_texture :: proc(array: bool) -> Gpu_Texture {
+	far := transmute([4]u8)f32(1) // Fully lit.
+	return gpu_texture_create({width = 1, height = 1, format = .Depth, layers = array ? 1 : 0, sampler = shadow_sampler(false)}, far[:])
 }
 
 @(private = "file")
 shadow_bind_placeholders :: proc(sun, player: bool) {
 	if !(sun || player) || !shadow_placeholders_current() { return }
 	if sun {
-		if g_shadow_placeholder_array == 0 { g_shadow_placeholder_array = shadow_placeholder_texture(gl.TEXTURE_2D_ARRAY) }
-		gl.BindTextureUnit(1, g_shadow_placeholder_array)
+		if g_shadow_placeholder_array == 0 { g_shadow_placeholder_array = shadow_placeholder_texture(true) }
+		gpu_texture_bind(GPU_UNIT_SHADOW, g_shadow_placeholder_array)
 	}
 	if player {
-		if g_shadow_placeholder_2d == 0 { g_shadow_placeholder_2d = shadow_placeholder_texture(gl.TEXTURE_2D) }
-		gl.BindTextureUnit(2, g_shadow_placeholder_2d)
+		if g_shadow_placeholder_2d == 0 { g_shadow_placeholder_2d = shadow_placeholder_texture(false) }
+		gpu_texture_bind(GPU_UNIT_PLAYER_SHADOW, g_shadow_placeholder_2d)
 	}
 }
 
 shadow_placeholders_fini :: proc() {
 	if !shadow_placeholders_current() { return }
-	if g_shadow_placeholder_array != 0 { gl.DeleteTextures(1, &g_shadow_placeholder_array) }
-	if g_shadow_placeholder_2d != 0 { gl.DeleteTextures(1, &g_shadow_placeholder_2d) }
-	g_shadow_placeholder_array, g_shadow_placeholder_2d = 0, 0
+	gpu_texture_destroy(&g_shadow_placeholder_array)
+	gpu_texture_destroy(&g_shadow_placeholder_2d)
 }
 
-// Per-pass uniforms for basic.frag; called with the basic program bound.
-shadow_update_pass_uniforms :: proc(u: ^Shader_Uniforms) {
+// Shadow and map-light fields of the `Pass` block. Binds the shadow maps the
+// pass samples, or placeholders where a map is off.
+shadow_fill_pass_uniforms :: proc(u: ^Basic_Pass_Uniforms) {
 	q := g_render_quality
-	gl.Uniform1i(u.lighting_mode, i32(q.lighting))
-	gl.Uniform1i(u.shadow_enabled, i32(q.shadows))
+	u.lighting_mode = i32(q.lighting)
+	u.shadow_enabled = b32(q.shadows)
 	sun_map := q.shadows && g_shadow.texture != 0
 	player_map := sun_map && q.player_shadows && !g_shadow_viewmodel_pass && g_shadow.player_texture != 0
 	shadow_bind_placeholders(!sun_map, !player_map)
 	if q.shadows {
 		layers := g_shadow.layers
-		matrices: [SHADOW_CASCADES]shared.Mat4
-		biases, texels: [SHADOW_CASCADES]f32
+		u.shadow_layers = i32(layers)
 		for i in 0 ..< layers {
-			matrices[i] = g_shadow.cascades[i].shadow_matrix
-			biases[i] = g_shadow.cascades[i].bias
-			texels[i] = 1 / f32(g_shadow.size)
+			u.shadow_matrices[i] = g_shadow.cascades[i].shadow_matrix
+			u.shadow_bias_texel[i] = {g_shadow.cascades[i].bias, 1 / f32(g_shadow.size), 0, 0}
 		}
-		gl.Uniform1i(u.shadow_layers, i32(layers))
 		// Sharp cascades share the light view and depth range, so each one's uv
 		// is cascade 0's uv scaled and offset: one matrix per pixel, not three.
-		scale_offsets: [SHADOW_CASCADES][4]f32
 		c0 := g_shadow.cascades[0]
 		for i in 0 ..< layers {
 			c := g_shadow.cascades[i]
-			if layers == 1 || c.radius <= 0 { scale_offsets[i] = {1, 1, 0, 0}; continue }
+			if layers == 1 || c.radius <= 0 { u.cascade_scale_offset[i] = {1, 1, 0, 0}; continue }
 			scale := c0.radius / c.radius
-			scale_offsets[i] = {scale, scale, 0.5 - 0.5 * scale + (c0.cx - c.cx) / (2 * c.radius), 0.5 - 0.5 * scale + (c0.cy - c.cy) / (2 * c.radius)}
+			u.cascade_scale_offset[i] = {scale, scale, 0.5 - 0.5 * scale + (c0.cx - c.cx) / (2 * c.radius), 0.5 - 0.5 * scale + (c0.cy - c.cy) / (2 * c.radius)}
 		}
-		gl.Uniform4fv(u.cascade_scale_offset, i32(layers), &scale_offsets[0][0])
-		gl.UniformMatrix4fv(u.shadow_matrices, i32(layers), gl.FALSE, &matrices[0][0, 0])
-		gl.Uniform1fv(u.shadow_biases, i32(layers), &biases[0])
-		gl.Uniform1fv(u.shadow_texels, i32(layers), &texels[0])
-		gl.Uniform1i(u.shadow_soft, i32(q.soft_shadows))
-		gl.Uniform1i(u.shadow_soft_kernel, q.mode == .SHARP || g_shadow_soft_kernel_override ? 1 : 0)
-		gl.Uniform1f(u.shadow_normal_bias, g_lighting_config.shadow_normal_bias)
-		if sun_map { gl.BindTextureUnit(1, g_shadow.texture) }
+		u.shadow_soft = b32(q.soft_shadows)
+		u.shadow_soft_kernel = q.mode == .SHARP || g_shadow_soft_kernel_override ? 1 : 0
+		u.shadow_normal_bias = g_lighting_config.shadow_normal_bias
+		if sun_map { gpu_texture_bind(GPU_UNIT_SHADOW, g_shadow.texture) }
 		player := q.player_shadows && !g_shadow_viewmodel_pass
-		gl.Uniform1i(u.player_shadow_enabled, i32(player))
+		u.player_shadow_enabled = b32(player)
 		if player {
-			player_matrix := g_shadow.player_matrix
-			gl.UniformMatrix4fv(u.player_shadow_matrix, 1, gl.FALSE, &player_matrix[0, 0])
-			gl.Uniform1f(u.player_shadow_bias, g_shadow.player_bias)
-			gl.Uniform1f(u.player_shadow_texel, 1.0 / PLAYER_SHADOW_SIZE)
-			if player_map { gl.BindTextureUnit(2, g_shadow.player_texture) }
+			u.player_shadow_matrix = g_shadow.player_matrix
+			u.player_shadow_bias = g_shadow.player_bias
+			u.player_shadow_texel = 1.0 / PLAYER_SHADOW_SIZE
+			if player_map { gpu_texture_bind(GPU_UNIT_PLAYER_SHADOW, g_shadow.player_texture) }
 		}
 	}
 	count: i32
@@ -879,14 +805,14 @@ shadow_update_pass_uniforms :: proc(u: ^Shader_Uniforms) {
 		for light in g_shadow.lights[:g_shadow.light_count] {
 			if !map_light_enabled(light, q.lighting) { continue }
 			direction := light.kind == .POINT ? shared.Vec3{} : linalg.normalize0(light.kind == .DIRECTIONAL ? light.position - light.target : light.target - light.position)
-			gl.Uniform4f(u.map_light_position + count, light.position.x, light.position.y, light.position.z, f32(light.kind))
-			gl.Uniform4f(u.map_light_color + count, light.color.x, light.color.y, light.color.z, light.distance)
-			gl.Uniform4f(u.map_light_direction + count, direction.x, direction.y, direction.z, light.decay)
-			gl.Uniform2f(u.map_light_cone + count, light.cone_cos, light.penumbra_cos)
+			u.map_light_position[count] = {light.position.x, light.position.y, light.position.z, f32(light.kind)}
+			u.map_light_color[count] = {light.color.x, light.color.y, light.color.z, light.distance}
+			u.map_light_direction[count] = {direction.x, direction.y, direction.z, light.decay}
+			u.map_light_cone[count] = {light.cone_cos, light.penumbra_cos, 0, 0}
 			count += 1
 		}
 	}
-	gl.Uniform1i(u.map_light_count, count)
+	u.map_light_count = count
 }
 
 // CPU copy of basic.frag's cascade selection (sun_visibility): the first

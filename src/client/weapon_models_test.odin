@@ -122,6 +122,7 @@ when ODIN_TEST {
 					// Isolate the weapon: visible hands/body must not mask a missing gun.
 					for mesh in scene.meshes { mesh.visible = mesh.visible && (mesh == gun || mesh == arms.weapon_left || mesh == arms.attachment) }
 					gl.ClearColor(0, 0, 0, 1)
+					ui_flush()
 					gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 					scene_render(scene, &camera, 640, 360)
 					if first_person && aim == 1 {
@@ -142,6 +143,7 @@ when ODIN_TEST {
 						player.direction, camera.rotation = {}, {}
 						player_update_meshes(player, false)
 					}
+					ui_flush()
 					gl.ReadPixels(0, 0, 640, 360, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 					visible := 0
 					for i := 0; i < len(pixels); i += 3 {

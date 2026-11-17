@@ -40,6 +40,7 @@ when ODIN_TEST {
 		gl.Viewport(0, 0, NIGHT_W, NIGHT_H)
 		client_render_world(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, NIGHT_W, NIGHT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 

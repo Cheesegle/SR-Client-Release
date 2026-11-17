@@ -323,10 +323,15 @@ mods_remove :: proc() {
 	g_mods.active = ""
 }
 
+// Like Krunker, one mod at a time: loading or removing a mod clears the whole
+// mods folder (every zip, unpacked copy and loose file), so files of an earlier
+// mod can never mix with the new one.
 @(private = "file")
 mods_remove_files :: proc(directory: string) {
 	if !os.is_dir(directory) { return }
-	_ = os.remove_all(strings.concatenate({directory, "/", MOD_UNPACK_DIR}, context.temp_allocator))
-	_ = os.remove(strings.concatenate({directory, "/", MOD_ACTIVE_ZIP}, context.temp_allocator))
-	_ = os.remove(strings.concatenate({directory, "/", MOD_ACTIVE_NAME}, context.temp_allocator))
+	entries, err := os.read_all_directory_by_path(directory, context.temp_allocator)
+	if err != nil { return }
+	for entry in entries {
+		if entry.type == .Directory { _ = os.remove_all(entry.fullpath) } else { _ = os.remove(entry.fullpath) }
+	}
 }

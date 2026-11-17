@@ -114,7 +114,7 @@ when ODIN_TEST {
 		program := basic_batched_program()
 		if !testing.expect(t, program != 0, "the batched shader must compile") do return
 		testing.expect_value(t, g_map_batch_shader_layout_reason, "")
-		testing.expect_value(t, map_batch_program_layout_reason(program), "")
+		testing.expect_value(t, map_batch_program_layout_reason(u32(program)), "")
 	}
 
 	@(private = "file")

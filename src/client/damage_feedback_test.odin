@@ -176,6 +176,7 @@ when ODIN_TEST {
 		ui_update(ui, W, H)
 		testing.expect(t, ui.vignette != 0, "the overlay texture is created with the UI")
 		gl.ClearColor(120.0/255, 140.0/255, 160.0/255, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 		// Left: Krunker defaults at 40% health, hit from the front right.
 		// Right: SR Client custom colors mid-flash, hit from behind.
@@ -192,6 +193,7 @@ when ODIN_TEST {
 			damage_indicator_render(ui, settings.colors[.INDICATOR], i == 0 ? 1 : 0.7, x+W/4, H/2, radius, 0.5, direction)
 		}
 		pixel :: proc(x, y: int) -> (p: [3]u8) {
+			ui_flush()
 			gl.ReadPixels(i32(x), i32(H-1-y), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &p[0])
 			return
 		}
@@ -210,6 +212,7 @@ when ODIN_TEST {
 		pixels := make([]u8, W*H*3)
 		defer delete(pixels)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		testing.expect(t, stbi.write_png("bin/hit_feedback/damage_borders.png", W, H, 3, &pixels[(H-1)*W*3], -W*3) != 0)
 		testing.expect(t, gl.GetError() == gl.NO_ERROR)

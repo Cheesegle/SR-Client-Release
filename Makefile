@@ -24,13 +24,13 @@ endif
 endif
 endif
 
-client:
+client: spirv
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/sr_client -o:$(PROFILE)
 
 # Developer client with debug tools (SR_DEV, F3 window). Separate file
 # name so it is never packaged for testers.
-dev:
+dev: spirv
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/sr_client_dev -o:$(PROFILE) -define:SR_DEV=true
 
@@ -44,7 +44,7 @@ test:
 	$(ODIN) build src/tests -out:$(BIN_DIR)/sr_tests -o:none
 	./$(BIN_DIR)/sr_tests
 
-check:
+check: spirv
 	$(ODIN) check src/client
 	$(ODIN) check src/client -define:SR_DEV=true
 	$(ODIN) check src/server

@@ -17,13 +17,11 @@ import shared "../shared"
 // spawn viewpoints into an offscreen framebuffer, once per Shadows/Lighting
 // configuration, and prints frame-time statistics.
 //
-// Pacing: no vsync and no swap; at most BENCH_FRAMES_IN_FLIGHT frames are
-// queued (fence wait), like an uncapped swap chain. Frame time is wall time
-// between frame starts, so it reflects max(CPU, GPU) in steady state. CPU is
-// the time spent submitting the frame; GPU is GL_TIME_ELAPSED for the frame.
-
-BENCH_FRAMES_IN_FLIGHT :: 2
-BENCH_QUERY_RING :: 8
+// Pacing: no vsync and no swap; at most GPU_FRAMES_IN_FLIGHT frames are
+// queued (gpu_frame_begin waits), like an uncapped swap chain. Frame time is
+// wall time between frame starts, so it reflects max(CPU, GPU) in steady
+// state. CPU is the time spent recording and submitting the frame; GPU is the
+// frame's GPU time (GL_TIME_ELAPSED, or Vulkan timestamps).
 BENCH_FRAMES_PER_VIEW :: 120
 BENCH_WARMUP_FRAMES :: 30
 BENCH_REMOTE_PLAYERS :: 6
@@ -85,26 +83,16 @@ bench_parse_size :: proc(text: string) -> (w, h: i32, ok: bool) {
 }
 
 Bench_Target :: struct {
-	fbo, color, depth: u32,
-	width, height:     i32,
+	target:        Gpu_Render_Target,
+	width, height: i32,
 }
 
 bench_target_init :: proc(w, h: i32) -> Bench_Target {
-	target := Bench_Target{width = w, height = h}
-	gl.CreateFramebuffers(1, &target.fbo)
-	gl.CreateRenderbuffers(1, &target.color)
-	gl.CreateRenderbuffers(1, &target.depth)
-	gl.NamedRenderbufferStorage(target.color, gl.RGBA8, w, h)
-	gl.NamedRenderbufferStorage(target.depth, gl.DEPTH24_STENCIL8, w, h)
-	gl.NamedFramebufferRenderbuffer(target.fbo, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, target.color)
-	gl.NamedFramebufferRenderbuffer(target.fbo, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, target.depth)
-	return target
+	return Bench_Target{target = gpu_render_target_create(w, h), width = w, height = h}
 }
 
 bench_target_fini :: proc(target: ^Bench_Target) {
-	gl.DeleteFramebuffers(1, &target.fbo)
-	gl.DeleteRenderbuffers(1, &target.color)
-	gl.DeleteRenderbuffers(1, &target.depth)
+	gpu_render_target_destroy(&target.target)
 	target^ = {}
 }
 
@@ -180,12 +168,12 @@ bench_spawn_players :: proc(client: ^Client) {
 @(private = "file")
 bench_frame :: proc(client: ^Client, target: ^Bench_Target, frame: int) {
 	bench_viewpoint(client, frame)
-	gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
-	gl.Viewport(0, 0, target.width, target.height)
+	gpu_frame_begin()
+	gpu_set_target(target.target, target.width, target.height)
 	client.viewport_width, client.viewport_height = target.width, target.height
-	client.render_framebuffer = target.fbo
+	client.render_target = target.target
 	client_render_world(client)
-	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
+	gpu_frame_end()
 }
 
 @(private = "file")
@@ -199,67 +187,41 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	defer g_render_culling = true
 	result := Bench_Result{map_name = map_name, width = target.width, height = target.height, config = config.name}
 
-	queries: [BENCH_QUERY_RING]u32
-	gl.GenQueries(BENCH_QUERY_RING, &queries[0])
-	defer gl.DeleteQueries(BENCH_QUERY_RING, &queries[0])
-	fences: [BENCH_FRAMES_IN_FLIGHT]gl.sync_t
-	defer for fence in fences { if fence != nil { gl.DeleteSync(fence) } }
-
 	// The first frame applies the configuration; for static shadows this is
 	// where the one-off shadow map render happens. Time it on its own.
-	gl.Finish()
-	gl.BeginQuery(gl.TIME_ELAPSED, queries[0])
+	gpu_frames_finish()
+	gpu_frames_take(nil)
 	bench_frame(client, target, 0)
-	gl.EndQuery(gl.TIME_ELAPSED)
-	first_ns: u64
-	gl.GetQueryObjectui64v(queries[0], gl.QUERY_RESULT, &first_ns)
+	gpu_frames_finish()
+	first := make([dynamic]f64, context.temp_allocator)
+	gpu_frames_take(&first)
+	first_ms := len(first) > 0 ? first[len(first) - 1] : 0
 
 	for frame in 1 ..= BENCH_WARMUP_FRAMES { bench_frame(client, target, frame) }
-	gl.Finish()
+	gpu_frames_finish()
+	gpu_frames_take(nil)
 
 	frame_ms := make([dynamic]f64, context.temp_allocator)
 	cpu_ms := make([dynamic]f64, context.temp_allocator)
 	gpu_ms := make([dynamic]f64, context.temp_allocator)
-	pending: [BENCH_QUERY_RING]bool
 	draw_sum, culled_sum: int
 	start := time.tick_now()
 	previous := start
 	frame := 0
 	for time.duration_seconds(time.tick_since(start)) < f64(seconds) {
-		slot := frame % BENCH_QUERY_RING
-		if pending[slot] {
-			ns: u64
-			gl.GetQueryObjectui64v(queries[slot], gl.QUERY_RESULT, &ns)
-			append(&gpu_ms, f64(ns) / 1e6)
-			pending[slot] = false
-		}
-		fence_slot := frame % BENCH_FRAMES_IN_FLIGHT
-		if fences[fence_slot] != nil {
-			gl.ClientWaitSync(fences[fence_slot], gl.SYNC_FLUSH_COMMANDS_BIT, 5_000_000_000)
-			gl.DeleteSync(fences[fence_slot])
-			fences[fence_slot] = nil
-		}
+		// Waits for the frame GPU_FRAMES_IN_FLIGHT back, like a swap chain.
+		gpu_frame_wait()
 		now := time.tick_now()
 		if frame > 0 { append(&frame_ms, time.duration_milliseconds(time.tick_diff(previous, now))) }
 		previous = now
-		gl.BeginQuery(gl.TIME_ELAPSED, queries[slot])
 		bench_frame(client, target, frame)
-		gl.EndQuery(gl.TIME_ELAPSED)
 		draw_sum += g_draw_stats.draw_calls
 		culled_sum += g_draw_stats.batches_culled
-		pending[slot] = true
 		append(&cpu_ms, time.duration_milliseconds(time.tick_since(now)))
-		fences[fence_slot] = gl.FenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
-		gl.Flush()
 		frame += 1
 	}
-	gl.Finish()
-	for slot in 0 ..< BENCH_QUERY_RING {
-		if !pending[slot] { continue }
-		ns: u64
-		gl.GetQueryObjectui64v(queries[slot], gl.QUERY_RESULT, &ns)
-		append(&gpu_ms, f64(ns) / 1e6)
-	}
+	gpu_frames_finish()
+	gpu_frames_take(&gpu_ms)
 
 	bench_screenshot(client, target, config.name, map_name)
 
@@ -274,7 +236,7 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	result.p95_ms = bench_percentile(frame_ms[:], 0.95)
 	result.p99_ms = bench_percentile(frame_ms[:], 0.99)
 	result.gpu_p95_ms = bench_percentile(gpu_ms[:], 0.95)
-	result.extra_ms = max(0, f64(first_ns) / 1e6 - result.gpu_avg_ms)
+	result.extra_ms = max(0, first_ms - result.gpu_avg_ms)
 	return result
 }
 
@@ -292,12 +254,10 @@ bench_screenshot_view :: proc(client: ^Client, target: ^Bench_Target, config_nam
 	frame := view * BENCH_FRAMES_PER_VIEW + 8
 	for warm in 0 ..< 3 { bench_frame(client, target, frame - 3 + warm) }
 	bench_frame(client, target, frame)
+	gpu_frames_finish()
 	w, h := target.width, target.height
 	pixels := make([]u8, int(w * h * 3), context.temp_allocator)
-	gl.BindFramebuffer(gl.READ_FRAMEBUFFER, target.fbo)
-	gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-	gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
-	gl.BindFramebuffer(gl.READ_FRAMEBUFFER, 0)
+	gpu_read_color_rgb(target.target, w, h, pixels)
 	slug := strings.builder_make(context.temp_allocator)
 	for r in config_name {
 		switch r {
@@ -306,7 +266,7 @@ bench_screenshot_view :: proc(client: ^Client, target: ^Bench_Target, config_nam
 		}
 	}
 	os.make_directory("bin/bench")
-	path := fmt.ctprintf("bin/bench/%s_%dx%d_view%d_%s.png", map_name, w, h, view, strings.trim(strings.to_string(slug), "-"))
+	path := fmt.ctprintf("bin/bench/%s_%s_%dx%d_view%d_%s.png", map_name, gpu_backend_name(), w, h, view, strings.trim(strings.to_string(slug), "-"))
 	// GL rows are bottom-up; write with a negative stride from the last row.
 	stbi.write_png(path, w, h, 3, &pixels[int((h - 1) * w * 3)], -w * 3)
 }
@@ -356,12 +316,10 @@ bench_map :: proc(client: ^Client, config: ^shared.Gameplay_Config, map_name: st
 	return true
 }
 
-bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
-	if !bool(glfw.Init()) {
-		fmt.eprintln("[Bench] GLFW initialization failed")
-		return 1
-	}
-	defer glfw.Terminate()
+// A hidden window with the same context flags as the game (GPU reset
+// notification is not used by SR), so the benchmark measures what
+// players run.
+bench_gl_window :: proc() -> glfw.WindowHandle {
 	glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
 	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 	glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
@@ -369,13 +327,47 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	window := glfw.CreateWindow(64, 64, "SR Client bench", nil, nil)
 	if window == nil {
 		fmt.eprintln("[Bench] Could not create a hidden OpenGL 4.5 window")
-		return 1
+		return nil
 	}
-	defer glfw.DestroyWindow(window)
 	glfw.MakeContextCurrent(window)
 	glfw.SwapInterval(0)
 	gl.load_up_to(4, 5, glfw.gl_set_proc_address)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	return window
+}
+
+bench_gpu_shutdown :: proc(window: glfw.WindowHandle) {
+	gpu_frames_fini()
+	if g_gpu_backend == .Vulkan {
+		if g_vk_validation_errors > 0 { fmt.eprintf("[Bench] %d Vulkan validation errors\n", g_vk_validation_errors) }
+		gpu_vk_fini()
+	} else {
+		glfw.DestroyWindow(window)
+	}
+}
+
+bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
+	if !bool(glfw.Init()) {
+		fmt.eprintln("[Bench] GLFW initialization failed")
+		return 1
+	}
+	defer glfw.Terminate()
+	window: glfw.WindowHandle
+	// Offscreen Vulkan (no window or surface), or a hidden OpenGL window.
+	if g_gpu_backend == .Vulkan && !gpu_vk_init() {
+		fmt.eprintln("[Bench] Vulkan is not available; benchmarking OpenGL")
+		g_gpu_backend = .OpenGL
+	}
+	if g_gpu_backend == .Vulkan {
+		fmt.printf("[Bench] Backend: Vulkan\n[Bench] Device: %s\n", gpu_device_name())
+	} else {
+		window = bench_gl_window()
+		if window == nil { return 1 }
+		fmt.printf("[Bench] Backend: OpenGL\n[Bench] GL_RENDERER: %s\n[Bench] GL_VERSION: %s\n",
+			gpu_device_name(), string(cstring(gl.GetString(gl.VERSION))))
+	}
+	// Deferred first, so it runs after every GPU object below is freed.
+	defer bench_gpu_shutdown(window)
 
 	sizes := make([dynamic][2]i32, context.allocator)
 	defer delete(sizes)
@@ -387,11 +379,7 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 		}
 		append(&sizes, [2]i32{w, h})
 	}
-
-	renderer := string(cstring(gl.GetString(gl.RENDERER)))
-	version := string(cstring(gl.GetString(gl.VERSION)))
-	fmt.printf("[Bench] GL_RENDERER: %s\n[Bench] GL_VERSION: %s\n", renderer, version)
-
+	renderer := gpu_device_name()
 	client := new(Client)
 	defer free(client)
 	g_client = client
@@ -433,7 +421,7 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	}
 
 	// Markdown table for pasting into a PR.
-	fmt.printf("\nGPU: %s\n\n", renderer)
+	fmt.printf("\nGPU: %s (%s)\n\n", renderer, gpu_backend_name())
 	fmt.println("| Map | Resolution | Configuration | Avg ms | FPS | p95 ms | p99 ms | CPU ms | GPU ms | GPU p95 ms | One-off ms | Draw calls |")
 	fmt.println("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 	for r in results {
@@ -445,8 +433,9 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 	for r in results {
 		fmt.sbprintf(&csv, "%s,%d,%d,%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%.1f\n", r.map_name, r.width, r.height, r.config, r.frames, r.avg_ms, r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms, r.draw_calls, r.culled)
 	}
-	if os.write_entire_file("bin/bench-results.csv", transmute([]u8)strings.to_string(csv)) == nil {
-		fmt.println("\n[Bench] Wrote bin/bench-results.csv")
+	csv_path := fmt.tprintf("bin/bench-results-%s.csv", gpu_backend_name())
+	if os.write_entire_file(csv_path, transmute([]u8)strings.to_string(csv)) == nil {
+		fmt.printf("\n[Bench] Wrote %s\n", csv_path)
 	}
 	return 0
 }

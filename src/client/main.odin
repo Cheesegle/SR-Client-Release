@@ -1,8 +1,12 @@
 package main
 
+import "base:runtime"
 import "core:fmt"
 import "core:math"
+import "core:math/rand"
 import "core:os"
+import "core:thread"
+import "core:time"
 import "core:slice"
 import "core:encoding/json"
 import "core:strconv"
@@ -72,7 +76,7 @@ Client :: struct {
 	inspect_weapon: ^shared.Weapon,
 	inspect_slot: i32,
 	inspect_angle, inspect_time: f32,
-	graphics_sampler: u32,
+	graphics_sampler: Gpu_Sampler,
 	graphics_sampler_ready: bool,
 	graphics_quality: menuui.Quality_Settings,
 	max_anisotropy: f32,
@@ -83,8 +87,9 @@ Client :: struct {
 	// The startup self-test (map_batch_self_test.odin) has compared batched and
 	// per-object rendering this session.
 	batch_self_test_done: bool,
-	render_framebuffer: u32, // Target of the world pass; 0 except in benchmark mode.
+	render_target: Gpu_Render_Target, // Target of the world pass; 0 (the window) except in benchmark mode.
 	settings_dirty, vsync: bool,
+	opengl: bool, // Settings > Video > Vulkan Renderer off: OpenGL from the next start.
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS: 0 = monitor refresh, -1 = unlimited.
 	idle_frame_deadline: f64, // The last paced frame's target end; 0 while uncapped.
 	monitor_index: i32,
@@ -418,6 +423,9 @@ Client_Options :: struct {
 	bench_sizes: string, // Comma-separated WxH or "native".
 	no_batching: bool,
 	gl_debug: bool, // Debug GL context with a KHR_debug logger (logs/gl-debug.log).
+	no_cpu_pinning: bool, // Leave thread placement to the OS (cpu_affinity.odin).
+	backend: Gpu_Backend, // --vulkan / --opengl, over the saved Graphics API setting
+	backend_set: bool,
 }
 
 print_client_help :: proc() {
@@ -446,6 +454,12 @@ print_client_help :: proc() {
 	fmt.println("      --gl-debug        Use a debug OpenGL context and log driver messages")
 	fmt.println("                        to logs/gl-debug.log (crashes and hangs are always")
 	fmt.println("                        logged to logs/crash.log and logs/hang.log)")
+	fmt.println("      --vulkan, --opengl")
+	fmt.println("                        Draw with this graphics API for this run (default:")
+	fmt.println("                        Settings > Video > Vulkan Renderer, which is on)")
+	fmt.println("      --no-cpu-pinning  Let the OS place threads instead of giving the game")
+	fmt.println("                        thread its own core (never core 0) and keeping")
+	fmt.println("                        networking and helper threads off it")
 	fmt.println()
 	fmt.println("Available maps:")
 
@@ -505,8 +519,14 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 			options.offline = true
 		case "--no-batching":
 			options.no_batching = true
-		case "--gl-debug":
+		case "--gpu-debug", "--gl-debug":
 			options.gl_debug = true
+		case "--vulkan":
+			options.backend, options.backend_set = .Vulkan, true
+		case "--opengl":
+			options.backend, options.backend_set = .OpenGL, true
+		case "--no-cpu-pinning":
+			options.no_cpu_pinning = true
 		case "-m", "--map":
 			if i + 1 >= len(os.args) {
 				fmt.eprintf("Missing map name after %s.\n\n", arg)
@@ -1041,12 +1061,7 @@ client_load_current_map :: proc(client: ^Client) {
 	// every map mesh; keeping this state global lets the existing scene API stay
 	// lightweight while still matching per-map captures.
 	g_lighting_config = client.game.map_inst.lighting
-	gl.ClearColor(
-		g_lighting_config.sky_color.x,
-		g_lighting_config.sky_color.y,
-		g_lighting_config.sky_color.z,
-		1.0,
-	)
+	gpu_set_clear_color(g_lighting_config.sky_color.xyz)
 
 	shared.map_load_meshes(client.game.map_inst, prefab_init_cb)
 	client_load_map(client)
@@ -1095,12 +1110,16 @@ client_update_objective_visuals :: proc(client: ^Client) {
 }
 
 client_tick_impacts :: proc(client: ^Client, delta: f32) {
-	impact_sounds := 0
+	// Krunker plays no sound for bullets hitting walls. Another player's
+	// bullet passing within 27 units of you whizzes (its tracer's checkSound:
+	// whizz_0/1 at 0.12, rate 0.8..1.2), once per bullet.
+	whizzes := 0
 	for &impact in client.game.impacts {
-		// Limit pellet/packet bursts without affecting the visual impact pool.
-		if impact.kind == .World && impact_sounds < 6 {
-			audio_play_effect(client.audio, "impact_0", gain = 0.18, position = impact.position, spatial = true, range = 120, priority = 0)
-			impact_sounds += 1
+		if client.audio != nil && whizzes < 2 && (client.me == nil || impact.shooter_uid != client.me.uid) {
+			if bullet_passes_within(impact.origin, impact.position, client.audio.listener.position, KRUNKER_WHIZZ_RANGE) {
+				audio_play_effect(client.audio, rand.int_max(2) == 0 ? "whizz_0" : "whizz_1", gain = 0.12, priority = 0, rate = rand.float32_range(0.8, 1.2))
+				whizzes += 1
+			}
 		}
 		client_add_tracer(client, &impact)
 		client_add_bullet_hole(client, &impact)
@@ -1223,6 +1242,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	client_access_tick(client)
 	client_mods_tick(client)
+	round_sounds_tick(client)
 	host_game_tick(client)
 	game_files_update_tick(client)
 	if client.join_queued > 0 {
@@ -1322,7 +1342,10 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client.krunker_was_connected = client.krunker.connected
 	// F5: back to the fresh start screen (not while connected).
 	refresh_key := glfw.GetKey(client.window, glfw.KEY_F5) == glfw.PRESS
-	if refresh_key && !client.last_refresh_key && !client.krunker.connected && !client.net.connected && !client.local_practice { client_refresh(client) }
+	if refresh_key && !client.last_refresh_key {
+		if client.krunker.connected { client_refresh_rejoin(client) }
+		else if !client.net.connected && !client.local_practice { client_refresh(client) }
+	}
 	client.last_refresh_key = refresh_key
 	// The end screen replaces the menu until dismissed or the next match.
 	end_screen_was_visible := client.end_screen_active && !client.end_screen_dismissed
@@ -1485,8 +1508,6 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 
 	client_tick_textures(client, now)
 
-	// GPU time covers the world, view model and HUD, not the debug window.
-	when SR_DEV { perf_overlay_gpu_begin(client) }
 	phase_mark(.RENDER_WORLD)
 	client_render_world(client)
 	gl_check("render world", per_phase = true)
@@ -1510,7 +1531,6 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	}
 	gl_check("hud", per_phase = true)
 	when SR_DEV {
-		perf_gpu_end(&client.perf) // No-op unless a timer query is running.
 		if client.perf_overlay { phase_mark(.DEBUG_WINDOW); debug_ui_render(client) }
 	}
 }
@@ -1521,7 +1541,7 @@ client_render_world :: proc(client: ^Client) {
 	phase_mark(.PREVIEW_GRAPHICS)
 	client_update_graphics(client)
 	phase_mark(.RENDER_SCENE)
-	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	gpu_clear(color = true, depth = true)
 	g_draw_stats = {}
 	client.scene.batching_enabled = client.render_batching
 	// After batching_enabled: the shadow pass draws the static map through the
@@ -1530,7 +1550,7 @@ client_render_world :: proc(client: ^Client) {
 	quality = menuui.quality_settings_validate(quality)
 	// Self shadow: your third-person rig, drawn only into the player shadow map.
 	g_shadow_extra_casters = self_shadow_update(client, quality)
-	shadow_prepare(client.scene, client.game.map_inst, quality, client.render_framebuffer, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
+	shadow_prepare(client.scene, client.game.map_inst, quality, client.render_target, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
 	g_shadow_extra_casters = nil
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
@@ -1540,7 +1560,7 @@ client_render_world :: proc(client: ^Client) {
 	client.camera.fov = saved_fov
 
 	phase_mark(.RENDER_VIEWMODEL)
-	gl.Clear(gl.DEPTH_BUFFER_BIT)
+	gpu_clear(color = false, depth = true)
 	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
 	// The viewmodel keeps the sun's shadows but not the player map, so your
 	// own body (Self shadow) never shades your arms.
@@ -1550,16 +1570,21 @@ client_render_world :: proc(client: ^Client) {
 	when SR_DEV { debug_render_after_viewmodel(client) }
 }
 
-resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
-	if glfw.GetCurrentContext() != window {
-		return
-	}
+// The graphics API a run starts with: --vulkan / --opengl, else the saved
+// setting (Vulkan unless turned off).
+client_pick_backend :: proc(options: Client_Options, opengl_setting: bool) -> Gpu_Backend {
+	if options.backend_set { return options.backend }
+	return opengl_setting ? .OpenGL : .Vulkan
+}
 
-	gl.Viewport(0, 0, width, height)
-	if g_client != nil {
-		g_client.viewport_width = width
-		g_client.viewport_height = height
-	}
+resize_viewport :: proc "c" (window: glfw.WindowHandle, width, height: i32) {
+	if g_client == nil || g_client.window != window { return }
+	if g_gpu_backend == .OpenGL && glfw.GetCurrentContext() != window { return }
+	context = runtime.default_context()
+	// Vulkan resizes the window target and swapchain at the next frame start.
+	gpu_set_target(g_client.render_target, width, height)
+	g_client.viewport_width = width
+	g_client.viewport_height = height
 }
 
 // SR Client: when started from a shortcut, Explorer or another folder, switch to
@@ -1587,10 +1612,18 @@ main :: proc() {
 		print_client_help()
 		return
 	}
+	// Before any thread starts, so every thread is placed from the beginning.
+	// The benchmark runs pinned too, measuring what the game does.
+	if options.no_cpu_pinning {
+		fmt.println("[CPU] pinning off (--no-cpu-pinning)")
+	} else {
+		fmt.printfln("[CPU] %s", cpu_pinning_apply())
+	}
 	if len(options.asset_sweep) > 0 {
 		os.exit(asset_sweep_run(options.asset_sweep))
 	}
 	if len(options.bench_maps) > 0 {
+		g_gpu_backend = client_pick_backend(options, client_settings_load().opengl)
 		os.exit(bench_run(options.bench_maps, options.bench_seconds, options.bench_sizes))
 	}
 	// Krunker's current maps, checked in the background (see game_files_update.odin).
@@ -1618,6 +1651,7 @@ main :: proc() {
 	client.resolution_index, client.monitor_index = preferences.resolution_index, preferences.monitor_index
 	client.fullscreen_resolution = {preferences.fullscreen_width, preferences.fullscreen_height}
 	client.sensitivity, client.vsync = preferences.sensitivity, preferences.vsync
+	client.opengl = preferences.opengl
 	client.menu_fps_limit = preferences.menu_fps_limit
 	client.mouse_dpi = preferences.mouse_dpi
 	client.ads_sensitivity = preferences.ads_sensitivity
@@ -1643,21 +1677,39 @@ main :: proc() {
 	crash_handler_install()
 	defer crash_handler_uninstall()
 
-	glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-	if options.gl_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
-
-	when ODIN_OS == .Darwin {
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 1)
-		glfw.WindowHint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE) // apple silicon needs this?
-	} else {
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
+	window_title: cstring = "SR Client"
+	backend := client_pick_backend(options, client.opengl)
+	if backend == .Vulkan {
+		// No GL context: the window gets a Vulkan surface. A GPU or driver that
+		// cannot run Vulkan 1.3 gets a fresh OpenGL window instead.
+		glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
+		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
+		glfw.DefaultWindowHints()
+		g_vk_debug.wanted = options.gl_debug
+		g_gpu_backend = .Vulkan
+		if client.window == nil || !gpu_vk_init(client.window) {
+			fmt.eprintln("[GPU] Vulkan is not available on this GPU or driver; using OpenGL")
+			if client.window != nil { glfw.DestroyWindow(client.window); client.window = nil }
+			backend = .OpenGL
+		}
 	}
+	g_gpu_backend = backend
+	if backend == .OpenGL {
+		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+		if options.gl_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
 
-	// Settings > Render > Anti-aliasing (MSAA, applies on start).
-	if preferences.hud.anti_alias { glfw.WindowHint(glfw.SAMPLES, 4) }
-	client.window = glfw.CreateWindow(1280, 720, "SR Client", nil, nil)
+		when ODIN_OS == .Darwin {
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 1)
+			glfw.WindowHint(glfw.OPENGL_FORWARD_COMPAT, glfw.TRUE) // apple silicon needs this?
+		} else {
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
+			glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
+		}
+		// Settings > Render > Anti-aliasing (MSAA, applies on start; OpenGL).
+		if preferences.hud.anti_alias { glfw.WindowHint(glfw.SAMPLES, 4) }
+		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
+	}
 	if client.window == nil {
 		fmt.eprintln("Failed to create window")
 		return
@@ -1676,7 +1728,7 @@ main :: proc() {
 	glfw.SetKeyCallback(client.window, client_binding_key)
 	glfw.SetMouseButtonCallback(client.window, client_binding_mouse)
 	glfw.SetMonitorCallback(client_monitor_changed)
-	glfw.MakeContextCurrent(client.window)
+	if backend == .OpenGL { glfw.MakeContextCurrent(client.window) }
 
 	// The native Windows path owns raw mouse input (and decides whether GLFW's
 	// RAW_MOUSE_MOTION may be enabled); other platforms use GLFW's raw motion.
@@ -1687,23 +1739,38 @@ main :: proc() {
 	}
 	defer client_mouse_fini()
 
-	gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-	diagnostics_capture_gl_info()
-	if options.gl_debug {
-		if gl_debug_install() {
-			fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
-		} else {
-			fmt.eprintln("[GL] Debug output is not available on this context")
+	if backend == .Vulkan {
+		diagnostics_capture_gpu_info()
+	} else {
+		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		diagnostics_capture_gl_info()
+		if options.gl_debug {
+			if gl_debug_install() {
+				fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
+			} else {
+				fmt.eprintln("[GL] Debug output is not available on this context")
+			}
 		}
 	}
-	defer gl_debug_shutdown()
+	// Deferred here, so the device outlives every GPU object freed below.
+	defer {
+		if g_gpu_backend == .Vulkan { gpu_vk_fini() } else { gl_debug_shutdown() }
+	}
+	defer gpu_frames_fini()
+	// GL draws window frames into the default framebuffer (0); Vulkan into
+	// its window target, presented by gpu_present.
+	client.render_target = gpu_window_target()
+	{
+		width, height := glfw.GetFramebufferSize(client.window)
+		resize_viewport(client.window, width, height)
+	}
 	client_graphics_init(client)
 	defer client_graphics_fini(client)
 
-	glfw.SwapInterval(client.vsync ? 1 : 0)
+	gpu_set_vsync(client.vsync)
 	client_apply_display_settings(client)
 	defer software_cursor_fini()
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	if backend == .OpenGL { gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA) }
 
 	client.scene = scene_init()
 	client.fps_scene = scene_init()
@@ -1778,6 +1845,7 @@ main :: proc() {
 		last_tick = now
 		g_draw_calls = 0
 		phase_frame_begin()
+		gpu_frame_begin()
 
 		software_cursor_update(client.window)
 		phase_mark(.TICK)
@@ -1800,10 +1868,13 @@ main :: proc() {
 		software_cursor_render(client)
 		swap_start := glfw.GetTime()
 		phase_mark(.SWAP_BUFFERS)
-		glfw.SwapBuffers(client.window)
+		gpu_present(client.window)
+		gpu_frame_end()
+		client_collect_gpu_times(client)
 		swap_end := glfw.GetTime()
 		phase_mark(.POLL_EVENTS)
 		client_poll_events()
+		client_alt_f4(client.window)
 		when SR_DEV {
 			prev_swap_ms = f32((swap_end-swap_start)*1000)
 			prev_events_ms = f32((glfw.GetTime()-swap_end)*1000)
@@ -1813,6 +1884,9 @@ main :: proc() {
 		free_all(context.temp_allocator)
 	}
 	phase_mark(.SHUTDOWN)
+	// Closing must never hang on a network or browser thread: if cleanup takes
+	// longer than a few seconds, the process ends anyway.
+	client_exit_watchdog_start()
 
 	client_access_cancel(client)
 	delete(client.access.token)
@@ -1888,13 +1962,19 @@ print_startup_info :: proc(client: ^Client) {
 	major, minor, rev := glfw.GetVersion()
 	fmt.printf("  Platform       : GLFW %d.%d.%d\n", major, minor, rev)
 
-	vendor := cstring(gl.GetString(gl.VENDOR))
-	renderer := cstring(gl.GetString(gl.RENDERER))
-	version := cstring(gl.GetString(gl.VERSION))
+	if g_gpu_backend == .Vulkan {
+		info := gpu_device_info()
+		fmt.printf("  GPU            : %s (%s)\n", info.renderer, info.vendor)
+		fmt.printf("  Graphics API   : Vulkan %s\n", info.version)
+	} else {
+		vendor := cstring(gl.GetString(gl.VENDOR))
+		renderer := cstring(gl.GetString(gl.RENDERER))
+		version := cstring(gl.GetString(gl.VERSION))
 
-	fmt.printf("  GPU Vendor     : %s\n", vendor)
-	fmt.printf("  GPU            : %s\n", renderer)
-	fmt.printf("  GL Version     : %s\n", version)
+		fmt.printf("  GPU Vendor     : %s\n", vendor)
+		fmt.printf("  GPU            : %s\n", renderer)
+		fmt.printf("  GL Version     : %s\n", version)
+	}
 	fmt.printf("  CPU            : %s\n", cpu_model_name())
 
 	monitor := glfw.GetPrimaryMonitor()
@@ -1913,3 +1993,29 @@ print_startup_info :: proc(client: ^Client) {
 }
 
 g_map_name: string
+
+// Alt+F4 closes SR in every window mode, also while the game holds the
+// mouse (Windows normally turns it into WM_CLOSE; this covers every case).
+client_alt_f4 :: proc(window: glfw.WindowHandle) {
+	alt := glfw.GetKey(window, glfw.KEY_LEFT_ALT) == glfw.PRESS || glfw.GetKey(window, glfw.KEY_RIGHT_ALT) == glfw.PRESS
+	if alt && glfw.GetKey(window, glfw.KEY_F4) == glfw.PRESS { glfw.SetWindowShouldClose(window, true) }
+}
+
+client_exit_watchdog_start :: proc() {
+	thread.create_and_start(proc() {
+		time.sleep(5 * time.Second)
+		os.exit(0)
+	})
+}
+
+KRUNKER_WHIZZ_RANGE :: 27
+
+// True when the segment from a to b passes within `range` of point p.
+bullet_passes_within :: proc(a, b, p: shared.Vec3, range: f32) -> bool {
+	ab := b - a
+	length2 := ab.x*ab.x + ab.y*ab.y + ab.z*ab.z
+	t: f32 = 0
+	if length2 > 0 { t = clamp(((p.x-a.x)*ab.x + (p.y-a.y)*ab.y + (p.z-a.z)*ab.z) / length2, 0, 1) }
+	d := a + ab*t - p
+	return d.x*d.x + d.y*d.y + d.z*d.z <= range*range
+}

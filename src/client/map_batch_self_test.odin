@@ -35,6 +35,7 @@ MAP_BATCH_SELF_TEST_HEIGHT :: 180
 
 // Returns "" when the current context offers what the batched shader needs.
 map_batch_limits_reason :: proc() -> string {
+	if g_gpu_backend == .Vulkan { return "" } // Vulkan 1.3 guarantees vertex storage buffers.
 	vertex_blocks, bindings: i32
 	block_size: i64 // May exceed 2^31.
 	gl.GetIntegerv(gl.MAX_VERTEX_SHADER_STORAGE_BLOCKS, &vertex_blocks)
@@ -55,6 +56,7 @@ map_batch_limits_reason :: proc() -> string {
 // Returns "" when the driver placed `objects` at offset 0 of binding 0 with a
 // 16-byte stride, as map_batch_build packs Batch_Object records.
 map_batch_program_layout_reason :: proc(program: u32) -> string {
+	if g_gpu_backend == .Vulkan { return "" } // SPIR-V layouts are fixed at compile time.
 	block := gl.GetProgramResourceIndex(program, gl.SHADER_STORAGE_BLOCK, "Batch_Objects")
 	if block == gl.INVALID_INDEX {
 		return "batched shader has no Batch_Objects block"
@@ -148,7 +150,7 @@ g_map_batch_self_tests: int
 // shadowed and night renders pixel for pixel.
 map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bool, compare: Map_Batch_Compare, ran: bool) {
 	g_map_batch_self_tests += 1
-	if scene == nil || map_inst == nil || scene.batches == nil || scene.batches.vao == 0 {
+	if scene == nil || map_inst == nil || scene.batches == nil || scene.batches.input == 0 {
 		return true, {}, false
 	}
 	w, h := i32(MAP_BATCH_SELF_TEST_WIDTH), i32(MAP_BATCH_SELF_TEST_HEIGHT)
@@ -164,21 +166,15 @@ map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bo
 		delete(depth_on)
 	}
 
-	draw_fbo, read_fbo, pack_alignment: i32
-	viewport: [4]i32
-	gl.GetIntegerv(gl.DRAW_FRAMEBUFFER_BINDING, &draw_fbo)
-	gl.GetIntegerv(gl.READ_FRAMEBUFFER_BINDING, &read_fbo)
-	gl.GetIntegerv(gl.PACK_ALIGNMENT, &pack_alignment)
-	gl.GetIntegerv(gl.VIEWPORT, &viewport[0])
+	// Map loads happen between frames, with the window as the target.
+	restore_target, restore_w, restore_h := g_client != nil ? g_client.render_target : 0, i32(0), i32(0)
+	if g_client != nil { restore_w, restore_h = g_client.viewport_width, g_client.viewport_height }
 	saved_stats, saved_culling, saved_enabled := g_draw_stats, g_render_culling, scene.batching_enabled
 	saved_quality, saved_low_tint, saved_unlit_tint := g_render_quality, g_night_low_tint, g_night_unlit_tint
-	target := bench_target_init(w, h)
+	target := gpu_render_target_create(w, h)
 	defer {
-		bench_target_fini(&target)
-		gl.BindFramebuffer(gl.DRAW_FRAMEBUFFER, u32(draw_fbo))
-		gl.BindFramebuffer(gl.READ_FRAMEBUFFER, u32(read_fbo))
-		gl.PixelStorei(gl.PACK_ALIGNMENT, pack_alignment)
-		gl.Viewport(viewport[0], viewport[1], viewport[2], viewport[3])
+		gpu_render_target_destroy(&target)
+		gpu_set_target(restore_target, restore_w, restore_h)
 		g_draw_stats, g_render_culling, scene.batching_enabled = saved_stats, saved_culling, saved_enabled
 		g_render_quality, g_night_low_tint, g_night_unlit_tint = saved_quality, saved_low_tint, saved_unlit_tint
 	}
@@ -187,17 +183,15 @@ map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bo
 	g_render_culling = false
 	g_render_quality = Render_Quality{lighting = .NORMAL}
 	g_night_low_tint, g_night_unlit_tint = {1, 1, 1}, {1, 1, 1}
-	gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
-	gl.Viewport(0, 0, w, h)
-	gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+	gpu_set_target(target, w, h)
 	batch_draws := 0
 	for batched in ([2]bool{false, true}) {
 		scene.batching_enabled = batched
 		g_draw_stats = {}
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_clear(color = true, depth = true)
 		scene_render(scene, &camera, f32(w), f32(h), 0)
-		gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(batched ? on : off))
-		gl.ReadPixels(0, 0, w, h, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, raw_data(batched ? depth_on : depth_off))
+		gpu_read_color_rgb(target, w, h, batched ? on : off)
+		gpu_read_depth(target, w, h, batched ? depth_on : depth_off)
 		if batched { batch_draws = g_draw_stats.batch_draws }
 	}
 	if batch_draws == 0 {
@@ -208,8 +202,7 @@ map_batch_self_test :: proc(scene: ^Scene, map_inst: ^shared.Map) -> (passed: bo
 }
 
 map_batch_renderer_name :: proc() -> string {
-	renderer := cstring(gl.GetString(gl.RENDERER))
-	return renderer == nil ? "unknown GL renderer" : string(renderer)
+	return gpu_device_name()
 }
 
 // Turns batching off for the session and logs why, once.

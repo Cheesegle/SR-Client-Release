@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:slice"
+import "core:strings"
 import shared "../shared"
 import kproto "../krunker"
 
@@ -14,6 +15,7 @@ MATCH_TEAM_COLORS := [2]shared.Vec4{{0.93, 0.22, 0.27, 1}, {0.25, 0.55, 1, 1}}
 
 Scoreboard_Row :: struct {
 	name: string,
+	clan: string, // Krunker shows " [CLAN]" after the name.
 	team: i32,
 	is_you: bool,
 	// Server board position or join order; breaks equal sort keys.
@@ -85,7 +87,7 @@ scoreboard_from_world :: proc(world: ^kproto.Krunker_World_State) -> Scoreboard 
 	for player, i in world.players {
 		if player.sid == world.local_sid { board.local_team = player.team }
 		if ranked && player.leader_rank <= 0 { continue }
-		row := Scoreboard_Row{name = len(player.name) > 0 ? player.name : fmt.tprintf("Player %d", player.sid), team = player.team, is_you = player.sid == world.local_sid}
+		row := Scoreboard_Row{name = len(player.name) > 0 ? player.name : fmt.tprintf("Player %d", player.sid), clan = player.clan, team = player.team, is_you = player.sid == world.local_sid}
 		if ranked {
 			row.order = player.leader_rank
 			for i in 0..<min(len(stats), kproto.KRUNKER_LEADER_MAX_STATS) { row.cells[i] = scoreboard_format_stat(i64(player.leader_stats[i])) }
@@ -236,7 +238,7 @@ scoreboard_render :: proc(ui: ^UI, board: ^Scoreboard, min_top: f32, centered :=
 			ui_round_rect(ui, row.is_you ? shared.Vec4{108.0/255, 108.0/255, 108.0/255, 0.55} : KH_GREY, x+8*s, top, width-16*s, row_h, 3*s)
 			line := top + (SCOREBOARD_ROW_HEIGHT - 17*KH_LINE)*0.5*s
 			kh_text(ui, KH_MUTED, fmt.tprintf("%d.", rank), name_x - 32*s, line, 17)
-			kh_text(ui, scoreboard_name_color(row, board.local_team), scoreboard_fit_text(ui, row.name, 17*KH_EM*s, SCOREBOARD_NAME_WIDTH*s-12*s), name_x, line, 17)
+			scoreboard_name_with_clan(ui, row, scoreboard_name_color(row, board.local_team), KH_WHITE, name_x, line, 17, SCOREBOARD_NAME_WIDTH*s-12*s)
 			for i in 0..<board.column_count {
 				kh_text(ui, shared.Vec4{1, 1, 1, 0.85}, row.cells[i], stats_x + f32(i)*SCOREBOARD_STAT_WIDTH*s, line, 17)
 			}
@@ -245,4 +247,23 @@ scoreboard_render :: proc(ui: ^UI, board: ^Scoreboard, min_top: f32, centered :=
 		}
 		y += height + 10*s
 	}
+}
+
+// Krunker's clan colour (its clan list): a few official clans are gold, the
+// rest use the board's own colour.
+KRUNKER_SPECIAL_CLANS := [?]string{"arae", "lain", "scte", "fame", "kpd", "jump", "art", "dev", "mmok", "nl", "nv"}
+krunker_clan_color :: proc(clan: string, fallback: shared.Vec4) -> shared.Vec4 {
+	lower := strings.to_lower(clan, context.temp_allocator)
+	for special in KRUNKER_SPECIAL_CLANS { if lower == special { return {251.0/255, 192.0/255, 45.0/255, 1} } }
+	return fallback
+}
+
+// "name [CLAN]" within max_width; the name is shortened first.
+scoreboard_name_with_clan :: proc(ui: ^UI, row: Scoreboard_Row, name_color, clan_fallback: shared.Vec4, x, y, size, max_width: f32) {
+	s := ui.scale
+	clan := len(row.clan) > 0 ? fmt.tprintf(" [%s]", row.clan) : ""
+	clan_w := len(clan) > 0 ? kh_measure(ui, clan, size) : 0
+	name := scoreboard_fit_text(ui, row.name, size*KH_EM*s, max(max_width - clan_w, 20*s))
+	kh_text(ui, name_color, name, x, y, size)
+	if len(clan) > 0 { kh_text(ui, krunker_clan_color(row.clan, clan_fallback), clan, x + kh_measure(ui, name, size), y, size) }
 }

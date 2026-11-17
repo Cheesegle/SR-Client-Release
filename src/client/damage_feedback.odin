@@ -1,7 +1,6 @@
 package main
 
 import "core:math"
-import gl "vendor:OpenGL"
 import menuui "../menu"
 import shared "../shared"
 
@@ -81,18 +80,9 @@ damage_vignette_pixels :: proc(allocator := context.allocator) -> []u8 {
 	return pixels
 }
 
-damage_vignette_texture :: proc() -> u32 {
+damage_vignette_texture :: proc() -> Gpu_Texture {
 	pixels := damage_vignette_pixels(context.temp_allocator)
-	texture: u32
-	gl.GenTextures(1, &texture)
-	gl.BindTexture(gl.TEXTURE_2D, texture)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, DAMAGE_VIGNETTE_SIZE, DAMAGE_VIGNETTE_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, raw_data(pixels))
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-	g_active_texture = 0 // The bind above bypassed the material binding cache.
-	return texture
+	return gpu_texture_create({width = DAMAGE_VIGNETTE_SIZE, height = DAMAGE_VIGNETTE_SIZE, format = .RGBA8, sampler = GPU_SAMPLER_UI_LINEAR}, pixels)
 }
 
 damage_overlay_render :: proc(ui: ^UI, color: u32, alpha: f32, x, y, width, height: f32) {

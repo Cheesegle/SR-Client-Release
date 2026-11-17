@@ -261,6 +261,7 @@ player_queue_input :: proc(player: ^Player, input: ^Input) {
 }
 
 player_reset_step :: proc(player: ^Player, recon: bool) {
+	if player.velocity.y != 0 { player.land_velocity = player.velocity.y }
 	if !recon && player.render_you && player.velocity.y != 0 {
 		player_animate_land(player)
 	}
@@ -764,16 +765,20 @@ player_update_recoil :: proc(player: ^Player, delta: f32) {
 player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool, predict_effects: bool = false, predict_combat: bool = false) {
 	// Capture fresh actions once. Reconciliation replays only restore motion.
 	was_grounded, was_wall_jump := player.on_ground, player.did_wall_jump
-	previous_reload, previous_slide, previous_y_velocity := player.reload_timer, player.slide_timer, player.velocity.y
+	previous_reload, previous_slide := player.reload_timer, player.slide_timer
 	previous_weapon, previous_shot := player.loadout_index, player.shot_seq
 	emit_presentation := player.game != nil && player.game.presentation_enabled && (!recon || predict_effects)
+	player.land_velocity = 0
 	defer {
 		if emit_presentation {
 			if player.shot_seq != previous_shot { player_emit_presentation(player, .FIRE) }
 			if previous_weapon != player.loadout_index { player_emit_presentation(player, .SWAP) }
 			if previous_reload <= 0 && player.reload_timer > 0 { player_emit_presentation(player, .RELOAD) }
+			// Krunker's endReload sound: the reload finished (not cancelled by a swap).
+			if previous_reload > 0 && player.reload_timer <= 0 && previous_weapon == player.loadout_index { player_emit_presentation(player, .RELOAD_END) }
 			if was_grounded && !player.on_ground && player.velocity.y > 0 || !was_wall_jump && player.did_wall_jump { player_emit_presentation(player, .JUMP) }
-			if !was_grounded && player.on_ground && previous_y_velocity < -0.02 { player_emit_presentation(player, .LAND) }
+			// Krunker plays the landing in resetStep, before a bhop's next jump.
+			if !was_grounded && player.land_velocity != 0 { player_emit_presentation(player, .LAND) }
 			if previous_slide <= 0 && player.slide_timer > 0 { player_emit_presentation(player, .SLIDE) }
 		}
 	}
@@ -1305,6 +1310,7 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 		end := is_projectile ? 0 : i32(shots)
 		for i := start; i < end; i += 1 {
 			shot_angles = player_hitscan_angles(player, i)
+			if i == 0 { player.last_shot_angles = shot_angles }
 
 			range := i < 0 ? player.weapon.physical_range : player.weapon.range
 

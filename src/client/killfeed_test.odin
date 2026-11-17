@@ -196,10 +196,12 @@ when ODIN_TEST {
 
 	@(private = "file")
 	feed_frame :: proc(client: ^Client, pixels: []u8) {
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 		kill_feed_render(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 

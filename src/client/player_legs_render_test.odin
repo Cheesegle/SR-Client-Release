@@ -79,6 +79,7 @@ when ODIN_TEST {
 	// to bin/legs/<tag>_<state>.png for checking by eye.
 	legs_shot :: proc(t: ^testing.T, scene: ^Scene, camera: ^Camera, name: string) {
 		gl.ClearColor(0.75, 0.8, 0.85, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(scene, camera, LEGS_SHOT_W, LEGS_SHOT_H)
 		testing.expect(t, gl.GetError() == gl.NO_ERROR, "player rig must render without OpenGL errors")
@@ -86,6 +87,7 @@ when ODIN_TEST {
 			pixels := make([]u8, LEGS_SHOT_W * LEGS_SHOT_H * 3)
 			defer delete(pixels)
 			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+			ui_flush()
 			gl.ReadPixels(0, 0, LEGS_SHOT_W, LEGS_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			os.make_directory("bin/legs")
 			path := fmt.ctprintf("bin/legs/%s_%s.png", #config(LEGS_TAG, "after"), name)

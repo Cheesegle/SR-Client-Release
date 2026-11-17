@@ -86,6 +86,7 @@ modded.
    GitHub Actions builds and attaches the installer and portable zip.
 
 Every normal push also builds; the files are under the run's **Artifacts**.
+Developer builds (`SR-Client-Dev-*`, debug panel) are never attached to releases.
 
 ## Building locally
 Install [Odin dev-2026-10](https://github.com/odin-lang/Odin/releases/tag/dev-2026-10)

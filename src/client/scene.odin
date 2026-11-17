@@ -1,6 +1,6 @@
 package main
 
-import gl "vendor:OpenGL"
+import "core:mem"
 
 scene_init :: proc() -> ^Scene {
 	return new(Scene)
@@ -201,37 +201,32 @@ scene_remove_player_mesh :: proc(scene: ^Scene, player_mesh: ^Player_Mesh, loado
 	}
 }
 
-scene_uniforms :: proc(program: u32) -> ^Shader_Uniforms {
-	if program == basic_shader_program {
-		return &u_basic
-	} else if program != 0 && program == basic_batched_shader_program {
-		return &u_basic_batched
-	} else if program == quad_shader_program {
-		return &u_quad
-	}
-	return &u_text
-}
-
+// Uniform locations of the UI programs.
 // Local to a render pass: HUD draws, resource uploads, and other GL contexts
-// cannot leave this cache stale. Blend and polygon state start disabled/filled.
+// cannot leave this cache stale. The draw state starts at the default.
 Scene_Draw_State :: struct {
-	program, vao: u32,
-	blending, wireframe, no_depth_write: bool,
+	program:     Gpu_Program,
+	input:       Gpu_Vertex_Input,
+	pass_pushed: bool, // The `Pass` block for this camera is bound.
+	draw:        Gpu_Draw_State,
 }
 
-scene_update_pass_uniforms :: proc(program: u32, camera: ^Camera) {
-	u := scene_uniforms(program)
-	if u.camera_world_inverse > -1 {
-		gl.UniformMatrix4fv(u.camera_world_inverse, 1, gl.FALSE, &camera.world_inverse_matrix[0, 0])
-	}
-	if u.camera_projection > -1 {
-		gl.UniformMatrix4fv(u.camera_projection, 1, gl.FALSE, &camera.projection_matrix[0, 0])
-	}
-	if program == basic_shader_program {
-		basic_material_update_pass_uniforms(camera, &u_basic)
-	} else if program != 0 && program == basic_batched_shader_program {
-		basic_material_update_pass_uniforms(camera, &u_basic_batched)
-	}
+@(private = "file")
+scene_set_draw_state :: proc(state: ^Scene_Draw_State, draw: Gpu_Draw_State) {
+	if state.draw == draw { return }
+	gpu_draw_state_set(draw)
+	state.draw = draw
+}
+
+// Binds the pass's `Pass` block once per scene_render: every basic program
+// variant reads the same one. A new pass can use the same program with a
+// different camera (weapons) or map environment, so it is never reused
+// across passes.
+scene_update_pass_uniforms :: proc(state: ^Scene_Draw_State, camera: ^Camera) {
+	if state.pass_pushed { return }
+	pass := basic_pass_uniforms(camera)
+	gpu_uniform_push(GPU_BINDING_PASS, mem.ptr_to_bytes(&pass))
+	state.pass_pushed = true
 }
 
 scene_draw_mesh :: proc(mesh: ^Mesh, camera: ^Camera, state: ^Scene_Draw_State) {
@@ -239,49 +234,25 @@ scene_draw_mesh :: proc(mesh: ^Mesh, camera: ^Camera, state: ^Scene_Draw_State) 
 		return
 	}
 
-	if state.no_depth_write != mesh.material.no_depth_write {
-		gl.DepthMask(gl.FALSE if mesh.material.no_depth_write else gl.TRUE)
-		state.no_depth_write = mesh.material.no_depth_write
-	}
+	scene_set_draw_state(state, {blend = mesh.material.transparent, depth_write = !mesh.material.no_depth_write, wireframe = mesh.material.wireframe})
 
-	if state.blending != mesh.material.transparent {
-		if mesh.material.transparent {
-			gl.Enable(gl.BLEND)
-		} else {
-			gl.Disable(gl.BLEND)
-		}
-		state.blending = mesh.material.transparent
-	}
-
-	if state.vao != mesh.geometry.vao {
-		// The index buffer is already part of the VAO, set during upload.
-		gl.BindVertexArray(mesh.geometry.vao)
-		state.vao = mesh.geometry.vao
+	if state.input != mesh.geometry.input {
+		gpu_vertex_input_bind(mesh.geometry.input)
+		state.input = mesh.geometry.input
 	}
 
 	if state.program != mesh.material.program {
-		if g_active_shader != mesh.material.program {
-			gl.UseProgram(mesh.material.program)
-			g_active_shader = mesh.material.program
-		}
-		// A new pass can use the same program with a different camera (weapons)
-		// or map environment. Refresh these even if the program is still bound.
-		scene_update_pass_uniforms(mesh.material.program, camera)
+		gpu_program_bind(mesh.material.program)
+		scene_update_pass_uniforms(state, camera)
 		state.program = mesh.material.program
 	}
 
-	material_update_uniforms(mesh.material)
-
-	u := scene_uniforms(mesh.material.program)
-	if u.transform > -1 {
-		gl.UniformMatrix4fv(u.transform, 1, gl.FALSE, &mesh.transform_matrix[0, 0])
+	if mesh.material.vtable == &basic_material_vtable {
+		basic_material_push_draw(cast(^Basic_Material)mesh.material, mesh.transform_matrix)
+	} else {
+		material_update_uniforms(mesh.material)
 	}
-	if state.wireframe != mesh.material.wireframe {
-		gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE if mesh.material.wireframe else gl.FILL)
-		state.wireframe = mesh.material.wireframe
-	}
-
-	gl.DrawElements(gl.TRIANGLES, mesh.geometry.index_count, gl.UNSIGNED_INT, nil)
+	gpu_draw_indexed(mesh.geometry.index_count, 0)
 	g_draw_calls += 1
 	g_draw_stats.draw_calls += 1
 }
@@ -316,33 +287,19 @@ scene_draw_batches :: proc(scene: ^Scene, camera: ^Camera, state: ^Scene_Draw_St
 		}
 
 		if state.program != set.program {
-			if g_active_shader != set.program {
-				gl.UseProgram(set.program)
-				g_active_shader = set.program
-			}
-			scene_update_pass_uniforms(set.program, camera)
+			gpu_program_bind(set.program)
+			scene_update_pass_uniforms(state, camera)
 			state.program = set.program
 		}
-		if state.vao != set.vao {
-			gl.BindVertexArray(set.vao)
-			state.vao = set.vao
+		if state.input != set.input {
+			gpu_vertex_input_bind(set.input)
+			state.input = set.input
 		}
 		// Binding 0 is only used by the batched program; rebind per pass.
-		gl.BindBufferBase(gl.SHADER_STORAGE_BUFFER, 0, set.ssbo)
-		if state.no_depth_write {
-			gl.DepthMask(gl.TRUE)
-			state.no_depth_write = false
-		}
-		if state.blending {
-			gl.Disable(gl.BLEND)
-			state.blending = false
-		}
-		if state.wireframe != batch.key.wireframe {
-			gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE if batch.key.wireframe else gl.FILL)
-			state.wireframe = batch.key.wireframe
-		}
+		gpu_buffer_bind_storage(0, set.objects)
+		scene_set_draw_state(state, {depth_write = true, wireframe = batch.key.wireframe})
 		basic_bind_texture(batch.key.texture)
-		gl.DrawElements(gl.TRIANGLES, batch.index_count, gl.UNSIGNED_INT, rawptr(uintptr(batch.first_index) * size_of(u32)))
+		gpu_draw_indexed(batch.index_count, batch.first_index)
 		g_draw_calls += 1
 		g_draw_stats.draw_calls += 1
 		g_draw_stats.batch_draws += 1
@@ -381,18 +338,13 @@ scene_sort_transparent :: proc(scene: ^Scene) {
 	}
 }
 
-scene_render :: proc(scene: ^Scene, camera: ^Camera, viewport_w, viewport_h: f32, sampler: u32 = 0) {
+scene_render :: proc(scene: ^Scene, camera: ^Camera, viewport_w, viewport_h: f32, sampler: Gpu_Sampler = 0) {
 	aspect := viewport_h > 0 ? viewport_w / viewport_h : (16.0 / 9.0)
 
-	gl.Enable(gl.DEPTH_TEST)
-	gl.DepthMask(gl.TRUE)
-	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
-	gl.Disable(gl.BLEND)
-	gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
-	gl.ActiveTexture(gl.TEXTURE0)
-	gl.BindSampler(0, sampler)
-	defer gl.BindSampler(0, 0)
-	state: Scene_Draw_State
+	gpu_draw_state_reset()
+	gpu_sampler_bind(GPU_UNIT_COLOR, sampler)
+	defer gpu_sampler_bind(GPU_UNIT_COLOR, 0)
+	state := Scene_Draw_State{draw = GPU_DRAW_STATE_DEFAULT}
 
 	camera_update_projection_matrix(camera, aspect)
 	camera_update_world_inverse_matrix(camera)
@@ -447,8 +399,7 @@ scene_render :: proc(scene: ^Scene, camera: ^Camera, viewport_w, viewport_h: f32
 	}
 
 	// Rendering state must not leak into the HUD pass.
-	gl.DepthMask(gl.TRUE)
-	gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
+	gpu_draw_state_reset()
 }
 
 scene_fini :: proc(scene: ^Scene) {

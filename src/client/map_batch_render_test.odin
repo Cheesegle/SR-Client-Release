@@ -65,23 +65,19 @@ when ODIN_TEST {
 	}
 
 	@(private = "file")
-	batch_eq_render :: proc(client: ^Client, camera: ^Camera, target: ^Bench_Target, batched: bool, sampler: u32, pixels: []u8, depth: []u32 = nil, quality := menuui.Quality_Settings{lighting = 1}) -> Draw_Stats {
+	batch_eq_render :: proc(client: ^Client, camera: ^Camera, target: ^Bench_Target, batched: bool, sampler: Gpu_Sampler, pixels: []u8, depth: []u32 = nil, quality := menuui.Quality_Settings{lighting = 1}) -> Draw_Stats {
 		client.scene.batching_enabled = batched
 		g_draw_stats = {}
 		// Rebuild the shadow map through the path under test (batched or per
 		// object), as client_render_world does. Off, this does nothing.
 		shadow_mark_dirty()
-		shadow_prepare(client.scene, client.game.map_inst, quality, target.fbo, {0, 0, target.width, target.height})
-		gl.BindFramebuffer(gl.FRAMEBUFFER, target.fbo)
-		gl.Viewport(0, 0, target.width, target.height)
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		shadow_prepare(client.scene, client.game.map_inst, quality, target.target, {0, 0, target.width, target.height})
+		gpu_set_target(target.target, target.width, target.height)
+		gpu_clear(color = true, depth = true)
 		scene_render(client.scene, camera, f32(target.width), f32(target.height), sampler)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		gl.ReadPixels(0, 0, target.width, target.height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
-		if depth != nil {
-			gl.ReadPixels(0, 0, target.width, target.height, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, raw_data(depth))
-		}
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
+		gpu_read_color_rgb(target.target, target.width, target.height, pixels)
+		if depth != nil { gpu_read_depth(target.target, target.width, target.height, depth) }
+		gpu_set_target(0, target.width, target.height)
 		return g_draw_stats
 	}
 
@@ -169,7 +165,7 @@ when ODIN_TEST {
 					g_lighting_config = toggle.night ? night_lighting(map_inst.lighting, visuals.night_strength) : map_inst.lighting
 					g_night_low_tint, g_night_unlit_tint = night_tints(visuals)
 					client_update_map_details(&client, visuals)
-					samplers := [2]u32{0, smooth}
+					samplers := [2]Gpu_Sampler{0, Gpu_Sampler(smooth)}
 					// The smooth sampler pass runs once per view to cover mip selection.
 					for sampler, sampler_index in samplers {
 						if sampler_index == 1 && toggle_index != 0 do continue

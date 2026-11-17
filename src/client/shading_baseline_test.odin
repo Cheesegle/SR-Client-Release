@@ -26,8 +26,10 @@ when ODIN_TEST {
 			camera := camera_init(DEFAULT_WEAPON_FOV)
 			camera.position, camera.rotation = view[0], view[1]
 			gl.Viewport(0, 0, w, h)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, f32(w), f32(h))
+			ui_flush()
 			gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels[int(w*h*3)*i:]))
 		}
 		return pixels

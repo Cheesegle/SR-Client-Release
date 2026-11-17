@@ -98,20 +98,27 @@ when ODIN_TEST {
 		settings.color, settings.shadow_color = 0x00ff00, 0xff0000
 		settings.values[.THICKNESS], settings.values[.SIZE], settings.values[.GAP], settings.values[.SHADOW] = 4, 10, 5, 2
 		gl.ClearColor(0,0,0,1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 		crosshair_render(ui, settings, 200, 200, 1, 0.5)
 		pixel: [3]u8
+		ui_flush()
 		gl.ReadPixels(200,200,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
 		testing.expect(t, pixel[0]==0 && pixel[1]>=126 && pixel[1]<=129 && pixel[2]==0, "the dot must use the configured color and alpha")
+		ui_flush()
 		gl.ReadPixels(200,220,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
 		testing.expect(t, pixel[1]>=126 && pixel[0]==0, "the top arm must render at the expected gap/length")
+		ui_flush()
 		gl.ReadPixels(200,208,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
 		testing.expect(t, pixel==[3]u8{}, "positive gap must leave the expected empty space")
+		ui_flush()
 		gl.ReadPixels(195,220,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
 		testing.expect(t, pixel[0]>=126 && pixel[1]==0, "shadow must straddle the arm's edge with its own color")
 		settings.toggles[.DOT] = false
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 		crosshair_render(ui, settings, 200,200,1,1)
+		ui_flush()
 		gl.ReadPixels(200,200,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
 		testing.expect(t, pixel==[3]u8{}, "disabling the dot must leave the center empty")
 		testing.expect(t, gl.GetError()==gl.NO_ERROR)

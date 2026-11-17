@@ -45,7 +45,7 @@ when ODIN_TEST {
 		software_cursor_load(cursor)
 		if !testing.expect(t, cursor.loaded && cursor.texture != 0, "the cursor texture must upload") do return
 		w, h: i32
-		gl.BindTexture(gl.TEXTURE_2D, cursor.texture)
+		gl.BindTexture(gl.TEXTURE_2D, u32(cursor.texture))
 		gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_WIDTH, &w)
 		gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_HEIGHT, &h)
 		gl.BindTexture(gl.TEXTURE_2D, 0)

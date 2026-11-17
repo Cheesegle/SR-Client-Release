@@ -60,19 +60,23 @@ when ODIN_TEST {
 			w, h := dimensions[0], dimensions[1]
 			glfw.SetWindowSize(window, w, h)
 			gl.Viewport(0, 0, w, h)
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, f32(w), f32(h))
 			ui_update(ui, f32(w), f32(h))
 			overlay_scope_render(ui)
 			testing.expect(t, scope_icon != 0, "the packaged default scope image must load")
 			pixel: [3]u8
+			ui_flush()
 			gl.ReadPixels(0, h/2, 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
 			testing.expect(t, pixel == ([3]u8{}), "scope borders must mask the sides on wide screens")
+			ui_flush()
 			gl.ReadPixels(w/2, h/2, 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
 			testing.expect(t, pixel[0] < 20 && pixel[1] < 20 && pixel[2] < 20, "scope reticle must stay centered")
 			testing.expect(t, gl.GetError() == gl.NO_ERROR, "map and scope must render without OpenGL errors")
 			when #config(WEAPON_PREVIEW, false) {
 				pixels := make([]u8, int(w*h*3))
+				ui_flush()
 				gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 				file := make([dynamic]u8)
 				append(&file, ..transmute([]u8)fmt.tprintf("P6\n%d %d\n255\n", w, h))

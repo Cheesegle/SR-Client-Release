@@ -1,8 +1,6 @@
 package main
 
 import "core:math"
-import gl "vendor:OpenGL"
-import glfw "vendor:glfw"
 import menuui "../menu"
 import shared "../shared"
 
@@ -10,17 +8,13 @@ import shared "../shared"
 g_visual_settings := menuui.DEFAULT_VISUAL_SETTINGS
 
 client_graphics_init :: proc(client: ^Client) {
-	client.max_anisotropy = 1
-	if bool(glfw.ExtensionSupported("GL_EXT_texture_filter_anisotropic")) || bool(glfw.ExtensionSupported("GL_ARB_texture_filter_anisotropic")) {
-		gl.GetFloatv(0x84FF, &client.max_anisotropy) // MAX_TEXTURE_MAX_ANISOTROPY_EXT
-	}
-	gl.GenSamplers(1, &client.graphics_sampler)
-	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_WRAP_S, gl.REPEAT)
-	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_WRAP_T, gl.REPEAT)
+	client.max_anisotropy = gpu_max_anisotropy()
+	// Always Sharp (nearest, nearest mip): Krunker's pixelated look.
+	client.graphics_sampler = gpu_sampler_create(GPU_SAMPLER_WORLD)
 }
 
 client_graphics_fini :: proc(client: ^Client) {
-	if client.graphics_sampler != 0 { gl.DeleteSamplers(1, &client.graphics_sampler); client.graphics_sampler = 0 }
+	gpu_sampler_destroy(&client.graphics_sampler)
 }
 
 client_graphics_values :: proc(client: ^Client) -> (visuals: menuui.Visual_Settings, quality: menuui.Quality_Settings) {
@@ -61,14 +55,15 @@ client_update_graphics :: proc(client: ^Client) {
 	if night_active(g_visual_settings) { g_lighting_config = night_lighting(base, g_visual_settings.night_strength) }
 	g_night_low_tint, g_night_unlit_tint = night_tints(g_visual_settings)
 	sky := visual_adjust_color(g_lighting_config.sky_color, g_visual_settings)
-	gl.ClearColor(sky.x, sky.y, sky.z, 1)
+	gpu_set_clear_color(sky.xyz)
 	if client.graphics_sampler == 0 { return }
 	quality = menuui.quality_settings_validate(quality)
 	if client.graphics_sampler_ready && client.graphics_quality == quality { return }
 	client.graphics_quality, client.graphics_sampler_ready = quality, true
-	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_MIN_FILTER, quality.smooth_textures ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST_MIPMAP_NEAREST)
-	gl.SamplerParameteri(client.graphics_sampler, gl.TEXTURE_MAG_FILTER, quality.smooth_textures ? gl.LINEAR : gl.NEAREST)
-	if client.max_anisotropy >= 2 {
-		gl.SamplerParameterf(client.graphics_sampler, 0x84FE, clamp(f32(quality.anisotropy), 1, client.max_anisotropy)) // TEXTURE_MAX_ANISOTROPY_EXT
-	}
+	// Smooth textures change the filter: recreate the sampler (Vulkan bakes
+	// filters into samplers; on GL this is just a new sampler object).
+	gpu_sampler_destroy(&client.graphics_sampler)
+	desc := GPU_SAMPLER_WORLD
+	desc.filter = quality.smooth_textures ? .Linear : .Nearest
+	client.graphics_sampler = gpu_sampler_create(desc, f32(quality.anisotropy))
 }

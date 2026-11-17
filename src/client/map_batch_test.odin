@@ -86,8 +86,8 @@ when ODIN_TEST {
 		testing.expect(t, !map_batch_eligible(&mesh, &object), "parented meshes can move")
 		mesh.transform.parent = nil
 
-		quad := Quad_Material{}
-		mesh.material = &quad.base
+		other := Material{} // any material without the basic vtable
+		mesh.material = &other
 		testing.expect(t, !map_batch_eligible(&mesh, &object), "only the basic material is batched")
 	}
 

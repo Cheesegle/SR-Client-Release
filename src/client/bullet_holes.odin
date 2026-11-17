@@ -38,7 +38,7 @@ bullet_hole_face_visible :: proc(object: ^shared.Object, normal: shared.Vec3) ->
 
 // Some mod packs replace the original particle with a single flat square.
 // Preserve the shaped fallback in that case instead of stamping square holes.
-bullet_hole_texture :: proc() -> (texture: u32, use_source: bool) {
+bullet_hole_texture :: proc() -> (texture: Gpu_Texture, use_source: bool) {
 	path := shared.concat(shared.assets_path(), "textures/particles/1.png")
 	defer delete(path)
 	if g_bullet_hole_source_checked {

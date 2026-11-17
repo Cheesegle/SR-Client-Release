@@ -1,12 +1,20 @@
 package main
 
+// The interface renderer: every ui_* call appends an element to one draw list
+// (g_ui_batch), and ui_flush draws the list with the ui shader (ui.vert,
+// ui.frag), one draw per run of elements that share a texture and clip.
+// Flushes happen at the GPU layer's boundaries (gpu_flush_deferred: the next
+// world pass, target change, readback or present); code that reads pixels or
+// draws behind the GPU layer calls ui_flush first. Glyphs come from one R8
+// atlas instead of a texture each.
+
 import "core:fmt"
 import "core:math"
-import "core:strings"
+import "core:slice"
 import core_c "core:c"
-import gl "vendor:OpenGL"
 import stbtt "vendor:stb/truetype"
 import shared "../shared"
+import clay "../third_party/clay"
 
 g_font_info: stbtt.fontinfo
 g_font_loaded: bool
@@ -17,24 +25,13 @@ g_font_height_units: f32
 g_kern_caches: [Font_Slot][128][128]i32
 g_kern_cacheds: [Font_Slot][128][128]bool
 
-stb_font_metrics :: proc(ascent, descent, gap: ^i32) {
-	load_font()
-	if g_font_loaded {
-		stbtt.GetFontVMetrics(&g_font_info, ascent, descent, gap)
-	} else {
-		ascent^ = 1
-		descent^ = 0
-		gap^ = 0
-	}
-}
-
 // Glyphs above U+00FF (chat: č, š, ž, ...) are cached by rune here (per font).
 g_glyph_extras: [Font_Slot]map[rune]^Glyph_Cache_Entry
 
 // Two fonts: the menu's (Rajdhani) and Krunker's game font for the in-game
 // HUD. The globals above are always the active font; ui_use_font swaps only
-// the small font state, the glyph and kerning caches are kept per font
-// (copying them on every switch cost about 0.5 MB of memory traffic a frame).
+// the small font state, the glyph and kerning caches are kept per font.
+// Both fonts share the one glyph atlas.
 Font_Slot :: enum { UI, GAME }
 Font_State :: struct {
 	info: stbtt.fontinfo,
@@ -74,6 +71,110 @@ load_glyph_rune :: proc(c: rune) -> ^Glyph_Cache_Entry {
 	return glyph
 }
 
+// Forgets every cached glyph of both fonts (the atlas was emptied).
+ui_glyphs_forget :: proc() {
+	for slot in Font_Slot {
+		for &glyph in g_glyph_caches[slot] { if glyph != nil { free(glyph); glyph = nil } }
+		for _, glyph in g_glyph_extras[slot] { free(glyph) }
+		clear(&g_glyph_extras[slot])
+	}
+}
+
+// The interface program, shared by every UI (resource_cache_fini frees it).
+g_ui_program: Gpu_Program
+
+UI_Kind :: enum u8 {
+	Textured = 0, // texture * color, rounded corners, stroke, r_clip
+	Glyph    = 1, // atlas coverage * color
+	Solid    = 2, // color only: never breaks a run on its texture
+}
+
+// One corner of an element; the element's values repeat on its corners.
+UI_Vertex :: struct {
+	position: [2]f32, // clip space
+	local:    [2]f32, // 0..1 across the element, y up
+	uv:       [2]f32,
+	color:    [4]f32,
+	radii:    [4]f32, // bottom left, bottom right, top left, top right
+	params:   [4]f32, // aspect, r_clip, stroke width, kind
+}
+#assert(size_of(UI_Vertex) == 72)
+
+// A run of indices drawn with one texture and clip.
+UI_Command :: struct {
+	texture: Gpu_Texture, // 0 while the run is only solid elements
+	clip_on: bool,
+	clip:    [4]i32, // glScissor convention: x, y from the bottom, width, height
+	first:   u32,
+	count:   u32,
+}
+
+// Flushed early past this many vertices, so one flush always fits the
+// transient rings.
+UI_BATCH_MAX_VERTICES :: 32768
+
+g_ui_batch: struct {
+	vertices: [dynamic]UI_Vertex,
+	indices:  [dynamic]u32,
+	commands: [dynamic]UI_Command,
+	clip_on:  bool,
+	clip:     [4]i32,
+}
+
+// Glyph bitmaps, packed in shelves. Each cell has a one-texel border copied
+// from the glyph's edge, so linear filtering at the glyph's edge reads what
+// clamp-to-edge did with a texture per glyph.
+UI_ATLAS_SIZE :: 2048
+
+g_glyph_atlas: struct {
+	texture: Gpu_Texture,
+	x, y:    i32, // next free cell
+	row:     i32, // height of the current shelf
+}
+
+stb_font_metrics :: proc(ascent, descent, gap: ^i32) {
+	load_font()
+	if g_font_loaded {
+		stbtt.GetFontVMetrics(&g_font_info, ascent, descent, gap)
+	} else {
+		ascent^ = 1
+		descent^ = 0
+		gap^ = 0
+	}
+}
+
+// Copies a w x h coverage bitmap into the atlas; `texel` is its top-left
+// texel there. A full atlas is emptied (glyphs then reload on use).
+@(private = "file")
+ui_atlas_insert :: proc(bitmap: []u8, w, h: i32) -> (texel: [2]i32, ok: bool) {
+	atlas := &g_glyph_atlas
+	cw, ch := w + 2, h + 2
+	if cw > UI_ATLAS_SIZE || ch > UI_ATLAS_SIZE { return }
+	if atlas.texture == 0 {
+		atlas.texture = gpu_texture_create({width = UI_ATLAS_SIZE, height = UI_ATLAS_SIZE, format = .R8, sampler = GPU_SAMPLER_UI_LINEAR})
+		if atlas.texture == 0 { return }
+	}
+	if atlas.x + cw > UI_ATLAS_SIZE { atlas.x, atlas.y, atlas.row = 0, atlas.y + atlas.row, 0 }
+	if atlas.y + ch > UI_ATLAS_SIZE {
+		fmt.eprintln("[UI] Glyph atlas full; rebuilding it")
+		ui_flush() // queued text still reads the old cells
+		ui_glyphs_forget()
+		atlas.x, atlas.y, atlas.row = 0, 0, 0
+	}
+	cell := make([]u8, int(cw) * int(ch), context.temp_allocator)
+	for row in 0 ..< ch {
+		src_row := clamp(row - 1, 0, h - 1)
+		for col in 0 ..< cw {
+			cell[int(row) * int(cw) + int(col)] = bitmap[int(src_row) * int(w) + int(clamp(col - 1, 0, w - 1))]
+		}
+	}
+	gpu_texture_update(atlas.texture, .R8, atlas.x, atlas.y, cw, ch, cell)
+	texel = {atlas.x + 1, atlas.y + 1}
+	atlas.x += cw
+	atlas.row = max(atlas.row, ch)
+	return texel, true
+}
+
 load_glyph :: proc(c: u8) -> ^Glyph_Cache_Entry {
 	if cached := g_glyph_caches[g_font_slot][c]; cached != nil {
 		return cached
@@ -84,16 +185,12 @@ load_glyph :: proc(c: u8) -> ^Glyph_Cache_Entry {
 }
 
 glyph_create :: proc(c: rune, from: ^stbtt.fontinfo = nil) -> ^Glyph_Cache_Entry {
-
-	glyph := new(Glyph_Cache_Entry)
-
 	// Font is loaded lazily from assets (matches C's freetype usage).
 	if !g_font_loaded {
 		load_font()
 	}
 
 	if !g_font_loaded {
-		free(glyph)
 		return nil
 	}
 
@@ -105,31 +202,13 @@ glyph_create :: proc(c: rune, from: ^stbtt.fontinfo = nil) -> ^Glyph_Cache_Entry
 	width, height, xoff, yoff: core_c.int
 	bitmap := stbtt.GetCodepointBitmap(info, scale, scale, c, &width, &height, &xoff, &yoff)
 
+	glyph := new(Glyph_Cache_Entry)
 	if bitmap != nil && width > 0 && height > 0 {
-		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
-		gl.GenTextures(1, &glyph.texture)
-		gl.BindTexture(gl.TEXTURE_2D, glyph.texture)
-
-		gl.TexImage2D(
-			gl.TEXTURE_2D, 0, gl.RED,
-			width, height,
-			0, gl.RED, gl.UNSIGNED_BYTE,
-			bitmap,
-		)
-
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-		// Glyphs are grayscale coverage textures. Linear filtering preserves
-		// their edge coverage when the 100 px raster is scaled to UI size;
-		// nearest filtering makes every menu and HUD character look jagged.
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-
-		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+		// Grayscale coverage, filtered linearly: that preserves edge coverage
+		// when the 100 px raster is scaled to UI size, where nearest filtering
+		// makes every menu and HUD character look jagged.
+		glyph.atlas, glyph.in_atlas = ui_atlas_insert(bitmap[:int(width) * int(height)], width, height)
 		stbtt.FreeBitmap(bitmap, nil)
-		// Glyphs load during layout, between draws: the bind above must not
-		// leave the material binding cache naming the previous texture.
-		g_active_texture = 0
 	}
 
 	glyph.size.x = f32(width)
@@ -170,46 +249,9 @@ load_font :: proc() {
 
 ui_init :: proc() -> ^UI {
 	ui := new(UI)
-
-	ui.material = quad_material_init()
-	ui.text_material = text_material_init()
-
-	gl.GenBuffers(1, &ui.vbo)
-
-	gl.GenVertexArrays(1, &ui.vao)
-	gl.BindVertexArray(ui.vao)
-
-	vertices := [?]Vertex{
-		{{-1.0, -1.0, 0.0}, {0.0, 0.0}},
-		{{1.0, -1.0, 0.0}, {1.0, 0.0}},
-		{{1.0, 1.0, 0.0}, {1.0, 1.0}},
-		{{-1.0, 1.0, 0.0}, {0.0, 1.0}},
-	}
-
-	gl.BindBuffer(gl.ARRAY_BUFFER, ui.vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, size_of(vertices), &vertices[0], gl.STATIC_DRAW)
-
-	stride := i32(size_of(Vertex))
-
-	gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, stride, 0)
-	gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, stride, uintptr(3 * size_of(f32)))
-
-	gl.EnableVertexAttribArray(0)
-	gl.EnableVertexAttribArray(1)
-
-	// ui_fill_polygon's dynamic vertices, allocated once up front.
-	gl.GenVertexArrays(1, &ui.poly_vao)
-	gl.GenBuffers(1, &ui.poly_vbo)
-	gl.BindVertexArray(ui.poly_vao)
-	gl.BindBuffer(gl.ARRAY_BUFFER, ui.poly_vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, UI_POLYGON_MAX * size_of(Vertex), nil, gl.DYNAMIC_DRAW)
-	gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, stride, 0)
-	gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, stride, uintptr(3 * size_of(f32)))
-	gl.EnableVertexAttribArray(0)
-	gl.EnableVertexAttribArray(1)
-
+	if g_ui_program == 0 { g_ui_program = gpu_program_create_ui() }
+	g_gpu_deferred.flush = ui_flush
 	ui.vignette = damage_vignette_texture()
-
 	return ui
 }
 
@@ -225,61 +267,62 @@ ui_update :: proc(ui: ^UI, width, height: f32) {
 	scale_y := ui.height / target_height
 
 	ui.scale = min(scale_x, scale_y)
-
-	gl.Disable(gl.DEPTH_TEST)
-	gl.Enable(gl.BLEND)
-	gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
 }
 
-ui_fill_rect_ :: proc(ui: ^UI, shader: u32, x, y, width, height: f32) {
+// The run the next element joins: the last one when its clip matches and its
+// texture does (solid elements match any texture), else a new one.
+@(private = "file")
+ui_batch_command :: proc(texture: Gpu_Texture) -> ^UI_Command {
+	b := &g_ui_batch
+	if n := len(b.commands); n > 0 {
+		last := &b.commands[n - 1]
+		same_clip := last.clip_on == b.clip_on && (!b.clip_on || last.clip == b.clip)
+		if same_clip && (texture == 0 || last.texture == 0 || last.texture == texture) {
+			if last.texture == 0 { last.texture = texture }
+			return last
+		}
+	}
+	append(&b.commands, UI_Command{texture = texture, clip_on = b.clip_on, clip = b.clip, first = u32(len(b.indices))})
+	return &b.commands[len(b.commands) - 1]
+}
+
+// Appends a box (x, y: top-left in UI pixels). `uv` maps local (0,0) and (1,1)
+// to texture coordinates: uv[0] + local * uv[1].
+@(private = "file")
+ui_box :: proc(ui: ^UI, kind: UI_Kind, texture: Gpu_Texture, x, y, width, height: f32, color: shared.Vec4, radius: f32 = 0, aspect: f32 = 1, r_clip: f32 = 0, stroke: f32 = 0, uv := [2][2]f32{{0, 0}, {1, 1}}, radii_mask := [4]f32{1, 1, 1, 1}) {
 	// A minimized window (0x0) or a NaN layout box would send NaN/Inf vertex
-	// positions to the driver for every UI quad; draw nothing instead.
+	// positions to the driver; draw nothing instead.
 	finite :: proc(value: f32) -> bool { return !math.is_nan(value) && !math.is_inf(value) }
 	if !(ui.width > 0 && ui.height > 0) || !finite(x) || !finite(y) || !finite(width) || !finite(height) {
 		return
 	}
+	if len(g_ui_batch.vertices) + 4 > UI_BATCH_MAX_VERTICES { ui_flush() }
 	offset_x := (x + width * 0.5) / ui.width * 2.0 - 1.0
 	offset_y := 1.0 - (y + height * 0.5) / ui.height * 2.0
-
 	scale_x := width / ui.width
 	scale_y := height / ui.height
 
-	u := scene_uniforms(shader)
-
-	gl.BindVertexArray(ui.vao)
-
-	if u.offset > -1 {
-		gl.Uniform2f(u.offset, offset_x, offset_y)
+	command := ui_batch_command(kind == .Solid ? 0 : texture)
+	base := u32(len(g_ui_batch.vertices))
+	params := [4]f32{aspect, r_clip, stroke, f32(kind)}
+	corners := [4][2]f32{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}
+	for corner in corners {
+		local := [2]f32{(corner.x + 1) * 0.5, (corner.y + 1) * 0.5}
+		append(&g_ui_batch.vertices, UI_Vertex{
+			position = {corner.x * scale_x + offset_x, corner.y * scale_y + offset_y},
+			local    = local,
+			uv       = uv[0] + local * uv[1],
+			color    = color,
+			radii    = radius * radii_mask, // bottom left, bottom right, top left, top right
+			params   = params,
+		})
 	}
-	if u.scale > -1 {
-		gl.Uniform2f(u.scale, scale_x, scale_y)
-	}
-
-	gl.DrawArrays(gl.TRIANGLE_FAN, 0, 4)
-	g_draw_calls += 1
+	append(&g_ui_batch.indices, base, base + 1, base + 2, base, base + 2, base + 3)
+	command.count += 6
 }
 
 ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {
-	ui.material.color = color
-	ui.material.texture = 0
-
-	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
-
-	ui.material.border_bottom_left_radius = 0.0
-	ui.material.border_bottom_right_radius = 0.0
-	ui.material.border_top_left_radius = 0.0
-	ui.material.border_top_right_radius = 0.0
-
-	ui.material.r_clip = 0.0
-
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
-	}
-
-	material_update_uniforms(&ui.material.base)
-
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_box(ui, .Solid, 0, x, y, width, height, color)
 }
 
 // A convex (or center-visible) polygon in screen pixels, drawn as a triangle
@@ -287,164 +330,52 @@ ui_fill_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height: f32) {
 UI_POLYGON_MAX :: 64
 ui_fill_polygon :: proc(ui: ^UI, color: shared.Vec4, points: []shared.Vec2) {
 	if len(points) < 3 || len(points) > UI_POLYGON_MAX || !(ui.width > 0 && ui.height > 0) { return }
-	vertices: [UI_POLYGON_MAX]Vertex
-	for p, i in points {
+	for p in points {
 		if math.is_nan(p.x) || math.is_nan(p.y) || math.is_inf(p.x) || math.is_inf(p.y) { return }
-		// The centered texture coordinate never reaches the rounded-corner path.
-		vertices[i] = {{p.x / ui.width * 2 - 1, 1 - p.y / ui.height * 2, 0}, {0.5, 0.5}}
 	}
-	if ui.poly_vao == 0 { return }
-	ui.material.color = color
-	ui.material.texture = 0
-	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
-	ui.material.border_bottom_left_radius = 0.0
-	ui.material.border_bottom_right_radius = 0.0
-	ui.material.border_top_left_radius = 0.0
-	ui.material.border_top_right_radius = 0.0
-	ui.material.r_clip = 0.0
-	ui.material.stroke_width = 0
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
+	if len(g_ui_batch.vertices) + len(points) > UI_BATCH_MAX_VERTICES { ui_flush() }
+	command := ui_batch_command(0)
+	base := u32(len(g_ui_batch.vertices))
+	for p in points {
+		// The centered local coordinate never reaches the rounded-corner path.
+		append(&g_ui_batch.vertices, UI_Vertex{
+			position = {p.x / ui.width * 2 - 1, 1 - p.y / ui.height * 2},
+			local = {0.5, 0.5}, uv = {0.5, 0.5}, color = color, params = {1, 0, 0, f32(UI_Kind.Solid)},
+		})
 	}
-	material_update_uniforms(&ui.material.base)
-	u := scene_uniforms(ui.material.base.program)
-	if u.offset > -1 { gl.Uniform2f(u.offset, 0, 0) }
-	if u.scale > -1 { gl.Uniform2f(u.scale, 1, 1) }
-	gl.BindVertexArray(ui.poly_vao)
-	gl.BindBuffer(gl.ARRAY_BUFFER, ui.poly_vbo)
-	gl.BufferSubData(gl.ARRAY_BUFFER, 0, len(points) * size_of(Vertex), &vertices[0])
-	gl.DrawArrays(gl.TRIANGLE_FAN, 0, i32(len(points)))
-	g_draw_calls += 1
+	for i in 1 ..< u32(len(points)) - 1 {
+		append(&g_ui_batch.indices, base, base + i, base + i + 1)
+	}
+	command.count += u32(len(points) - 2) * 3
 }
 
 ui_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: f32) {
-	ui.material.color = color
-	ui.material.texture = 0
-
-	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
-
-	radius_mlt := radius / min(width, height)
-
-	ui.material.aspect = width / height
-	ui.material.border_bottom_left_radius = radius_mlt
-	ui.material.border_bottom_right_radius = radius_mlt
-	ui.material.border_top_left_radius = radius_mlt
-	ui.material.border_top_right_radius = radius_mlt
-
-	ui.material.r_clip = 0.0
-
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
-	}
-
-	material_update_uniforms(&ui.material.base)
-
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_box(ui, .Solid, 0, x, y, width, height, color, radius / min(width, height), width / height)
 }
 
 // A rectangle with only its top corners rounded (border-radius: r r 0 0).
 ui_round_rect_top :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: f32) {
-	ui.material.color = color
-	ui.material.texture = 0
-	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
-	radius_mlt := radius / min(width, height)
-	ui.material.aspect = width / height
-	ui.material.border_top_left_radius = radius_mlt
-	ui.material.border_top_right_radius = radius_mlt
-	ui.material.border_bottom_left_radius = 0
-	ui.material.border_bottom_right_radius = 0
-	ui.material.r_clip = 0.0
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
-	}
-	material_update_uniforms(&ui.material.base)
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_box(ui, .Solid, 0, x, y, width, height, color, radius / min(width, height), width / height, radii_mask = {0, 0, 1, 1})
 }
 
 ui_fill_rect_rclip :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius, r_clip: f32) {
-	ui.material.color = color
-	ui.material.texture = 0
-
-	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
-
-	radius_mlt := radius / min(width, height)
-
-	ui.material.aspect = width / height
-	ui.material.border_bottom_left_radius = radius_mlt
-	ui.material.border_bottom_right_radius = radius_mlt
-	ui.material.border_top_left_radius = radius_mlt
-	ui.material.border_top_right_radius = radius_mlt
-
-	ui.material.r_clip = r_clip
-
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
-	}
-
-	material_update_uniforms(&ui.material.base)
-
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+	ui_box(ui, .Solid, 0, x, y, width, height, color, radius / min(width, height), width / height, r_clip)
 }
 
 ui_stroke_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius, thickness: f32) {
-	ui.material.stroke_width = thickness / min(width, height)
-	ui_round_rect(ui, color, x, y, width, height, radius)
-	ui.material.stroke_width = 0
+	ui_box(ui, .Solid, 0, x, y, width, height, color, radius / min(width, height), width / height, 0, thickness / min(width, height))
 }
 
 // mirror flips the image horizontally (CSS transform: scaleX(-1)).
-ui_draw_image :: proc(ui: ^UI, texture_id: u32, x, y, width, height: f32, color := shared.Vec4{1.0, 1.0, 1.0, 1.0}, mirror := false) {
-	ui.material.color = color
-	ui.material.texture = texture_id
-
-	// quad.frag samples u * viewport[2] - viewport[0]; {-1, 0, -1, 1} gives 1 - u.
-	ui.material.texture_viewport = mirror ? [4]f32{-1.0, 0.0, -1.0, 1.0} : [4]f32{0.0, 0.0, 1.0, 1.0}
-
-	ui.material.border_bottom_left_radius = 0.0
-	ui.material.border_bottom_right_radius = 0.0
-	ui.material.border_top_left_radius = 0.0
-	ui.material.border_top_right_radius = 0.0
-
-	ui.material.r_clip = 0.0
-
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
-	}
-
-	material_update_uniforms(&ui.material.base)
-
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+ui_draw_image :: proc(ui: ^UI, texture_id: Gpu_Texture, x, y, width, height: f32, color := shared.Vec4{1.0, 1.0, 1.0, 1.0}, mirror := false) {
+	texture := texture_id != 0 ? texture_id : gpu_blank_texture()
+	uv := mirror ? [2][2]f32{{1, 0}, {-1, 1}} : [2][2]f32{{0, 0}, {1, 1}}
+	ui_box(ui, .Textured, texture, x, y, width, height, color, uv = uv)
 }
 
-ui_draw_image_rounded :: proc(ui: ^UI, texture_id: u32, x, y, width, height, radius: f32) {
-	ui.material.color = shared.Vec4{1.0, 1.0, 1.0, 1.0}
-	ui.material.texture = texture_id
-
-	ui.material.texture_viewport = [4]f32{0.0, 0.0, 1.0, 1.0}
-
-	radius_mlt := radius / min(width, height)
-
-	ui.material.aspect = width / height
-	ui.material.border_bottom_left_radius = radius_mlt
-	ui.material.border_bottom_right_radius = radius_mlt
-	ui.material.border_top_left_radius = radius_mlt
-	ui.material.border_top_right_radius = radius_mlt
-
-	ui.material.r_clip = 0.0
-
-	if g_active_shader != ui.material.base.program {
-		gl.UseProgram(ui.material.base.program)
-		g_active_shader = ui.material.base.program
-	}
-
-	material_update_uniforms(&ui.material.base)
-
-	ui_fill_rect_(ui, ui.material.base.program, x, y, width, height)
+ui_draw_image_rounded :: proc(ui: ^UI, texture_id: Gpu_Texture, x, y, width, height, radius: f32) {
+	texture := texture_id != 0 ? texture_id : gpu_blank_texture()
+	ui_box(ui, .Textured, texture, x, y, width, height, {1, 1, 1, 1}, radius / min(width, height), width / height)
 }
 
 ui_measure_text :: proc(ui: ^UI, text: string, size: f32) -> f32 {
@@ -485,14 +416,7 @@ ui_fill_text :: proc(ui: ^UI, color: shared.Vec4, text: string, x, y, size: f32)
 	start_x := x
 	cursor_x := x
 	previous: rune
-
-	ui.text_material.color = color
-	gl.BindVertexArray(ui.vao)
-
-	if g_active_shader != ui.text_material.base.program {
-		gl.UseProgram(ui.text_material.base.program)
-		g_active_shader = ui.text_material.base.program
-	}
+	inv := f32(1) / UI_ATLAS_SIZE
 
 	for c in text {
 		glyph := load_glyph_rune(c)
@@ -502,12 +426,14 @@ ui_fill_text :: proc(ui: ^UI, color: shared.Vec4, text: string, x, y, size: f32)
 		}
 
 		cursor_x += ui_text_kerning(previous, c, size)
-		if c != ' ' {
-			ui.text_material.texture = glyph.texture
-			material_update_uniforms(&ui.text_material.base)
-
+		if c != ' ' && glyph.in_atlas {
+			// Local y runs up the glyph while atlas rows run down it.
+			uv := [2][2]f32{
+				{f32(glyph.atlas.x) * inv, (f32(glyph.atlas.y) + glyph.size.y) * inv},
+				{glyph.size.x * inv, -glyph.size.y * inv},
+			}
 			glyph_y := y - glyph.h_bearing.y * size / 100.0
-			ui_fill_rect_(ui, ui.text_material.base.program, cursor_x + glyph.h_bearing.x * size / 100.0, glyph_y, glyph.size.x * size / 100.0, glyph.size.y * size / 100.0)
+			ui_box(ui, .Glyph, g_glyph_atlas.texture, cursor_x + glyph.h_bearing.x * size / 100.0, glyph_y, glyph.size.x * size / 100.0, glyph.size.y * size / 100.0, color, uv = uv)
 		}
 
 		cursor_x += glyph.advance * size / 100.0
@@ -517,37 +443,70 @@ ui_fill_text :: proc(ui: ^UI, color: shared.Vec4, text: string, x, y, size: f32)
 	return cursor_x - start_x
 }
 
+// Clips later UI elements to `box` (UI pixels, top-left origin) until
+// ui_clip_clear. An empty or invalid box clips everything away (glScissor
+// rejects negative sizes and NaN converts to INT_MIN).
+ui_clip_set :: proc(ui: ^UI, box: clay.BoundingBox) {
+	finite :: proc(value: f32) -> f32 { return math.is_nan(value) || math.is_inf(value) ? 0 : value }
+	x, y := finite(box.x), finite(ui.height - box.y - box.height)
+	width, height := max(finite(box.width), 0), max(finite(box.height), 0)
+	g_ui_batch.clip_on = true
+	g_ui_batch.clip = {i32(clamp(x, -65536, 65536)), i32(clamp(y, -65536, 65536)), i32(min(width, 65536)), i32(min(height, 65536))}
+}
+
+ui_clip_clear :: proc(ui: ^UI) {
+	g_ui_batch.clip_on = false
+}
+
+// Draws the queued elements and empties the list. The GPU layer calls it
+// before its next pass boundary; raw GL code (tests) calls it before reading
+// pixels or clearing.
+ui_flush :: proc() {
+	b := &g_ui_batch
+	defer {
+		clear(&b.vertices)
+		clear(&b.indices)
+		clear(&b.commands)
+	}
+	if len(b.indices) == 0 { return }
+	if g_ui_program == 0 { return }
+	// Its own draws are not a boundary.
+	busy := g_gpu_deferred.busy
+	g_gpu_deferred.busy = true
+	defer g_gpu_deferred.busy = busy
+	// A known state whatever ran before (world passes, raw GL in tests), then
+	// the interface's: blended, no depth test or writes.
+	gpu_draw_state_reset()
+	if !gpu_transient_bind(.UI, slice.to_bytes(b.vertices[:]), b.indices[:]) { return }
+	gpu_program_bind(g_ui_program)
+	gpu_draw_state_set({blend = true, depth_test = .Off})
+	for command in b.commands {
+		if command.count == 0 { continue }
+		gpu_bind_color_texture(command.texture)
+		gpu_scissor(command.clip_on, command.clip)
+		gpu_draw_indexed(i32(command.count), command.first)
+		g_draw_calls += 1
+	}
+	gpu_scissor(false)
+}
+
 ui_fini :: proc(ui: ^UI) {
 	if ui == nil {
 		return
 	}
-	// Free both fonts' glyphs (the inactive font's file stays loaded).
-	for slot in Font_Slot {
-		for glyph in g_glyph_caches[slot] {
-			if glyph == nil { continue }
-			if glyph.texture != 0 { gl.DeleteTextures(1, &glyph.texture) }
-			free(glyph)
-		}
-		g_glyph_caches[slot] = {}
-		for _, glyph in g_glyph_extras[slot] {
-			if glyph.texture != 0 { gl.DeleteTextures(1, &glyph.texture) }
-			free(glyph)
-		}
-		clear(&g_glyph_extras[slot])
-		g_kern_cacheds[slot] = {}
-	}
 
-	if ui.vao != 0 {
-		gl.DeleteVertexArrays(1, &ui.vao)
-	}
-	if ui.vbo != 0 {
-		gl.DeleteBuffers(1, &ui.vbo)
-	}
-	if ui.poly_vao != 0 { gl.DeleteVertexArrays(1, &ui.poly_vao) }
-	if ui.poly_vbo != 0 { gl.DeleteBuffers(1, &ui.poly_vbo) }
-	if ui.vignette != 0 { gl.DeleteTextures(1, &ui.vignette) }
-	material_fini(&ui.material.base)
-	material_fini(&ui.text_material.base)
+	// Free both fonts' glyphs (the inactive font's file stays loaded).
+	ui_glyphs_forget()
+	for slot in Font_Slot { delete(g_glyph_extras[slot]); g_glyph_extras[slot] = nil }
+	g_kern_cacheds = {}
+	// Elements queued for this UI are dropped with it.
+	delete(g_ui_batch.vertices)
+	delete(g_ui_batch.indices)
+	delete(g_ui_batch.commands)
+	g_ui_batch = {}
+	gpu_texture_destroy(&g_glyph_atlas.texture)
+	g_glyph_atlas = {}
+	gpu_texture_destroy(&ui.vignette)
 	delete(g_font_data)
 	g_font_data = nil
 	g_font_loaded = false

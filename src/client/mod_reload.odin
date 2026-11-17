@@ -77,12 +77,10 @@ texture_reload_in_place :: proc(entry: ^Texture_Cache_Entry) -> bool {
 	data := stbi.load(c_path, &w, &h, &channels, 4)
 	if data == nil { return false }
 	defer stbi.image_free(data)
-	// Same id: filtering and wrapping stay as the first load set them.
-	gl.BindTexture(gl.TEXTURE_2D, entry.id)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data)
-	gl.GenerateMipmap(gl.TEXTURE_2D)
-	gl.BindTexture(gl.TEXTURE_2D, 0)
-	entry.width, entry.height = w, h
+	// Same handle, so everything using it shows the new pixels. A different
+	// size cannot be swapped in place on every backend: it applies on restart.
+	if w != entry.width || h != entry.height { return false }
+	gpu_texture_update(entry.id, .RGBA8, 0, 0, w, h, data[:int(w)*int(h)*4])
 	return true
 }
 
@@ -96,15 +94,17 @@ geometry_reload_in_place :: proc(geometry: ^Geometry) -> bool {
 	indices := make([]u32, len(vertices))
 	defer delete(indices)
 	for i in 0..<len(vertices) { indices[i] = u32(i) }
-	// The element buffer binding is VAO state, so bind the geometry's own VAO.
-	gl.BindVertexArray(geometry.vao)
-	gl.BindBuffer(gl.ARRAY_BUFFER, geometry.vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*size_of(Vertex), &vertices[0], gl.STATIC_DRAW)
-	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, geometry.ebo)
-	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*size_of(u32), &indices[0], gl.STATIC_DRAW)
-	gl.BindVertexArray(0)
-	geometry.index_count = i32(len(indices))
-	geometry_set_bounds(geometry, vertices[:])
+	// New buffers behind the same ^Geometry, so every mesh using it updates.
+	fresh := create_geometry(vertices[:], indices[:])
+	gpu_vertex_input_destroy(&geometry.input)
+	gpu_buffer_destroy(&geometry.vertex_buffer)
+	gpu_buffer_destroy(&geometry.index_buffer)
+	delete(geometry.vertices)
+	delete(geometry.indices)
+	geometry.input, geometry.vertex_buffer, geometry.index_buffer = fresh.input, fresh.vertex_buffer, fresh.index_buffer
+	geometry.vertices, geometry.indices, geometry.index_count = fresh.vertices, fresh.indices, fresh.index_count
+	geometry.bounds_min, geometry.bounds_max, geometry.has_bounds = fresh.bounds_min, fresh.bounds_max, fresh.has_bounds
+	free(fresh)
 	return true
 }
 

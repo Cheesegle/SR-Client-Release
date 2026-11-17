@@ -9,7 +9,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, HOST }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 // Krunker's tabs (General, Controls, Display, Render, Game, Sound) plus SR's
 // own Experimental tab. The enum names predate the Krunker layout.
@@ -108,7 +108,10 @@ krunker_ui_factor :: proc(settings: HUD_Settings, width, height: f32) -> f32 {
 // the way Krunker zooms its menus.
 menu_ui_zoom :: proc(settings: HUD_Settings) -> f32 {
 	if settings.ui_scaling_off { return 1 }
-	return (2 - UI_SCALE_DEFAULT) / (2 - ui_scale(settings))
+	// Never past the size that fits the window: SR's menus are laid out to fill
+	// a 1600x900 page, so a larger UI Scale (up to Krunker's maximum 1) would push
+	// buttons off screen. Smaller UI Scales still shrink the menus.
+	return min(1, (2 - UI_SCALE_DEFAULT) / (2 - ui_scale(settings)))
 }
 KILL_FEED_DEFAULT_LIMIT :: 8
 KILL_FEED_MAX_LIMIT :: 10
@@ -126,6 +129,7 @@ Settings_Values :: struct {
 	audio_volumes: [4]f32,
 	show_fps: bool,
 	vsync: bool,
+	vulkan: bool, // Graphics API: Vulkan, else OpenGL (applied at the next start)
 	menu_fps_limit: i32, // See MENU_FPS_LIMITS.
 	bindings: Bindings,
 	hud: HUD_Settings,
@@ -178,6 +182,7 @@ View :: struct {
 	monitor_index: i32,
 	monitor_names: []string,
 	vsync: bool,
+	vulkan: bool,
 	menu_fps_limit: i32,
 	bindings: Bindings,
 	hud: HUD_Settings,
@@ -307,7 +312,7 @@ prepare_settings :: proc(state: ^State, view: View) {
 		state.settings_draft = {display_mode = view.display_mode, resolution_index = view.resolution_index, fullscreen_index = view.fullscreen_index,
 			fov = fov_validate(view.fov), sensitivity = view.sensitivity, mouse_dpi = mouse_dpi_validate(view.mouse_dpi), audio_volumes = view.audio_volumes, show_fps = view.show_fps,
 			ads_sensitivity = ads_sensitivity_validate(view.ads_sensitivity, view.sensitivity, view.mouse_dpi), advanced_sensitivity = view.advanced_sensitivity, invert_mouse = view.invert_mouse,
-			monitor_index = view.monitor_index, vsync = view.vsync, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
+			monitor_index = view.monitor_index, vsync = view.vsync, vulkan = view.vulkan, menu_fps_limit = menu_fps_limit_validate(view.menu_fps_limit), bindings = view.bindings, hud = view.hud, visuals = view.visuals, quality = view.quality,
 			viewmodel = viewmodel_settings_validate(view.viewmodel), trails = view.trails, crosshair = crosshair_settings_validate(view.crosshair), hitmarker = hitmarker_settings_validate(view.hitmarker), damage = damage_settings_validate(view.damage)}
 		state.settings_active = true
 	}
@@ -592,8 +597,20 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			settings_reset_tab(&state.settings_draft, state.settings_defaults, state.settings_tab)
 			settings_set_message(state, fmt.tprintf("%s reset to defaults. Save keeps them; Cancel restores your settings.", SETTINGS_TABS[state.settings_tab]), false)
 		} else {
+			// Reset all applies and saves at once: it must work even when a
+			// broken setting (zoom, resolution) hides the Save button.
 			state.settings_draft = state.settings_defaults
-			settings_set_message(state, "All settings reset to defaults. Save keeps them; Cancel restores your settings.", false)
+			state.page, state.focus, state.pressed = .HOME, state.return_focus, 0
+			state.settings_active = false
+			state.scrollbar_dragging = false
+			state.binding_capture, state.settings_dropdown = 0, .NONE
+			state.number_edit = .NONE
+			state.color_edit, state.color_invalid = 0, false
+			state.binding_reserved = false
+			settings_import_close(state)
+			state.settings_message_length = 0
+			state.search_length = 0
+			return {kind = .SETTINGS_SAVE}
 		}
 		return {}
 	}
@@ -701,6 +718,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			state.settings_resolution_selected = true
 			return {}
 		case .VSYNC: state.settings_draft.vsync = !state.settings_draft.vsync; return {}
+		case .GRAPHICS_API: state.settings_draft.vulkan = !state.settings_draft.vulkan; return {}
 		case .MENU_FPS_LIMIT: state.settings_draft.menu_fps_limit = MENU_FPS_LIMITS[clamp(control.action.index, 0, len(MENU_FPS_LIMITS)-1)]; return {}
 		case .DEFAULT_REGION: state.settings_draft.hud.default_region = clamp(control.action.index, 0, len(KRUNKER_REGIONS) - 1) + 1; return {}
 		case .GAME_FPS_LIMIT: state.settings_draft.hud.fps_limit = GAME_FPS_LIMITS[clamp(control.action.index, 0, len(GAME_FPS_LIMITS)-1)]; return {}
@@ -835,7 +853,7 @@ focus_visible :: proc(control: Control, page: Page) {
 		if page == .CLASSES { container = "ClassPicker" }
 	}
 	if page == .HOST { container = "SettingsPanel" }
-	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .UNBIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .MODS_BROWSE || control.action.kind == .MODS_REMOVE || control.action.kind == .MODS_PASTE || control.action.kind == .CROSSHAIR_IMAGE_PASTE || control.action.kind == .CROSSHAIR_IMAGE_CLEAR || control.action.kind == .HITMARKER_IMAGE_PASTE || control.action.kind == .HITMARKER_IMAGE_CLEAR) { container = "SettingsPanel" }
+	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .UNBIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .GRAPHICS_API || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .MODS_BROWSE || control.action.kind == .MODS_REMOVE || control.action.kind == .MODS_PASTE || control.action.kind == .CROSSHAIR_IMAGE_PASTE || control.action.kind == .CROSSHAIR_IMAGE_CLEAR || control.action.kind == .HITMARKER_IMAGE_PASTE || control.action.kind == .HITMARKER_IMAGE_CLEAR) { container = "SettingsPanel" }
 	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .GAME_FPS_LIMIT || control.action.kind == .DEFAULT_REGION || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }

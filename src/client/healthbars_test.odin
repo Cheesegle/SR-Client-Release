@@ -57,9 +57,11 @@ when ODIN_TEST {
 	// Draws with the current nameplate alphas. red_level sums the red channel
 	// of red-dominant pixels, so it scales with the bar's alpha.
 	nameplate_test_draw :: proc(client: ^Client, pixels: []u8) -> (red, green, white, red_level: int) {
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height))
 		player_healthbars_render(client)
+		ui_flush()
 		gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		for i := 0; i < len(pixels); i += 3 {
 			if pixels[i] > 200 && pixels[i+1] < 120 && pixels[i+2] < 120 { red += 1 }
@@ -108,9 +110,6 @@ when ODIN_TEST {
 		enemy.health = 50
 		half_red, same_green := healthbar_test_colors(&client, pixels)
 		testing.expect(t, half_red > red/3 && half_red < red*2/3 && same_green == green, "taking damage must shrink only the affected player's fill")
-		depth: f32
-		gl.GetUniformfv(quad_shader_program, u_quad.depth, &depth)
-		testing.expect(t, depth == 0, "world depth must not leak into later HUD draws")
 		material := basic_material_init()
 		material.unlit, material.no_fog, material.color = true, true, {0.1, 0.1, 0.1, 1}
 		wall := mesh_init(create_cube_geo(), &material.base)

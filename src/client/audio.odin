@@ -31,8 +31,10 @@ Audio_System :: struct {
 	settings: Audio_Settings,
 	listener: Audio_Listener,
 	nodes_ready: bool,
-	serial, hit_revision: u64,
+	serial, hit_revision, kill_revision: u64,
 	variation: u32,
+	damage_cooldown: f32, // Krunker plays takedmg at most once per 500 ms.
+	hrtf_loaded: bool,
 }
 
 audio_weapon_path :: proc(weapon: ^shared.Weapon) -> string {
@@ -71,6 +73,8 @@ audio_create :: proc(weapons: []^shared.Weapon, settings: Audio_Settings, no_dev
 		return nil
 	}
 	audio.samples = make(map[string]^Audio_Sample)
+	audio.hrtf_loaded = hrtf_load()
+	if !audio.hrtf_loaded { fmt.eprintln("[Audio] HRTF table unavailable; positional effects use equal-power panning.") }
 	audio.nodes_ready = true
 	for &voice in audio.voices {
 		if !spatial_node_init(&audio.engine, &voice.node) { audio.nodes_ready = false }
@@ -113,6 +117,7 @@ audio_destroy :: proc(audio: ^Audio_System) {
 	}
 	delete(audio.samples)
 	ma.engine_uninit(&audio.engine)
+	if audio.hrtf_loaded { hrtf_unload() }
 	free(audio)
 }
 
@@ -173,7 +178,7 @@ audio_spatial_params :: proc(listener: Audio_Listener, position: shared.Vec3, re
 // gameplay memory. Voices share decoded samples and have bounded cost.
 audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = .EFFECTS,
 	gain: f32 = 1, position: shared.Vec3 = {}, spatial: bool = false, range: f32 = KRUNKER_MAX_DISTANCE, priority: int = 2,
-	ref_distance: f32 = KRUNKER_REF_DISTANCE) -> bool {
+	ref_distance: f32 = KRUNKER_REF_DISTANCE, rate: f32 = 1) -> bool {
 	if audio == nil || audio.settings.master <= 0 || audio_channel_gain(audio.settings, channel) <= 0 { return false }
 	if spatial && !audio.nodes_ready { return false }
 	if spatial {
@@ -209,6 +214,8 @@ audio_play :: proc(audio: ^Audio_System, path: string, channel: Audio_Channel = 
 	audio.serial += 1
 	voice.serial = audio.serial
 	ma.sound_set_volume(&voice.sound, gain * audio_channel_gain(audio.settings, channel))
+	// Howler's rate(): playback speed, which also shifts the pitch.
+	ma.sound_set_pitch(&voice.sound, rate > 0 ? rate : 1)
 	// A reused voice must not inherit the previous sound's direction or filter
 	// state; the reset flag makes the mixer snap instead of ramping from it.
 	if audio.nodes_ready {
@@ -226,6 +233,6 @@ audio_sample_is_stereo :: proc(sample: ^Audio_Sample) -> bool {
 }
 
 audio_play_effect :: proc(audio: ^Audio_System, name: string, channel: Audio_Channel = .EFFECTS,
-	gain: f32 = 1, position: shared.Vec3 = {}, spatial: bool = false, range: f32 = KRUNKER_MAX_DISTANCE, priority: int = 2) -> bool {
-	return audio_play(audio, fmt.tprintf("%ssound/%s.mp3", shared.assets_path(), name), channel, gain, position, spatial, range, priority)
+	gain: f32 = 1, position: shared.Vec3 = {}, spatial: bool = false, range: f32 = KRUNKER_MAX_DISTANCE, priority: int = 2, rate: f32 = 1) -> bool {
+	return audio_play(audio, fmt.tprintf("%ssound/%s.mp3", shared.assets_path(), name), channel, gain, position, spatial, range, priority, rate = rate)
 }

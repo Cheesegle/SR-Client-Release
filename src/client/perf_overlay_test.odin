@@ -128,10 +128,9 @@ when ODIN_TEST {
 		defer free(client)
 		g_draw_calls = 7
 		perf_overlay_record(client, 16, 4)
-		perf_overlay_gpu_begin(client)
-		perf_gpu_end(&client.perf)
+		client_collect_gpu_times(client)
 		testing.expect(t, client.perf.count == 0 && client.perf.draw_calls == 0, "nothing is recorded while the window is closed")
-		testing.expect(t, client.perf.queries_issued == 0 && client.perf.queries[0] == 0 && !client.perf.query_active, "no GPU timer query exists while closed")
+		testing.expect(t, client.perf.gpu_frames == 0 && !client.perf.gpu_valid, "no GPU time is kept while closed")
 		testing.expect(t, client.debug_ui == nil && debug_ui_render(client) == Debug_UI_Draw_Counts{}, "no microui context or draw while closed")
 		perf_overlay_set(client, true)
 		perf_overlay_record(client, 16, 4)
@@ -402,11 +401,10 @@ when ODIN_TEST {
 			client.mouse_state.locked = true // Display-only: no GLFW input is read.
 			counts: Debug_UI_Draw_Counts
 			for _ in 0..<3 {
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT)
 				ui_update(client.ui, f32(size[0]), f32(size[1]))
-				perf_overlay_gpu_begin(client)
 				testing.expect(t, !debug_ui_update(client), "a locked cursor never feeds the window")
-				perf_gpu_end(&client.perf)
 				counts = debug_ui_render(client)
 			}
 			testing.expectf(t, counts.rects > PERF_GRAPH_FRAMES && counts.texts >= 18 && counts.icons >= 2, "microui commands map to rects, text and icons: %v", counts)
@@ -414,6 +412,7 @@ when ODIN_TEST {
 			testing.expectf(t, counts.min_x >= 0 && counts.min_y >= 0 && counts.max_x <= size[0] && counts.max_y <= size[1], "the window draws within %v: %v", size, counts)
 			testing.expect(t, !gl.IsEnabled(gl.SCISSOR_TEST), "scissor is restored after the window")
 			pixels := make([]u8, int(size[0]*size[1]*3), context.temp_allocator)
+			ui_flush()
 			gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			window_rect := mu.get_container(&client.debug_ui.ctx, DEBUG_WINDOW_TITLE).rect
 			changed, outside := 0, 0
@@ -437,14 +436,17 @@ when ODIN_TEST {
 				testing.expect(t, os.write_entire_file(fmt.tprintf("bin/debug-ui-%dx%d.ppm", size[0], size[1]), file[:]) == nil)
 			}
 		}
-		// GPU timer results arrive a few frames later without stalling.
+		// Frame GPU times (gpu_frame_begin/end) arrive a few frames later.
 		for _ in 0..<12 {
-			perf_overlay_gpu_begin(client)
+			gpu_frame_begin()
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT)
-			perf_gpu_end(&client.perf)
+			gpu_frame_end()
 			gl.Finish()
+			client_collect_gpu_times(client)
 		}
-		testing.expect(t, client.perf.queries_issued > 0 && client.perf.gpu_valid && client.perf.gpu_ms >= 0, "GL_TIME_ELAPSED results are read back")
+		gpu_frames_fini()
+		testing.expect(t, client.perf.gpu_frames > 0 && client.perf.gpu_valid && client.perf.gpu_ms >= 0, "frame GPU times reach the window")
 		testing.expect(t, gl.GetError() == gl.NO_ERROR)
 	}
 }

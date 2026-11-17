@@ -346,7 +346,7 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		}
 	}
 
-	texture_id: u32 = 0
+	texture_id: Gpu_Texture = 0
 	if len(texture_path) > 0 {
 		base_texture_path := ""
 		if prefab_id == int(shared.Prefab.BILLBOARD) {
@@ -612,7 +612,7 @@ model_geometry_variant :: proc(prefab_id, texture_variant: int) -> int {
 // asset pack was built. The browser falls back to the texture's base source
 // when a variant is unavailable; keep that behavior instead of binding the
 // white blank texture and making an entire map surface disappear.
-load_texture_with_fallback :: proc(primary, fallback: string) -> u32 {
+load_texture_with_fallback :: proc(primary, fallback: string) -> Gpu_Texture {
 	has_fallback := len(fallback) > 0 && primary != fallback
 	if has_fallback { shared.asset_trace_optional_begin() }
 	texture_id := load_texture(primary)

@@ -478,6 +478,12 @@ Player :: struct {
 	server_crouch:                   f32,
 	server_crouch_valid:             bool,
 	step_dir_neg:                    bool,
+	// Krunker resetStep: the falling speed of a floor landing this input, for
+	// the landing sound (also when a bhop jumps again in the same tick).
+	land_velocity: f32,
+	// The first pellet's real direction (spread and recoil) of the last hitscan
+	// shot, for the developer hit registration log.
+	last_shot_angles: Vec2,
 	bob_anim:                        Vec3,
 	lean_anim:                       Vec3,
 	recoil:                          Vec3,

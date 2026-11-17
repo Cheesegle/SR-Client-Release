@@ -40,7 +40,7 @@ DEFAULT_QUALITY_SETTINGS :: Quality_Settings{shadows = true, lighting = i32(Ligh
 LIGHTING_LABELS := [Lighting_Quality]string{.LOW = "Low", .NORMAL = "Normal", .HIGH = "High", .PHYSICAL = "Physical"}
 Quality_Toggle :: enum { SHADOWS, SOFT_SHADOWS, HIGH_RES_SHADOWS, DYNAMIC_SHADOWS, SELF_SHADOW }
 
-DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .CONTRAST=1, .SATURATION=1, .AMBIENT=1, .SUNLIGHT=1, .FOG_DISTANCE=1}, colors = {.AMBIENT={1,1,1}, .SUNLIGHT={1,1,1}, .FOG={1,1,1}, .SKY={1,1,1}}, night_strength = DEFAULT_NIGHT_STRENGTH}
+DEFAULT_VISUAL_SETTINGS :: Visual_Settings{values = {.BRIGHTNESS=1, .GAMMA=1, .CONTRAST=1, .SATURATION=1, .AMBIENT=1, .SUNLIGHT=1, .FOG_DISTANCE=1}, colors = {.AMBIENT={1,1,1}, .SUNLIGHT={1,1,1}, .FOG={1,1,1}, .SKY={1,1,1}}, hide_cats = true, hide_extra_props = true, night_strength = DEFAULT_NIGHT_STRENGTH}
 VISUAL_LABELS := #partial [Visual_Control]string{.BRIGHTNESS="Brightness", .GAMMA="Gamma", .CONTRAST="Contrast", .SATURATION="Saturation", .AMBIENT="Ambient strength", .SUNLIGHT="Sunlight strength"}
 VISUAL_LIMITS := [Visual_Control][2]f32{.BRIGHTNESS={0.5,1.5}, .GAMMA={0.5,2}, .CONTRAST={0.5,1.5}, .SATURATION={0,2}, .AMBIENT={0,2}, .SUNLIGHT={0,2}, .FOG_DISTANCE={1,1}}
 ANISOTROPY_LEVELS := [5]i32{0, 2, 4, 8, 16}

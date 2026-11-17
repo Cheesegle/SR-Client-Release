@@ -10,6 +10,9 @@ import shared "../shared"
 Hit_Marker :: struct {
 	active: bool,
 	opacity, spacing, length: f32,
+	// Image hitmarker (Krunker's animateDiv(hitmarker, 350, 100, 105)): shown
+	// for 350 ms at full opacity, fading over the last 100 ms, 105x105.
+	image_life: f32,
 	color: u32,
 	revision: u64, // The last live hit confirmation shown.
 }
@@ -21,14 +24,20 @@ hit_marker_show :: proc(marker: ^Hit_Marker, settings: menuui.Hitmarker_Settings
 	marker.spacing = settings.values[.SPACING]
 	marker.length = settings.values[.LENGTH] * (kill ? 1.2 : 1)
 	marker.color = settings.colors[kill ? .KILL : headshot ? .HEADSHOT : .NORMAL]
+	marker.image_life = HIT_MARKER_IMAGE_LIFE
 }
+
+HIT_MARKER_IMAGE_LIFE :: 0.35
+HIT_MARKER_IMAGE_FADE :: 0.1
+HIT_MARKER_IMAGE_SIZE :: 105
 
 hit_marker_tick :: proc(marker: ^Hit_Marker, settings: menuui.Hitmarker_Settings, delta: f32) {
 	if !marker.active { return }
 	ms := max(delta, 0) * 1000
 	marker.spacing += settings.values[.ANIM_SIZE] * ms
 	marker.opacity = max(marker.opacity - settings.values[.FADE] * ms, 0)
-	if marker.opacity <= 0 { marker.active = false }
+	marker.image_life = max(marker.image_life - max(delta, 0), 0)
+	if marker.opacity <= 0 && (len(settings.image_url) == 0 || marker.image_life <= 0) { marker.active = false }
 }
 
 // The four bars as screen-space quads around (cx, cy). Units are Krunker
@@ -47,15 +56,19 @@ hit_marker_quads :: proc(marker: Hit_Marker, thickness, cx, cy, scale: f32) -> (
 }
 
 hit_marker_render :: proc(ui: ^UI, marker: Hit_Marker, settings: menuui.Hitmarker_Settings, cx, cy, scale: f32) {
-	if !marker.active || marker.opacity <= 0 || scale <= 0 { return }
+	if !marker.active || scale <= 0 { return }
 	if len(settings.image_url) > 0 {
 		if texture := crosshair_image_texture(settings.image_url, &g_hitmarker_image); texture != 0 {
-			// The image covers the bars' extent and grows/fades with them.
-			half := (marker.spacing + marker.length*0.5) * scale
-			ui_draw_image(ui, texture, cx - half, cy - half, half*2, half*2, {1, 1, 1, min(marker.opacity, 1)})
+			// As Krunker: a 105x105 image (Krunker HUD pixels) centered on the
+			// crosshair, full opacity, fading out over its last 100 ms.
+			if marker.image_life <= 0 { return }
+			alpha := min(marker.image_life / HIT_MARKER_IMAGE_FADE, 1)
+			half := HIT_MARKER_IMAGE_SIZE * 0.5 * scale
+			ui_draw_image(ui, texture, cx - half, cy - half, half*2, half*2, {1, 1, 1, alpha})
 			return
 		}
 	}
+	if marker.opacity <= 0 { return }
 	color := shared.hex_to_vec(i32(marker.color))
 	color.a = min(marker.opacity, 1)
 	quads := hit_marker_quads(marker, settings.values[.THICKNESS], cx, cy, scale)

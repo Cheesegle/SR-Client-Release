@@ -13,6 +13,7 @@ Krunker_Hit_Event :: struct { time: f64, sid: i32, headshot, lethal: bool, damag
 Krunker_World_Player :: struct {
 	sid:        i32,
 	name: string,
+	clan: string, // ADD_PLAYERS field 11; "" without a clan.
 	socket_id: string,
 	team:       i32,
 	class_index: i32,
@@ -102,6 +103,9 @@ Krunker_World_State :: struct {
 	sync_received_at, previous_sync_received_at: f64,
 	has_previous_sync: bool,
 	send_rate: f32,
+	// INIT networking data (applyNetworking): "tf" is how often the browser
+	// sends its inputs (tickFrequency, default 30 per second).
+	tick_frequency: f32,
 	received_at: f64,
 	local_sid:   i32,
 	local_socket_id: string,
@@ -140,6 +144,9 @@ Krunker_World_State :: struct {
 	lives: i32,
 	last_hit_at: f64,
 	hit_revision: u64,
+	// GET_KILL ("6"): its kill sound, for a headshot kill's headshot_0.
+	kill_revision: u64,
+	kill_sound_headshot: bool,
 	hit_lethal: bool,
 	hit_headshot: bool,
 	// Recent hit confirmations (4) with their target, for the hit registration log.
@@ -167,7 +174,7 @@ Krunker_World_State :: struct {
 }
 
 krunker_world_reset :: proc(state: ^Krunker_World_State) {
-	for player in state.players { delete(player.name); delete(player.socket_id) }
+	for player in state.players { delete(player.name); delete(player.clan); delete(player.socket_id) }
 	delete(state.players)
 	krunker_lobby_clear(state)
 	delete(state.lobby_players)
@@ -255,7 +262,7 @@ krunker_world_apply_init :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.sync_received_at, state.previous_sync_received_at = 0, 0
 	state.has_previous_sync, state.send_rate = false, 0
 	krunker_world_apply_game_config(state, packet)
-	for player in state.players { delete(player.name); delete(player.socket_id) }
+	for player in state.players { delete(player.name); delete(player.clan); delete(player.socket_id) }
 	clear(&state.players)
 	clear(&state.shots)
 	clear(&state.kills)
@@ -265,6 +272,16 @@ krunker_world_apply_init :: proc(state: ^Krunker_World_State, packet: []Krunker_
 	state.is_comp = false
 	state.is_ranked = false
 	if len(packet) > 3 { state.event_index = krunker_world_i32(packet[3], -1) }
+	state.tick_frequency = 30
+	if len(packet) > 13 {
+		if entries, ok := packet[13].([]Krunker_Msgpack_Map_Entry); ok {
+			for entry in entries {
+				if key, text := entry.key.(string); text && key == "tf" {
+					if n, valid := krunker_world_bounded_number(entry.value, 1, 240); valid { state.tick_frequency = f32(n) }
+				}
+			}
+		}
+	}
 	if len(packet) > 16 { state.is_comp = krunker_world_bool(packet[16]) }
 	if len(packet) > 17 { state.is_ranked = krunker_world_bool(packet[17]) }
 	if len(packet) > 18 { state.session_id = krunker_world_i32(packet[18], 0) }
@@ -317,6 +334,8 @@ krunker_world_apply_add_players :: proc(state: ^Krunker_World_State, packet: []K
 		if sid < 0 { continue }
 		player := krunker_world_upsert_player(state, sid)
 		if name, named := records[offset+5].(string); named && name != player.name { delete(player.name); player.name = strings.clone(name) }
+		clan, _ := records[offset+11].(string)
+		if clan != player.clan { delete(player.clan); player.clan = strings.clone(clan) }
 		if socket_id, ok := records[offset].(string); ok && socket_id == state.local_socket_id && len(socket_id) > 0 { state.local_sid = sid }
 		if socket_id, ok := records[offset].(string); ok && socket_id != player.socket_id { delete(player.socket_id); player.socket_id = strings.clone(socket_id) }
 		player.position = {krunker_world_f32(records[offset + 2]), krunker_world_f32(records[offset + 3]), krunker_world_f32(records[offset + 4])}

@@ -37,6 +37,7 @@ Spatial_Node :: struct {
 	params: Spatial_Params,
 	seen_reset: u32,
 	mix: [4]f32,                 // outL = m0*inL + m1*inR, outR = m2*inL + m3*inR.
+	hrtf: Hrtf_State,            // Positional voices once the HRTF table is loaded.
 	primed: bool,
 }
 
@@ -121,7 +122,8 @@ audio_inverse_distance_gain :: proc "contextless" (distance, ref_distance, rollo
 }
 
 // WebAudio equal-power panning for mono and stereo sources. Rear azimuths are
-// mirrored to the front exactly as the browser does.
+// mirrored to the front exactly as the browser does. Only a fallback: Howler's
+// panner is HRTF (audio_hrtf.odin).
 audio_equal_power_matrix :: proc "contextless" (azimuth: f32, stereo_source: bool) -> [4]f32 {
 	az := clamp(azimuth, -180, 180)
 	if az < -90 { az = -180 - az } else if az > 90 { az = 180 - az }
@@ -155,7 +157,14 @@ spatial_node_process :: proc "c" (base: ^ma.node, frames_in: ^[^]f32, frame_coun
 		if reset != node.seen_reset {
 			node.seen_reset = reset
 			node.mix = spatial_target_matrix(params)
+			// Howler makes a new PannerNode for every play3D: no state carries over.
+			hrtf_reset(&node.hrtf)
+			node.hrtf.gain = params.gain
 		}
+	}
+	if node.params.spatial && g_hrtf.ready {
+		hrtf_process(&node.hrtf, input[:count*2], output[:count*2], count, node.params.azimuth, node.params.elevation, node.params.gain, node.params.stereo_source)
+		return
 	}
 	target := spatial_target_matrix(node.params)
 	if !node.params.spatial && node.mix == target {

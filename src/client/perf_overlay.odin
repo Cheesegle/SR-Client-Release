@@ -1,12 +1,12 @@
 package main
 
-import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 import menuui "../menu"
 
 // Statistics behind the debug performance window (debug_ui.odin). Everything
 // here is fixed-size: recording a frame never allocates, and nothing is
-// recorded and no GPU timer query is issued while the window is closed.
+// recorded while the window is closed. GPU time comes from the frame timing
+// every backend keeps (gpu_frame_begin/end, gpu_frames_take).
 
 // Developer-only tools (this debug window). Release and tester builds leave
 // it false, so the window, its F3 toggle and --perf-overlay are compiled out
@@ -15,7 +15,6 @@ SR_DEV :: #config(SR_DEV, false)
 
 PERF_HISTORY :: 1024 // Frames kept for the time-windowed statistics.
 PERF_GRAPH_FRAMES :: 240 // Frames shown as bars in the graph.
-PERF_GPU_QUERIES :: 4 // GL_TIME_ELAPSED ring; results are read frames later.
 PERF_FPS_WINDOW_MS :: 1000 // Average FPS window.
 PERF_FRAME_WINDOW_MS :: 2000 // Frame-time average and max window.
 PERF_LOW_WINDOW_MS :: 5000 // 1% low window (capped by PERF_HISTORY).
@@ -40,13 +39,9 @@ Perf_Stats :: struct {
 	head, count: int, // head is the next write index.
 	draw_calls: u32, // Draw calls of the last recorded frame.
 	world: Draw_Stats, // World/viewmodel batching and culling stats of that frame.
-	gpu_ms: f32,
+	gpu_ms: f32, // GPU time of the newest finished frame
 	gpu_valid: bool,
-	queries: [PERF_GPU_QUERIES]u32,
-	query_pending: [PERF_GPU_QUERIES]bool,
-	query_next: int,
-	query_active: bool,
-	queries_issued: int, // Total timer queries begun (tests use it).
+	gpu_frames: int, // Finished frames whose GPU time reached the window (tests use it).
 	// Values shown in the window, refreshed every PERF_TEXT_REFRESH_MS.
 	shown: Perf_Summary,
 	shown_gpu_ms: f32,
@@ -225,53 +220,33 @@ perf_level_color :: proc(level: Perf_Level) -> [4]u8 {
 	return {255, 255, 255, 255}
 }
 
-// Begins a GL_TIME_ELAPSED query when the ring has a free slot. Finished
-// results are collected first without waiting, so the pipeline never stalls;
-// when the oldest query is still in flight this frame is simply not timed.
-perf_gpu_begin :: proc(stats: ^Perf_Stats) {
-	if stats.query_active { return }
-	if stats.queries[0] == 0 { gl.GenQueries(PERF_GPU_QUERIES, &stats.queries[0]) }
-	for offset in 0..<PERF_GPU_QUERIES {
-		slot := (stats.query_next + offset) % PERF_GPU_QUERIES
-		if !stats.query_pending[slot] { continue }
-		available: i32
-		gl.GetQueryObjectiv(stats.queries[slot], gl.QUERY_RESULT_AVAILABLE, &available)
-		if available == 0 { break } // Later slots finish later still.
-		elapsed: u64
-		gl.GetQueryObjectui64v(stats.queries[slot], gl.QUERY_RESULT, &elapsed)
-		stats.gpu_ms, stats.gpu_valid = f32(f64(elapsed) / 1e6), true
-		stats.query_pending[slot] = false
-	}
-	if stats.query_pending[stats.query_next] { return }
-	gl.BeginQuery(gl.TIME_ELAPSED, stats.queries[stats.query_next])
-	stats.query_active = true
-	stats.queries_issued += 1
+// GPU times (ms, oldest first) of frames that finished since the last call.
+perf_gpu_record :: proc(stats: ^Perf_Stats, gpu_ms: []f64) {
+	if len(gpu_ms) == 0 { return }
+	stats.gpu_ms, stats.gpu_valid = f32(gpu_ms[len(gpu_ms) - 1]), true
+	stats.gpu_frames += len(gpu_ms)
 }
 
-// No query (and no GL call at all) while the window is closed.
-perf_overlay_gpu_begin :: proc(client: ^Client) {
-	if client.perf_overlay { perf_gpu_begin(&client.perf) }
-}
-
-perf_gpu_end :: proc(stats: ^Perf_Stats) {
-	if !stats.query_active { return }
-	gl.EndQuery(gl.TIME_ELAPSED)
-	stats.query_pending[stats.query_next] = true
-	stats.query_next = (stats.query_next + 1) % PERF_GPU_QUERIES
-	stats.query_active = false
-}
-
-// Forget queries in flight (their results are stale once the window reopens).
+// Forget the last GPU time (stale once the window reopens).
 perf_gpu_reset :: proc(stats: ^Perf_Stats) {
-	if stats.query_active { gl.EndQuery(gl.TIME_ELAPSED); stats.query_active = false }
-	stats.query_pending = {}
 	stats.gpu_valid = false
 }
 
 perf_gpu_fini :: proc(stats: ^Perf_Stats) {
 	perf_gpu_reset(stats)
-	if stats.queries[0] != 0 { gl.DeleteQueries(PERF_GPU_QUERIES, &stats.queries[0]) }
-	stats.queries = {}
+}
+
+// Once per frame, after gpu_frame_end: the debug window shows the newest
+// finished frame's GPU time (the whole frame, debug window included); while it
+// is closed (always, without SR_DEV), the times are discarded.
+client_collect_gpu_times :: proc(client: ^Client) {
+	if client.perf_overlay {
+		times := make([dynamic]f64, context.temp_allocator)
+		gpu_frames_take(&times)
+		perf_gpu_record(&client.perf, times[:])
+		return
+	}
+	gpu_frames_take(nil)
 }
 
 perf_overlay_set :: proc(client: ^Client, enabled: bool) {

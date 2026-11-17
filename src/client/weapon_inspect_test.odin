@@ -66,8 +66,10 @@ when ODIN_TEST {
 				client_update_inspect(&client, down, true, stage==2, stage==1 ? 1 : 0)
 				player_update_meshes(player, false)
 				gl.ClearColor(0, 0, 0, 1)
+				ui_flush()
 				gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 				scene_render(client.fps_scene, &camera, 960, 540)
+				ui_flush()
 				gl.ReadPixels(0, 0, 960, 540, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 				if stage==0 { copy(baseline, pixels) }
 				visible, changed := 0, 0

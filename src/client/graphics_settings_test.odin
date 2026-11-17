@@ -98,7 +98,7 @@ when ODIN_TEST {
 		client_update_graphics(&client)
 		scene_test_pixel(t, scene, &camera, 32,32, {32,32,32})
 		filter: i32
-		gl.GetSamplerParameteriv(client.graphics_sampler, gl.TEXTURE_MIN_FILTER, &filter)
+		gl.GetSamplerParameteriv(u32(client.graphics_sampler), gl.TEXTURE_MIN_FILTER, &filter)
 		testing.expect(t, filter == gl.LINEAR_MIPMAP_LINEAR && !client.quality_settings.smooth_textures, "quality changes must preview without modifying saved settings")
 		scene_render(scene, &camera, 64,64, client.graphics_sampler)
 		bound: i32
@@ -107,7 +107,7 @@ when ODIN_TEST {
 		menuui.activate(&client.menu, {action={kind=.SETTINGS_CANCEL}})
 		client_update_graphics(&client)
 		scene_test_pixel(t, scene, &camera, 32,32, {128,128,128})
-		gl.GetSamplerParameteriv(client.graphics_sampler, gl.TEXTURE_MAG_FILTER, &filter)
+		gl.GetSamplerParameteriv(u32(client.graphics_sampler), gl.TEXTURE_MAG_FILTER, &filter)
 		testing.expect(t, filter == gl.NEAREST, "Cancel must restore sharp filtering")
 		client.visual_settings = menuui.DEFAULT_VISUAL_SETTINGS
 		client.visual_settings.values[.AMBIENT] = 0.5

@@ -2,12 +2,15 @@ package main
 
 import shared "../shared"
 
-// low 4 bytes = VBO, high 4 bytes = EBO
 Geometry :: struct {
-	vao:         u32,
-	vbo:         u32,
-	ebo:         u32,
-	index_count: i32,
+	input:         Gpu_Vertex_Input, // .Basic layout over the two buffers below
+	vertex_buffer: Gpu_Buffer,
+	index_buffer:  Gpu_Buffer,
+	index_count:   i32,
+	// CPU copies of the uploaded data (owned), read when building map batches
+	// so nothing is ever read back from the GPU.
+	vertices:      []Vertex,
+	indices:       []u32,
 	cache_key:   string,
 	ref_count:   u32,
 	last_used:   u64,
@@ -20,7 +23,7 @@ Geometry :: struct {
 }
 
 Texture_Cache_Entry :: struct {
-	id:         u32,
+	id:         Gpu_Texture,
 	width:      i32,
 	height:     i32,
 	cache_key:  string,
@@ -47,27 +50,7 @@ Material :: struct {
 	wireframe:   bool,
 	transparent: bool,
 	no_depth_write: bool,
-	program:     u32,
-}
-
-Quad_Material :: struct {
-	using base: Material,
-	color: shared.Vec4,
-	aspect: f32,
-	border_bottom_left_radius: f32,
-	border_bottom_right_radius: f32,
-	border_top_left_radius: f32,
-	border_top_right_radius: f32,
-	r_clip: f32,
-	stroke_width: f32,
-	texture_viewport: [4]f32,
-	texture: u32,
-}
-
-Text_Material :: struct {
-	using base: Material,
-	color: shared.Vec4,
-	texture: u32,
+	program:     Gpu_Program,
 }
 
 Basic_Material :: struct {
@@ -88,7 +71,7 @@ Basic_Material :: struct {
 	texture_offset: shared.Vec2,
 	base_texture_offset: shared.Vec2,
 	texture_rotation: f32,
-	texture: u32,
+	texture: Gpu_Texture,
 }
 
 Mesh_Transform :: struct {
@@ -182,22 +165,18 @@ Camera :: struct {
 	world_inverse_matrix: shared.Mat4,
 }
 
+// Screen size and scale for the interface; what it draws is queued in
+// g_ui_batch (ui.odin).
 UI :: struct {
-	material:      ^Quad_Material,
-	text_material: ^Text_Material,
-	vao:           u32,
-	vbo:           u32,
-	// Dynamic vertices for ui_fill_polygon.
-	poly_vao:      u32,
-	poly_vbo:      u32,
 	width:         f32,
 	height:        f32,
 	scale:         f32,
-	vignette:      u32, // The damage overlay texture.
+	vignette:      Gpu_Texture, // The damage overlay texture.
 }
 
 Glyph_Cache_Entry :: struct {
-	texture:   u32,
+	atlas:     [2]i32, // top-left texel in the glyph atlas (ui.odin)
+	in_atlas:  bool,   // false for empty glyphs (space)
 	size:      shared.Vec2,
 	h_bearing: shared.Vec2,
 	v_bearing: shared.Vec2,
@@ -228,7 +207,7 @@ Tracer_Marker :: struct {
 // Asset caches (keyed by path)
 g_geometry_cache: map[string]^Geometry
 g_texture_cache:  map[string]^Texture_Cache_Entry
-g_texture_by_id:  map[u32]^Texture_Cache_Entry
+g_texture_by_id:  map[Gpu_Texture]^Texture_Cache_Entry
 g_glyph_caches:   [Font_Slot][256]^Glyph_Cache_Entry // per font, see ui_use_font
 
 g_resource_clock: u64
@@ -241,6 +220,6 @@ g_plane_geometry: ^Geometry
 g_ramp_geometry:  ^Geometry
 g_sphere_geometry: ^Geometry
 
-g_blank_texture:  u32
-g_active_texture: u32
+g_blank_texture:  Gpu_Texture
+g_active_texture: Gpu_Texture
 g_active_shader:  u32

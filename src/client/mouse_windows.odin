@@ -302,6 +302,7 @@ raw_input_thread_window_proc :: proc "system" (hwnd: win.HWND, message: win.UINT
 }
 
 raw_input_thread_main :: proc(data: rawptr) {
+	cpu_pin_current_thread_off_game_core()
 	t := (^Raw_Input_Thread)(data)
 	instance := win.HINSTANCE(win.GetModuleHandleW(nil))
 	class := win.WNDCLASSEXW{

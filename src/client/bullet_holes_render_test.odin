@@ -55,9 +55,11 @@ when ODIN_TEST {
 		testing.expect(t, hole.transform.position.z > -4.5 && hole.transform.position.z < -4.48, "decal must offset along the wall normal")
 		gl.Viewport(0, 0, 320, 240)
 		gl.ClearColor(0.1, 0.1, 0.1, 1)
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		scene_render(client.scene, &client.camera, 320, 240)
 		center: [4]u8
+		ui_flush()
 		gl.ReadPixels(160, 120, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, &center[0])
 		testing.expect(t, center[0] < 100 && center[1] < 100 && center[2] < 100, "wall center must show a dark bullet hole")
 		mesh_update_transform_matrix(hole)

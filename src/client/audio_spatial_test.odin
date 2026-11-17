@@ -87,19 +87,24 @@ when ODIN_TEST {
 				up_l, up_r, ok_up := audio_spatial_play_at(audio, path, p + {0, 10, 0})
 				far_l, far_r, ok_far := audio_spatial_play_at(audio, path, p + forward*100)
 				if !testing.expect(t, ok_front && ok_right && ok_left && ok_back && ok_up && ok_far, label) { continue }
-				testing.expectf(t, right_r > 8*right_l && right_r > 0.05, "%s: right source must sit in the right ear (L %.4f R %.4f)", label, right_l, right_r)
-				testing.expectf(t, left_l > 8*left_r && left_l > 0.05, "%s: left source must sit in the left ear (L %.4f R %.4f)", label, left_l, left_r)
+				// Howler's HRTF panner (IRCAM Composite): at 1 kHz the far ear of a
+				// side source gets about half, a source behind is louder than one in
+				// front, and the measured 1 kHz gains below come from the same table.
+				testing.expectf(t, right_r > 1.8*right_l && right_r > 0.05, "%s: right source must sit in the right ear (L %.4f R %.4f)", label, right_l, right_r)
+				testing.expectf(t, left_l > 1.8*left_r && left_l > 0.05, "%s: left source must sit in the left ear (L %.4f R %.4f)", label, left_l, left_r)
 				testing.expectf(t, abs(front_l - front_r) < 0.05 * (front_l + front_r), "%s: front must be centred (L %.4f R %.4f)", label, front_l, front_r)
 				testing.expectf(t, abs(back_l - back_r) < 0.05 * (back_l + back_r), "%s: behind must be centred (L %.4f R %.4f)", label, back_l, back_r)
 				testing.expectf(t, abs(up_l - up_r) < 0.05 * (up_l + up_r), "%s: above must be centred (L %.4f R %.4f)", label, up_l, up_r)
 				front_energy, back_energy := front_l*front_l + front_r*front_r, back_l*back_l + back_r*back_r
-				testing.expectf(t, abs(back_energy/front_energy - 1) < 0.1, "%s: behind must not be quieter than front with equal-power panning (%.3f)", label, back_energy/front_energy)
+				expected_back := math.pow(0.8412 / 0.5474, 2)
+				// Looking up or down moves both sources off the horizon (other kernels).
+				if pitch == 0 do testing.expectf(t, abs(back_energy/front_energy - expected_back) < 0.1 * expected_back, "%s: behind must sound different from front like Krunker's HRTF (%.3f, want %.3f)", label, back_energy/front_energy, expected_back)
 				// Krunker (Howler PannerNode): inverse model, refDistance 25, rolloff 1.
 				far_ratio := math.sqrt((far_l*far_l + far_r*far_r) / front_energy)
 				testing.expectf(t, abs(far_ratio - 0.25) < 0.02, "%s: 100 units away must follow 25/d (got %.3f)", label, far_ratio)
-				// Near-field level: equal-power centre (cos 45 deg) times Krunker's 3D volume 0.55.
-				expected := 0.5 / math.SQRT_TWO * math.SQRT_TWO / 2 * 0.55
-				testing.expectf(t, abs(front_l - expected) < 0.05 * expected, "%s: front level %.4f must match Krunker's %.4f", label, front_l, expected)
+				// Near-field level: tone RMS x HRTF front gain at 1 kHz x Krunker's 3D volume 0.55.
+				expected := 0.5 / math.SQRT_TWO * 0.5474 * 0.55
+				if pitch == 0 do testing.expectf(t, abs(front_l - expected) < 0.05 * expected, "%s: front level %.4f must match Krunker's %.4f", label, front_l, expected)
 			}
 		}
 	}
@@ -152,8 +157,9 @@ when ODIN_TEST {
 		audio_stop_all(audio)
 		testing.expect(t, audio_play(audio, path, position = {-10, 0, 0}, spatial = true))
 		testing.expect(t, audio.voices[0].serial == serial + 1, "the same voice must be reused")
-		left, right := audio_spatial_measure(audio, 480, 0)
-		testing.expectf(t, right < 0.01 * left, "a reused voice must start at its new position (L %.4f R %.4f)", left, right)
+		// HRTF latency: 256 convolver frames plus the ear delays.
+		left, right := audio_spatial_measure(audio, 480, 480)
+		testing.expectf(t, right < 0.6 * left, "a reused voice must start at its new position (L %.4f R %.4f)", left, right)
 		// Non-spatial voices bypass panning and distance entirely.
 		audio_stop_all(audio)
 		testing.expect(t, audio_play(audio, path))

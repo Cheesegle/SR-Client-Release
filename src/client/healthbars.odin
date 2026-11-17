@@ -83,7 +83,9 @@ player_healthbars_update_visibility :: proc(client: ^Client, now: f32) {
 	client.healthbar_visibility_time = now
 	me := client.me
 	players := client.game.players[:]
-	if me == nil || !me.active {
+	// Krunker keeps drawing plates while you are dead (death cam): only a menu
+	// or the end screen hides them. A dead player's eye is the camera.
+	if me == nil || !me.active && !g_death.active {
 		for player in players { if player != nil && player != me { player_nameplate_reset(player) } }
 		return
 	}
@@ -108,7 +110,7 @@ player_healthbars_update_visibility :: proc(client: ^Client, now: f32) {
 		first = client.healthbar_visibility_cursor % count
 		client.healthbar_visibility_cursor = (first + due_count) % count
 	}
-	eye := player_healthbar_eye(me)
+	eye := me.active ? player_healthbar_eye(me) : client.camera.position
 	for player, index in players {
 		if player == nil || player == me || player.is_you { continue }
 		if !player.active || player.health <= 0 {
@@ -226,7 +228,7 @@ player_healthbars_render :: proc(client: ^Client) {
 	show_bars, show_names := !client.hud_settings.hide_healthbars, !client.hud_settings.hide_nametags
 	colors := menuui.health_colors(client.hud_settings) // Krunker's healthColT / healthColE, read once per frame.
 	if !show_bars && !show_names { return }
-	if !client.in_game || !client.mouse_state.locked || client.me == nil || !client.me.active ||
+	if !client.in_game || !client.mouse_state.locked || client.me == nil || !client.me.active && !g_death.active ||
 		client.ui == nil || len(client.game.players) < 2 ||
 		client.viewport_width <= 0 || client.viewport_height <= 0 { return }
 
@@ -236,7 +238,6 @@ player_healthbars_render :: proc(client: ^Client) {
 	// geometry never cuts a plate. Whether a plate exists at all is decided by
 	// the line-of-sight gate and its fade (`nameplate_alpha`), so draw it whole, untested
 	// against the world depth buffer and on top of the view model.
-	gl.Disable(gl.DEPTH_TEST)
 	view_projection := client.camera.projection_matrix * client.camera.world_inverse_matrix
 	for player in client.game.players {
 		if player == nil || player == client.me || player.is_you || !player.active || player.health <= 0 || player.max_health <= 0 || player.nameplate_alpha <= 0 { continue }

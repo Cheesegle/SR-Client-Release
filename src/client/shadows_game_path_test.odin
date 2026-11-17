@@ -32,6 +32,7 @@ when ODIN_TEST {
 		gl.Viewport(0, 0, GAME_PATH_W, GAME_PATH_H)
 		client_render_world(client)
 		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+		ui_flush()
 		gl.ReadPixels(0, 0, GAME_PATH_W, GAME_PATH_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 
@@ -167,6 +168,7 @@ when ODIN_TEST {
 					client_tick(client, f32(glfw.GetTime()), 1.0 / 60)
 				}
 				gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
+				ui_flush()
 				gl.ReadPixels(0, 0, GAME_PATH_W, GAME_PATH_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 			}
 			tick_off := make([]u8, len(pixels))

@@ -16,6 +16,9 @@ Client_Settings :: struct {
 	advanced_sensitivity, invert_mouse: bool,
 	fov: f32,
 	show_fps, vsync: bool,
+	// Graphics API: false (the default, and files from before the option) is
+	// Vulkan, true OpenGL. Read at startup only.
+	opengl: bool,
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS; 0 (the default) is the monitor's refresh rate.
 	perf_overlay: bool, // The debug performance window (F3).
 	bindings: menuui.Bindings,
@@ -27,10 +30,13 @@ Client_Settings :: struct {
 	crosshair: menuui.Crosshair_Settings,
 	hitmarker: menuui.Hitmarker_Settings,
 	damage: menuui.Damage_Settings,
+	// 0.24: Hide cats and Hide extra props became default on (comp players hide
+	// them). Files saved before that lack this flag and get both turned on once.
+	map_details_hidden_default: bool,
 }
 
 client_settings_defaults :: proc() -> Client_Settings {
-	return {version = 1, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hitmarker = menuui.DEFAULT_HITMARKER_SETTINGS, damage = menuui.DEFAULT_DAMAGE_SETTINGS}
+	return {version = 1, map_details_hidden_default = true, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hitmarker = menuui.DEFAULT_HITMARKER_SETTINGS, damage = menuui.DEFAULT_DAMAGE_SETTINGS}
 }
 
 // The menu draft for a missing settings file, which Settings > Reset restores:
@@ -44,7 +50,7 @@ client_settings_default_values :: proc(fullscreen_sizes: []Display_Resolution = 
 		fov = d.fov, sensitivity = d.sensitivity, mouse_dpi = d.mouse_dpi, ads_sensitivity = d.ads_sensitivity,
 		advanced_sensitivity = d.advanced_sensitivity, invert_mouse = d.invert_mouse,
 		audio_volumes = {audio.master, audio.effects, audio.footsteps, audio.ui},
-		show_fps = d.show_fps, vsync = d.vsync, menu_fps_limit = d.menu_fps_limit, bindings = d.bindings, hud = d.hud,
+		show_fps = d.show_fps, vsync = d.vsync, vulkan = !d.opengl, menu_fps_limit = d.menu_fps_limit, bindings = d.bindings, hud = d.hud,
 		visuals = d.visuals, quality = client_supported_quality(d.quality, max_anisotropy), viewmodel = d.viewmodel, trails = d.trails, crosshair = d.crosshair, hitmarker = d.hitmarker, damage = d.damage}
 }
 
@@ -80,17 +86,22 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 	data, err := os.read_entire_file_from_path(path, context.allocator)
 	if err != nil { return settings }
 	defer delete(data)
+	settings.map_details_hidden_default = false
 	if json.unmarshal(data, &settings) != nil || settings.version != 1 {
 		fmt.eprintln("[Settings] Invalid client preferences; using defaults.")
 		return client_settings_defaults()
+	}
+	if !settings.map_details_hidden_default {
+		settings.visuals.hide_cats, settings.visuals.hide_extra_props = true, true
+		settings.map_details_hidden_default = true
 	}
 	return client_settings_validate(settings)
 }
 
 client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
-	return {version = 1, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
+	return {version = 1, map_details_hidden_default = true, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
 		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
-		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
+		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, opengl = client.opengl, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,
 		visuals = client.visual_settings, quality = client.quality_settings, viewmodel = client.viewmodel_settings, trails = client.trail_settings, crosshair = client.crosshair_settings, hitmarker = client.hitmarker_settings, damage = client.damage_settings}
 }

@@ -451,15 +451,14 @@ debug_ui_render :: proc(client: ^Client) -> (counts: Debug_UI_Draw_Counts) {
 			counts.clips += 1
 			clip = c.rect
 			if c.rect.w >= mu.unclipped_rect.w {
-				gl.Disable(gl.SCISSOR_TEST)
+				ui_clip_clear(ui)
 			} else {
-				gl.Enable(gl.SCISSOR_TEST)
-				menu_scissor(ui, clay.BoundingBox{f32(c.rect.x), f32(c.rect.y), f32(c.rect.w), f32(c.rect.h)})
+				ui_clip_set(ui, clay.BoundingBox{f32(c.rect.x), f32(c.rect.y), f32(c.rect.w), f32(c.rect.h)})
 			}
 		case ^mu.Command_Jump:
 		}
 	}
-	gl.Disable(gl.SCISSOR_TEST)
+	ui_clip_clear(ui)
 	return
 }
 

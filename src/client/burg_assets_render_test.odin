@@ -51,7 +51,7 @@ when ODIN_TEST {
 			mesh := cast(^Mesh)object.mesh
 			testing.expect(t, mesh.geometry != nil && mesh.geometry.index_count > 0, "hosted models need triangles")
 			material := cast(^Basic_Material)mesh.material
-			gl.BindTexture(gl.TEXTURE_2D, material.texture)
+			gl.BindTexture(gl.TEXTURE_2D, u32(material.texture))
 			width: i32
 			gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_WIDTH, &width)
 			testing.expect(t, material.texture != 0 && (width > 1 || aid == "27432g"), "hosted models must use original images rather than the white fallback")
@@ -63,13 +63,9 @@ when ODIN_TEST {
 			case "27432g":
 				foliage += 1
 				testing.expect(t, mesh.geometry.index_count == 270, "static foliage must preserve all glTF triangles")
-				vertices := make([]Vertex, int(mesh.geometry.index_count))
-				gl.BindBuffer(gl.ARRAY_BUFFER, mesh.geometry.vbo)
-				gl.GetBufferSubData(gl.ARRAY_BUFFER, 0, len(vertices)*size_of(Vertex), raw_data(vertices))
 				min_y: f32 = 1000
-				for vertex in vertices do min_y = min(min_y, vertex.position.y)
+				for vertex in mesh.geometry.vertices do min_y = min(min_y, vertex.position.y)
 				testing.expect(t, abs(min_y - (-0.1519973)) < 0.00001, "glTF foliage must retain its authored vertical origin")
-				delete(vertices)
 			}
 		}
 		testing.expect(t, custom == 93 && trees == 17 && windows == 46 && foliage == 8, "every Burg hosted asset must be present")
@@ -88,9 +84,11 @@ when ODIN_TEST {
 					(cast(^Mesh)object.mesh).visible = pass == 1
 				}
 			}
+			ui_flush()
 			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 			scene_render(client.scene, &camera, f32(w), f32(h))
 			pixels := before if pass == 0 else after
+			ui_flush()
 			gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 		}
 		changed := 0

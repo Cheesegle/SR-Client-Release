@@ -29,6 +29,7 @@ Round_Hud :: struct {
 	popup_title, popup_sub: string,
 	sounds: ^thread.Thread,
 	sounds_done: bool, // atomic
+	sounds_applied: bool,
 }
 
 g_round: Round_Hud
@@ -100,12 +101,43 @@ round_hud_render :: proc(client: ^Client) {
 
 ROUND_SOUND_HOSTS := [?]string{"https://assets.krunker.io/sound/", "https://krunker.io/sound/"}
 
+// Krunker's own sound files that SR Client plays. Downloaded once from
+// Krunker's asset host (as the browser loads them) and refreshed when this
+// list's version changes, so SR always plays Krunker's real sounds (older
+// game-file packages had placeholders, e.g. crit_0 identical to hit_0).
+KRUNKER_SOUNDS_VERSION :: "1"
+KRUNKER_SOUNDS_REFRESH := [?]string{
+	"hit_0", "crit_0", "headshot_0", "jump_0", "jump_1", "step_0", "step_1",
+	"slide_0", "takedmg_0", "takedmg_1", "whizz_0", "whizz_1", "reload_1", "reload_2",
+}
+
+Krunker_Sound_Job :: struct {
+	directory: string,
+	refresh: bool, // the version marker is old: fetch every refresh sound again
+}
+
 round_sounds_start :: proc() {
-	missing := false
-	for n in 1..=5 { if !os.exists(fmt.tprintf("%ssound/cntd_%d.mp3", shared.assets_path(), n)) { missing = true } }
+	directory := fmt.tprintf("%ssound/", shared.assets_path())
+	marker, _ := os.read_entire_file_from_path(fmt.tprintf("%s.krunker-sounds", directory), context.temp_allocator)
+	refresh := string(marker) != KRUNKER_SOUNDS_VERSION
+	missing := refresh
+	for n in 1..=5 { if !os.exists(fmt.tprintf("%scntd_%d.mp3", directory, n)) { missing = true } }
 	if !missing { return }
-	directory := strings.clone(fmt.tprintf("%ssound/", shared.assets_path()))
-	g_round.sounds = thread.create_and_start_with_poly_data(directory, round_sounds_run)
+	job := new(Krunker_Sound_Job)
+	job^ = {strings.clone(directory), refresh}
+	g_round.sounds = thread.create_and_start_with_poly_data(job, round_sounds_run)
+}
+
+// After the background download: swap freshly downloaded sounds into the
+// running mixer (main thread, once).
+round_sounds_tick :: proc(client: ^Client) {
+	if g_round.sounds == nil || !sync.atomic_load(&g_round.sounds_done) || g_round.sounds_applied { return }
+	g_round.sounds_applied = true
+	if client.audio == nil { return }
+	for name in KRUNKER_SOUNDS_REFRESH {
+		key := fmt.tprintf("%ssound/%s.mp3", shared.assets_path(), name)
+		if sample, ok := client.audio.samples[key]; ok { audio_reload_sample(client.audio, key, sample) }
+	}
 }
 
 // At exit: a finished download thread is cleaned up; a running one is left
@@ -125,37 +157,56 @@ round_sound_write :: proc "c" (buffer: [^]byte, size, count: c.size_t, output: r
 }
 
 @(private = "file")
-round_sounds_run :: proc(directory: string) {
-	defer delete(directory)
+round_sounds_download :: proc(url, path: string) -> bool {
+	for host in ROUND_SOUND_HOSTS {
+		handle := curl.easy_init()
+		if handle == nil { return false }
+		data: [dynamic]byte
+		curl.easy_setopt(handle, .URL, strings.clone_to_cstring(fmt.tprintf("%s%s", host, url), context.temp_allocator))
+		curl.easy_setopt(handle, .FOLLOWLOCATION, c.long(1))
+		curl.easy_setopt(handle, .CONNECTTIMEOUT_MS, c.long(8000))
+		curl.easy_setopt(handle, .TIMEOUT_MS, c.long(20000))
+		curl.easy_setopt(handle, .USERAGENT, cstring("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"))
+		curl.easy_setopt(handle, .REFERER, cstring("https://krunker.io/"))
+		curl.easy_setopt(handle, .WRITEFUNCTION, curl.write_callback(round_sound_write))
+		curl.easy_setopt(handle, .WRITEDATA, rawptr(&data))
+		code := curl.easy_perform(handle)
+		status: c.long
+		curl.easy_getinfo(handle, .RESPONSE_CODE, &status)
+		curl.easy_cleanup(handle)
+		// An MP3 starts with an ID3 tag or a frame sync; anything else is an error page.
+		is_mp3 := len(data) > 128 && (string(data[:3]) == "ID3" || (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0))
+		// Write beside, then replace: a failed download keeps the old file.
+		saved := false
+		if code == .E_OK && status == 200 && is_mp3 {
+			temp := fmt.tprintf("%s.part", path)
+			if os.write_entire_file(temp, data[:]) == nil {
+				_ = os.remove(path)
+				saved = os.rename(temp, path) == nil
+			}
+		}
+		delete(data)
+		if saved { return true }
+	}
+	return false
+}
+
+@(private = "file")
+round_sounds_run :: proc(job: ^Krunker_Sound_Job) {
+	defer { delete(job.directory); free(job) }
 	defer sync.atomic_store(&g_round.sounds_done, true)
 	if curl.global_init(curl.GLOBAL_DEFAULT) != .E_OK { return }
 	defer curl.global_cleanup()
 	for n in 1..=5 {
-		path := fmt.tprintf("%scntd_%d.mp3", directory, n)
-		if os.exists(path) { continue }
-		for host in ROUND_SOUND_HOSTS {
-			handle := curl.easy_init()
-			if handle == nil { return }
-			data: [dynamic]byte
-			url := strings.clone_to_cstring(fmt.tprintf("%scntd_%d.mp3", host, n), context.temp_allocator)
-			curl.easy_setopt(handle, .URL, url)
-			curl.easy_setopt(handle, .FOLLOWLOCATION, c.long(1))
-			curl.easy_setopt(handle, .CONNECTTIMEOUT_MS, c.long(8000))
-			curl.easy_setopt(handle, .TIMEOUT_MS, c.long(20000))
-			curl.easy_setopt(handle, .USERAGENT, cstring("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"))
-			curl.easy_setopt(handle, .REFERER, cstring("https://krunker.io/"))
-			curl.easy_setopt(handle, .WRITEFUNCTION, curl.write_callback(round_sound_write))
-			curl.easy_setopt(handle, .WRITEDATA, rawptr(&data))
-			code := curl.easy_perform(handle)
-			status: c.long
-			curl.easy_getinfo(handle, .RESPONSE_CODE, &status)
-			curl.easy_cleanup(handle)
-			// An MP3 starts with an ID3 tag or a frame sync; anything else is an error page.
-			is_mp3 := len(data) > 128 && (string(data[:3]) == "ID3" || (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0))
-			saved := code == .E_OK && status == 200 && is_mp3 && os.write_entire_file(path, data[:]) == nil
-			delete(data)
-			if saved { break }
-		}
+		path := fmt.tprintf("%scntd_%d.mp3", job.directory, n)
+		if !os.exists(path) { round_sounds_download(fmt.tprintf("cntd_%d.mp3", n), path) }
 		free_all(context.temp_allocator)
 	}
+	if !job.refresh { return }
+	all := true
+	for name in KRUNKER_SOUNDS_REFRESH {
+		if !round_sounds_download(fmt.tprintf("%s.mp3", name), fmt.tprintf("%s%s.mp3", job.directory, name)) { all = false }
+		free_all(context.temp_allocator)
+	}
+	if all { _ = os.write_entire_file(fmt.tprintf("%s.krunker-sounds", job.directory), transmute([]byte)string(KRUNKER_SOUNDS_VERSION)) }
 }

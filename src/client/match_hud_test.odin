@@ -10,9 +10,11 @@ import shared "../shared"
 
 when ODIN_TEST {
 	match_hud_snapshot :: proc(client: ^Client, pixels: []u8) {
+		ui_flush()
 		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 		ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 		overlay_render(client, 0)
+		ui_flush()
 		gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
 	}
 	// Regions are in Krunker CSS pixels (the HUD's UI Scale factor).
