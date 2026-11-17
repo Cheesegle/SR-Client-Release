@@ -153,6 +153,10 @@ test_network_log_errors_only :: proc() -> bool {
 		fmt.eprintf("A problem must be written with the lines before it, and nothing routine after it: %q\n", text)
 		return false
 	}
+	if krunker.network_log_is_problem("world-player", "LOCAL READY sid=1 class=0 team=1") || !krunker.network_log_is_problem("world-player", "ERROR player allocation failed") {
+		fmt.eprintln("A normal spawn must not count as a problem; a world-player ERROR must")
+		return false
+	}
 	if !krunker.network_log_is_problem("spawn", "entry rejected; server_args=[]") || !krunker.network_log_is_problem("ws-recv", "ERROR curl=x") || krunker.network_log_is_problem("game-list", "response body bytes=47147 limit_exceeded=false") {
 		fmt.eprintln("network_log_is_problem misclassified a line")
 		return false

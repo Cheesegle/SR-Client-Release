@@ -3,6 +3,7 @@ package krunker
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:sync"
 import "core:time"
 
 NETWORK_LOG_PATH :: "logs/krunker-network.log"
@@ -117,12 +118,14 @@ network_log_everything := NETWORK_LOG_EVERYTHING_DEFAULT
 NETWORK_LOG_CONTEXT :: 48
 network_log_ring: [NETWORK_LOG_CONTEXT]string
 network_log_ring_next, network_log_ring_count: int
+// network_log is called from the game thread and the network thread.
+network_log_mutex: sync.Mutex
 
 // A line worth writing in normal builds: errors, failures, rejections, server
 // errors and HTTP failures. Plain progress lines ("HTTP=200 ... No error",
 // "limit_exceeded=false") are not.
 network_log_is_problem :: proc(stage, message: string) -> bool {
-	if stage == "server-error" || stage == "world-player" { return true }
+	if stage == "server-error" { return true }
 	if strings.has_prefix(message, "ERROR") || strings.has_prefix(message, "WARNING") { return true }
 	if strings.has_prefix(message, "HTTP=") {
 		status := message[5:]
@@ -152,6 +155,8 @@ network_log :: proc(stage, message: string) {
 		network_log_console = found && flag == "1"
 	}
 	if network_log_console do fmt.print(line)
+	sync.mutex_lock(&network_log_mutex)
+	defer sync.mutex_unlock(&network_log_mutex)
 	if !network_log_everything {
 		if !network_log_is_problem(stage, safe) {
 			delete(network_log_ring[network_log_ring_next])
@@ -182,13 +187,20 @@ network_log_write :: proc(line: string) {
 		_, write_err := os.write_string(network_log_file, line)
 		if write_err == nil do return
 		// Reopen on the next line, as before when every line reopened the file.
-		network_log_close()
+		network_log_close_unlocked()
 	}
 	if !network_log_console do fmt.print(line)
 	if !network_log_file_warning { fmt.eprintln("[Krunker] Could not write logs/krunker-network.log; diagnostics continue on console."); network_log_file_warning = true }
 }
 
 network_log_close :: proc() {
+	sync.mutex_lock(&network_log_mutex)
+	defer sync.mutex_unlock(&network_log_mutex)
+	network_log_close_unlocked()
+}
+
+@(private = "file")
+network_log_close_unlocked :: proc() {
 	if network_log_file != nil { os.close(network_log_file) }
 	network_log_file = nil
 }
