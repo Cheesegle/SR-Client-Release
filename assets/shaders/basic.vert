@@ -105,6 +105,17 @@ layout (std430, BINDING_OBJECTS) readonly buffer Batch_Objects {
     vec4 objects[];
 };
 #define OBJECT(slot) objects[object_base + (slot)]
+#elif defined(VULKAN)
+// This draw's object (one Batch_Object) in the frame's uniform ring, which
+// stays bound for the whole frame; the draw passes its vec4 index as a push
+// constant instead of rebinding a descriptor set per draw.
+layout (std430, BINDING_DRAW) readonly buffer Draw_Ring {
+    vec4 draw_ring[];
+};
+layout (push_constant) uniform Draw_Index {
+    uint draw_vec4;
+};
+#define OBJECT(slot) draw_ring[draw_vec4 + (slot)]
 #else
 // This draw's object (one Batch_Object).
 layout (std140, BINDING_DRAW) uniform Draw {

@@ -30,6 +30,7 @@ import "core:os"
 import "core:strconv"
 import "core:strings"
 import "core:sync"
+import "core:time"
 import glfw "vendor:glfw"
 import vk "vendor:vulkan"
 
@@ -203,11 +204,23 @@ Vk_Input :: struct {
 }
 
 @(private = "file")
+// Cull mode and the depth test, write and compare op are dynamic state
+// (core in Vulkan 1.3), so a program needs one pipeline per blend /
+// wireframe / pass kind instead of one per draw-state combination.
 Vk_Pipeline_Key :: struct {
 	program:    Gpu_Program,
-	state:      Gpu_Draw_State,
+	blend:      bool,
+	wireframe:  bool,
 	depth_only: bool,
-	cull_front: bool,
+}
+
+// The dynamic state last set in the frame's command buffer.
+@(private = "file")
+Vk_Dynamic_State :: struct {
+	valid:       bool,
+	cull_front:  bool,
+	depth_test:  Gpu_Depth_Test,
+	depth_write: bool,
 }
 
 @(private = "file")
@@ -235,6 +248,11 @@ g_vk_stats: struct {
 	sync_uploads: int, // uploads that could not join a frame (inside a shadow pass)
 	readbacks:    int, // gpu_read_* (tests, benchmark, startup self-test)
 	draw_time_pipelines: int, // pipelines compiled at a draw (not precreated)
+	present_waits:    int, // frames that waited for an earlier present (vsync on)
+	present_wait_ms:  f64, // total time spent in those waits
+	set0_binds:       int, // descriptor set 0 binds (per pass, not per draw)
+	barriers:         int, // image layout barriers recorded (vk_transition)
+	barriers_skipped: int, // transitions that needed none (already in a read-only layout)
 }
 
 @(private = "file")
@@ -266,6 +284,13 @@ Vk_Swapchain :: struct {
 	vsync:       bool,
 	dirty:       bool, // recreate before the next frame
 	target:      Gpu_Render_Target,
+	// VK_KHR_present_id + VK_KHR_present_wait: every present carries an
+	// increasing id; with vsync on, a frame starts only once the frame before
+	// the last one is on screen, so at most one frame waits for the display
+	// (FIFO would otherwise queue several, each a refresh of input latency).
+	present_wait: bool,
+	present_id:   u64, // id of the last present
+	first_id:     u64, // first id presented on the current swapchain
 }
 
 @(private = "file")
@@ -339,7 +364,8 @@ Vk_State :: struct {
 	player_texture:   Gpu_Texture,
 	objects:          Gpu_Buffer,
 	pass_offset:      u32,
-	draw_offset:      u32,
+	draw_vec4:        u32, // the draw block's index in the frame's ring, in vec4s
+	pushed_draw_vec4: u32, // the value the command buffer has (max(u32): none yet)
 	// gpu_transient_bind's data, in place of `input` while active.
 	transient_active: bool,
 	transient_offsets: [2]vk.DeviceSize, // vertices, indices
@@ -352,6 +378,7 @@ Vk_State :: struct {
 	pass_cull_front:  bool,
 	depth_pass_target: Gpu_Render_Target,
 	bound_pipeline:   vk.Pipeline,
+	dyn_state:        Vk_Dynamic_State,
 	set0:             vk.DescriptorSet,
 	set0_dirty:       bool,
 	bound_set0:       vk.DescriptorSet,
@@ -563,10 +590,21 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	enable.features.fillModeNonSolid = b32(g_vk.wireframe)
 	priority: f32 = 1
 	queue_info := vk.DeviceQueueCreateInfo{sType = .DEVICE_QUEUE_CREATE_INFO, queueFamilyIndex = g_vk.queue_family, queueCount = 1, pQueuePriorities = &priority}
-	device_extensions := [1]cstring{vk.KHR_SWAPCHAIN_EXTENSION_NAME}
+	device_extensions := make([dynamic]cstring, context.temp_allocator)
+	enable_present_id := vk.PhysicalDevicePresentIdFeaturesKHR{sType = .PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR, presentId = true}
+	enable_present_wait := vk.PhysicalDevicePresentWaitFeaturesKHR{sType = .PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR, pNext = &enable_present_id, presentWait = true}
+	if window != nil {
+		append(&device_extensions, vk.KHR_SWAPCHAIN_EXTENSION_NAME)
+		if vk_present_wait_supported(g_vk.physical) {
+			append(&device_extensions, vk.KHR_PRESENT_ID_EXTENSION_NAME, vk.KHR_PRESENT_WAIT_EXTENSION_NAME)
+			enable_present_id.pNext = enable.pNext
+			enable.pNext = &enable_present_wait
+			g_vk.present.present_wait = true
+		}
+	}
 	device_info := vk.DeviceCreateInfo{
 		sType = .DEVICE_CREATE_INFO, pNext = &enable, queueCreateInfoCount = 1, pQueueCreateInfos = &queue_info,
-		enabledExtensionCount = window != nil ? 1 : 0, ppEnabledExtensionNames = &device_extensions[0],
+		enabledExtensionCount = u32(len(device_extensions)), ppEnabledExtensionNames = raw_data(device_extensions),
 	}
 	if !vk_ok(vk.CreateDevice(g_vk.physical, &device_info, nil, &g_vk.device), "vkCreateDevice") { return false }
 	vk.load_proc_addresses_device(g_vk.device)
@@ -581,7 +619,8 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	fence_info := vk.FenceCreateInfo{sType = .FENCE_CREATE_INFO}
 	vk.CreateFence(g_vk.device, &fence_info, nil, &g_vk.upload_fence)
 	frame_pool_sizes := [?]vk.DescriptorPoolSize{
-		{type = .UNIFORM_BUFFER_DYNAMIC, descriptorCount = 2 * VK_FRAME_SETS},
+		{type = .UNIFORM_BUFFER_DYNAMIC, descriptorCount = VK_FRAME_SETS},
+		{type = .STORAGE_BUFFER_DYNAMIC, descriptorCount = VK_FRAME_SETS},
 		{type = .STORAGE_BUFFER, descriptorCount = VK_FRAME_SETS},
 		{type = .COMBINED_IMAGE_SAMPLER, descriptorCount = 2 * VK_FRAME_SETS},
 	}
@@ -598,7 +637,9 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 
 	set0_bindings := [?]vk.DescriptorSetLayoutBinding{
 		{binding = 0, descriptorType = .UNIFORM_BUFFER_DYNAMIC, descriptorCount = 1, stageFlags = {.VERTEX, .FRAGMENT}},
-		{binding = 1, descriptorType = .UNIFORM_BUFFER_DYNAMIC, descriptorCount = 1, stageFlags = {.VERTEX, .FRAGMENT}},
+		// Per-draw data: the frame's whole uniform ring, read at the vec4
+		// index the draw passes as a push constant (vk_gpu_draw_indexed).
+		{binding = 1, descriptorType = .STORAGE_BUFFER_DYNAMIC, descriptorCount = 1, stageFlags = {.VERTEX}},
 		{binding = 2, descriptorType = .STORAGE_BUFFER, descriptorCount = 1, stageFlags = {.VERTEX}},
 		{binding = 4, descriptorType = .COMBINED_IMAGE_SAMPLER, descriptorCount = 1, stageFlags = {.FRAGMENT}},
 		{binding = 5, descriptorType = .COMBINED_IMAGE_SAMPLER, descriptorCount = 1, stageFlags = {.FRAGMENT}},
@@ -609,7 +650,8 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	layout_info = {sType = .DESCRIPTOR_SET_LAYOUT_CREATE_INFO, bindingCount = 1, pBindings = &set1_binding}
 	vk.CreateDescriptorSetLayout(g_vk.device, &layout_info, nil, &g_vk.set1_layout)
 	set_layouts := [2]vk.DescriptorSetLayout{g_vk.set0_layout, g_vk.set1_layout}
-	pl := vk.PipelineLayoutCreateInfo{sType = .PIPELINE_LAYOUT_CREATE_INFO, setLayoutCount = 2, pSetLayouts = &set_layouts[0]}
+	draw_index := vk.PushConstantRange{stageFlags = {.VERTEX}, offset = 0, size = size_of(u32)}
+	pl := vk.PipelineLayoutCreateInfo{sType = .PIPELINE_LAYOUT_CREATE_INFO, setLayoutCount = 2, pSetLayouts = &set_layouts[0], pushConstantRangeCount = 1, pPushConstantRanges = &draw_index}
 	vk.CreatePipelineLayout(g_vk.device, &pl, nil, &g_vk.pipeline_layout)
 	texture_pool_size := vk.DescriptorPoolSize{type = .COMBINED_IMAGE_SAMPLER, descriptorCount = VK_TEXTURE_SETS}
 	tp := vk.DescriptorPoolCreateInfo{sType = .DESCRIPTOR_POOL_CREATE_INFO, flags = {.FREE_DESCRIPTOR_SET}, maxSets = VK_TEXTURE_SETS, poolSizeCount = 1, pPoolSizes = &texture_pool_size}
@@ -623,7 +665,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 	}
 
 	g_vk.ring_align = max(int(g_vk.props.limits.minUniformBufferOffsetAlignment), 16)
-	g_vk.ring = vk_buffer_make(VK_UNIFORM_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.UNIFORM_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
+	g_vk.ring = vk_buffer_make(VK_UNIFORM_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.UNIFORM_BUFFER, .STORAGE_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.dummy_storage = vk_buffer_make(256, {.STORAGE_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.transient = vk_buffer_make(VK_TRANSIENT_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.VERTEX_BUFFER, .INDEX_BUFFER}, {.HOST_VISIBLE, .HOST_COHERENT})
 	g_vk.staging = vk_buffer_make(VK_STAGING_RING_PER_FRAME * GPU_FRAMES_IN_FLIGHT, {.TRANSFER_SRC}, {.HOST_VISIBLE, .HOST_COHERENT})
@@ -669,6 +711,10 @@ gpu_vk_fini :: proc() {
 	vk_release_retired(all = true)
 	fmt.printfln("[Vulkan] GPU waits this run: %d device idle (resizes, shutdown), %d synchronous uploads, %d readbacks; %d pipelines compiled at a draw",
 		g_vk_stats.idle_waits, g_vk_stats.sync_uploads, g_vk_stats.readbacks, g_vk_stats.draw_time_pipelines)
+	fmt.printfln("[Vulkan] Image barriers: %d recorded, %d transitions needed none; %d set 0 binds", g_vk_stats.barriers, g_vk_stats.barriers_skipped, g_vk_stats.set0_binds)
+	if g_vk_stats.present_waits > 0 {
+		fmt.printfln("[Vulkan] Present waits (vsync): %d frames, %.1f ms on average", g_vk_stats.present_waits, g_vk_stats.present_wait_ms / f64(g_vk_stats.present_waits))
+	}
 	for _, pipeline in g_vk.pipelines { vk.DestroyPipeline(device, pipeline, nil) }
 	for _, sampler in g_vk.samplers { vk.DestroySampler(device, sampler, nil) }
 	vk_buffer_free(&g_vk.ring)
@@ -953,11 +999,14 @@ vk_upload_end :: proc(up: ^Vk_Upload) {
 		g_vk_stats.sync_uploads += 1
 		return
 	}
-	// Transfer writes before any later use (vertex input, shaders, transfers).
+	// Transfer writes before every later use of a buffer: vertex and index
+	// fetch, the batched objects' storage buffer (vertex shader), uniforms and
+	// later copies. Images uploaded here also get their own layout barrier.
 	barrier := vk.MemoryBarrier2{
 		sType = .MEMORY_BARRIER_2,
 		srcStageMask = {.ALL_TRANSFER}, srcAccessMask = {.TRANSFER_WRITE},
-		dstStageMask = {.ALL_COMMANDS}, dstAccessMask = {.MEMORY_READ, .MEMORY_WRITE},
+		dstStageMask = {.VERTEX_ATTRIBUTE_INPUT, .INDEX_INPUT, .VERTEX_SHADER, .FRAGMENT_SHADER, .ALL_TRANSFER},
+		dstAccessMask = {.VERTEX_ATTRIBUTE_READ, .INDEX_READ, .SHADER_STORAGE_READ, .UNIFORM_READ, .TRANSFER_READ, .TRANSFER_WRITE},
 	}
 	dep := vk.DependencyInfo{sType = .DEPENDENCY_INFO, memoryBarrierCount = 1, pMemoryBarriers = &barrier}
 	vk.CmdPipelineBarrier2(up.cmd, &dep)
@@ -1095,18 +1144,62 @@ vk_image_free :: proc(img: ^Vk_Image) {
 	img^ = {}
 }
 
-// Moves layers [first, first+count) (all mips) to `layout`. Conservative
-// (all commands) synchronisation: a handful of barriers per frame.
+// Where and how the renderer uses an image in each layout it puts images in:
+// the stages and accesses a barrier has to wait for (leaving the layout) or
+// make the image ready for (entering it). `writes` is the write part of
+// `access`; a layout used read-only needs only an execution dependency.
+@(private = "file")
+Vk_Layout_Use :: struct {
+	stages: vk.PipelineStageFlags2,
+	access: vk.AccessFlags2,
+	writes: vk.AccessFlags2,
+}
+
+@(private = "file")
+vk_layout_use :: proc(layout: vk.ImageLayout) -> Vk_Layout_Use {
+	#partial switch layout {
+	case .UNDEFINED:
+		return {}
+	case .TRANSFER_DST_OPTIMAL:
+		return {stages = {.ALL_TRANSFER}, access = {.TRANSFER_WRITE}, writes = {.TRANSFER_WRITE}}
+	case .TRANSFER_SRC_OPTIMAL:
+		return {stages = {.ALL_TRANSFER}, access = {.TRANSFER_READ}}
+	case .SHADER_READ_ONLY_OPTIMAL:
+		// Every sampled image (textures, glyphs, shadow maps) is read by
+		// fragment shaders only.
+		return {stages = {.FRAGMENT_SHADER}, access = {.SHADER_SAMPLED_READ}}
+	case .COLOR_ATTACHMENT_OPTIMAL:
+		// Load ops and blending read the attachment, stores write it.
+		return {stages = {.COLOR_ATTACHMENT_OUTPUT}, access = {.COLOR_ATTACHMENT_READ, .COLOR_ATTACHMENT_WRITE}, writes = {.COLOR_ATTACHMENT_WRITE}}
+	case .DEPTH_ATTACHMENT_OPTIMAL:
+		return {
+			stages = {.EARLY_FRAGMENT_TESTS, .LATE_FRAGMENT_TESTS},
+			access = {.DEPTH_STENCIL_ATTACHMENT_READ, .DEPTH_STENCIL_ATTACHMENT_WRITE},
+			writes = {.DEPTH_STENCIL_ATTACHMENT_WRITE},
+		}
+	}
+	return {stages = {.ALL_COMMANDS}, access = {.MEMORY_READ, .MEMORY_WRITE}, writes = {.MEMORY_WRITE}}
+}
+
+// Moves layers [first, first+count) (all mips) to `layout`, waiting only for
+// the stages that used the old layout and blocking only the ones that use the
+// new one. A layer already in `layout` gets no barrier when that layout is
+// read-only (sampling after sampling); attachments and transfer destinations
+// keep one, since the next pass or copy must see the previous one's writes.
 @(private = "file")
 vk_transition :: proc(cmd: vk.CommandBuffer, img: ^Vk_Image, first, count: u32, layout: vk.ImageLayout) {
 	barriers: [VK_MAX_LAYERS]vk.ImageMemoryBarrier2
 	n: u32
+	to := vk_layout_use(layout)
 	for layer in first ..< first + count {
+		old := img.layouts[layer]
+		from := vk_layout_use(old)
+		if old == layout && from.writes == {} { continue }
 		barriers[n] = vk.ImageMemoryBarrier2{
 			sType = .IMAGE_MEMORY_BARRIER_2,
-			srcStageMask = {.ALL_COMMANDS}, srcAccessMask = {.MEMORY_WRITE},
-			dstStageMask = {.ALL_COMMANDS}, dstAccessMask = {.MEMORY_READ, .MEMORY_WRITE},
-			oldLayout = img.layouts[layer], newLayout = layout,
+			srcStageMask = from.stages, srcAccessMask = from.writes,
+			dstStageMask = to.stages, dstAccessMask = to.access,
+			oldLayout = old, newLayout = layout,
 			srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED, dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
 			image = img.image,
 			subresourceRange = {aspectMask = img.aspect, baseMipLevel = 0, levelCount = img.mips, baseArrayLayer = layer, layerCount = 1},
@@ -1114,6 +1207,11 @@ vk_transition :: proc(cmd: vk.CommandBuffer, img: ^Vk_Image, first, count: u32, 
 		img.layouts[layer] = layout
 		n += 1
 	}
+	if n == 0 {
+		g_vk_stats.barriers_skipped += 1
+		return
+	}
+	g_vk_stats.barriers += 1
 	dep := vk.DependencyInfo{sType = .DEPENDENCY_INFO, imageMemoryBarrierCount = n, pImageMemoryBarriers = &barriers[0]}
 	vk.CmdPipelineBarrier2(cmd, &dep)
 }
@@ -1440,6 +1538,8 @@ vk_begin_recording :: proc(timed: bool) {
 	// A fresh command buffer has nothing bound.
 	g_vk.bound_pipeline, g_vk.bound_set0, g_vk.bound_set1, g_vk.bound_input = 0, 0, 0, 0
 	g_vk.bound_transient = {max(vk.DeviceSize), max(vk.DeviceSize)}
+	g_vk.dyn_state = {}
+	g_vk.pushed_draw_vec4 = max(u32)
 	g_vk.set0, g_vk.set0_dirty = 0, true
 	g_vk.in_pass = false
 }
@@ -1480,7 +1580,7 @@ vk_gpu_frame_wait :: proc() {
 
 vk_gpu_frame_begin :: proc() {
 	if g_vk.recording { vk_submit() }
-	if g_vk.present.window != nil { vk_window_sync() }
+	if g_vk.present.window != nil { vk_window_sync(); vk_present_wait_pace() }
 	vk_begin_recording(true)
 }
 
@@ -1515,7 +1615,10 @@ vk_gpu_wait_idle :: proc() {
 vk_gpu_uniform_push :: proc(binding: u32, data: []u8) {
 	if !g_vk.ready || len(data) == 0 { return }
 	vk_cmd() // the ring region belongs to the frame being recorded
-	offset := (g_vk.ring_cursor + g_vk.ring_align - 1) / g_vk.ring_align * g_vk.ring_align
+	// The pass block is bound at its offset (uniform alignment); draw blocks
+	// are read from the frame's ring as a storage buffer by vec4 index.
+	align := binding == GPU_BINDING_PASS ? g_vk.ring_align : 16
+	offset := (g_vk.ring_cursor + align - 1) / align * align
 	if offset + len(data) > VK_UNIFORM_RING_PER_FRAME {
 		@(static) warned: bool
 		if !warned { fmt.eprintln("[Vulkan] uniform ring full for this frame; reusing its start"); warned = true }
@@ -1524,7 +1627,7 @@ vk_gpu_uniform_push :: proc(binding: u32, data: []u8) {
 	absolute := g_vk.slot * VK_UNIFORM_RING_PER_FRAME + offset
 	mem.copy(g_vk.ring.mapped[absolute:], raw_data(data), len(data))
 	g_vk.ring_cursor = offset + len(data)
-	if binding == GPU_BINDING_PASS { g_vk.pass_offset = u32(absolute) } else { g_vk.draw_offset = u32(absolute) }
+	if binding == GPU_BINDING_PASS { g_vk.pass_offset = u32(absolute) } else { g_vk.draw_vec4 = u32(offset / 16) }
 }
 
 vk_gpu_uniforms_fini :: proc() {}
@@ -1562,23 +1665,15 @@ vk_program_add :: proc(program: Vk_Program) -> Gpu_Program {
 	keys := make([dynamic]Vk_Pipeline_Key, context.temp_allocator)
 	switch {
 	case program.shadow:
-		for cull_front in ([2]bool{false, true}) {
-			for depth_write in ([2]bool{true, false}) {
-				append(&keys, Vk_Pipeline_Key{program = handle, state = {depth_write = depth_write}, depth_only = true, cull_front = cull_front})
-			}
-		}
+		append(&keys, Vk_Pipeline_Key{program = handle, depth_only = true})
 	case program.layout == .UI:
-		append(&keys, Vk_Pipeline_Key{program = handle, state = {blend = true, depth_test = .Off}})
+		append(&keys, Vk_Pipeline_Key{program = handle, blend = true})
 	case program.layout == .Debug_Line:
-		append(&keys, Vk_Pipeline_Key{program = handle, state = {depth_test = .Less_Equal}}, Vk_Pipeline_Key{program = handle, state = {depth_test = .Off}})
+		append(&keys, Vk_Pipeline_Key{program = handle})
 	case:
-		// scene.odin: blend for transparent materials, depth writes off for
-		// no_depth_write ones (wireframe is a debug view, built on use).
-		for blend in ([2]bool{false, true}) {
-			for depth_write in ([2]bool{true, false}) {
-				append(&keys, Vk_Pipeline_Key{program = handle, state = {blend = blend, depth_write = depth_write}})
-			}
-		}
+		// scene.odin: blend for transparent materials (wireframe is a debug
+		// view, built on use).
+		append(&keys, Vk_Pipeline_Key{program = handle}, Vk_Pipeline_Key{program = handle, blend = true})
 	}
 	for key in keys { vk_pipeline_get(key) }
 	return handle
@@ -1673,26 +1768,22 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 	viewport := vk.PipelineViewportStateCreateInfo{sType = .PIPELINE_VIEWPORT_STATE_CREATE_INFO, viewportCount = 1, scissorCount = 1}
 	raster := vk.PipelineRasterizationStateCreateInfo{
 		sType = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-		polygonMode = key.state.wireframe && g_vk.wireframe ? .LINE : .FILL,
-		cullMode = key.cull_front ? {.FRONT} : {},
+		polygonMode = key.wireframe && g_vk.wireframe ? .LINE : .FILL,
 		frontFace = .CLOCKWISE, // GL's counter-clockwise, measured with y down
 		lineWidth = 1,
 	}
 	multisample := vk.PipelineMultisampleStateCreateInfo{sType = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, rasterizationSamples = {._1}}
-	depth := vk.PipelineDepthStencilStateCreateInfo{
-		sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-		depthTestEnable = key.state.depth_test != .Off, depthWriteEnable = b32(key.state.depth_write),
-		depthCompareOp = key.state.depth_test == .Less_Equal ? .LESS_OR_EQUAL : .LESS,
-	}
+	// Test, write and compare op are dynamic (vk_dynamic_state_apply).
+	depth := vk.PipelineDepthStencilStateCreateInfo{sType = .PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}
 	blend_attachment := vk.PipelineColorBlendAttachmentState{
-		blendEnable = b32(key.state.blend),
+		blendEnable = b32(key.blend),
 		srcColorBlendFactor = .SRC_ALPHA, dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA, colorBlendOp = .ADD,
 		srcAlphaBlendFactor = .SRC_ALPHA, dstAlphaBlendFactor = .ONE_MINUS_SRC_ALPHA, alphaBlendOp = .ADD,
 		colorWriteMask = {.R, .G, .B, .A},
 	}
 	blend := vk.PipelineColorBlendStateCreateInfo{sType = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, attachmentCount = key.depth_only ? 0 : 1, pAttachments = &blend_attachment}
-	dynamic_states := [2]vk.DynamicState{.VIEWPORT, .SCISSOR}
-	dynamic_info := vk.PipelineDynamicStateCreateInfo{sType = .PIPELINE_DYNAMIC_STATE_CREATE_INFO, dynamicStateCount = 2, pDynamicStates = &dynamic_states[0]}
+	dynamic_states := [?]vk.DynamicState{.VIEWPORT, .SCISSOR, .CULL_MODE, .DEPTH_TEST_ENABLE, .DEPTH_WRITE_ENABLE, .DEPTH_COMPARE_OP}
+	dynamic_info := vk.PipelineDynamicStateCreateInfo{sType = .PIPELINE_DYNAMIC_STATE_CREATE_INFO, dynamicStateCount = len(dynamic_states), pDynamicStates = &dynamic_states[0]}
 	color_format := VK_COLOR_FORMAT
 	rendering := vk.PipelineRenderingCreateInfo{
 		sType = .PIPELINE_RENDERING_CREATE_INFO,
@@ -1836,7 +1927,7 @@ vk_set0 :: proc() -> vk.DescriptorSet {
 	set: vk.DescriptorSet
 	if !vk_ok(vk.AllocateDescriptorSets(g_vk.device, &alloc, &set), "vkAllocateDescriptorSets (frame)") { return g_vk.set0 }
 	pass_info := vk.DescriptorBufferInfo{buffer = g_vk.ring.buffer, offset = 0, range = size_of(Basic_Pass_Uniforms)}
-	draw_info := vk.DescriptorBufferInfo{buffer = g_vk.ring.buffer, offset = 0, range = size_of(Batch_Object)}
+	draw_info := vk.DescriptorBufferInfo{buffer = g_vk.ring.buffer, offset = 0, range = VK_UNIFORM_RING_PER_FRAME}
 	storage_info := vk.DescriptorBufferInfo{buffer = g_vk.dummy_storage.buffer, offset = 0, range = vk.DeviceSize(VK_WHOLE_SIZE)}
 	if b := vk_table_get(&g_vk.buffers, u32(g_vk.objects)); b != nil { storage_info.buffer = b.buffer }
 	shadow, player := g_vk.shadow_texture, g_vk.player_texture
@@ -1848,7 +1939,7 @@ vk_set0 :: proc() -> vk.DescriptorSet {
 	player_info := vk.DescriptorImageInfo{sampler = pt.sampler, imageView = pt.image.view, imageLayout = .SHADER_READ_ONLY_OPTIMAL}
 	writes := [5]vk.WriteDescriptorSet{
 		{sType = .WRITE_DESCRIPTOR_SET, dstSet = set, dstBinding = 0, descriptorCount = 1, descriptorType = .UNIFORM_BUFFER_DYNAMIC, pBufferInfo = &pass_info},
-		{sType = .WRITE_DESCRIPTOR_SET, dstSet = set, dstBinding = 1, descriptorCount = 1, descriptorType = .UNIFORM_BUFFER_DYNAMIC, pBufferInfo = &draw_info},
+		{sType = .WRITE_DESCRIPTOR_SET, dstSet = set, dstBinding = 1, descriptorCount = 1, descriptorType = .STORAGE_BUFFER_DYNAMIC, pBufferInfo = &draw_info},
 		{sType = .WRITE_DESCRIPTOR_SET, dstSet = set, dstBinding = 2, descriptorCount = 1, descriptorType = .STORAGE_BUFFER, pBufferInfo = &storage_info},
 		{sType = .WRITE_DESCRIPTOR_SET, dstSet = set, dstBinding = 4, descriptorCount = 1, descriptorType = .COMBINED_IMAGE_SAMPLER, pImageInfo = &shadow_info},
 		{sType = .WRITE_DESCRIPTOR_SET, dstSet = set, dstBinding = 5, descriptorCount = 1, descriptorType = .COMBINED_IMAGE_SAMPLER, pImageInfo = &player_info},
@@ -1858,6 +1949,23 @@ vk_set0 :: proc() -> vk.DescriptorSet {
 	return set
 }
 
+// Sets the dynamic state that differs from what the command buffer has.
+@(private = "file")
+vk_dynamic_state_apply :: proc(cmd: vk.CommandBuffer, want: Vk_Dynamic_State) {
+	have := &g_vk.dyn_state
+	if !have.valid || have.cull_front != want.cull_front {
+		vk.CmdSetCullMode(cmd, want.cull_front ? {.FRONT} : {})
+	}
+	if !have.valid || have.depth_test != want.depth_test {
+		vk.CmdSetDepthTestEnable(cmd, b32(want.depth_test != .Off))
+		vk.CmdSetDepthCompareOp(cmd, want.depth_test == .Less_Equal ? .LESS_OR_EQUAL : .LESS)
+	}
+	if !have.valid || have.depth_write != want.depth_write {
+		vk.CmdSetDepthWriteEnable(cmd, b32(want.depth_write))
+	}
+	have^ = want
+}
+
 vk_gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 	if !g_vk.ready || index_count <= 0 { return }
 	cmd := vk_cmd()
@@ -1865,23 +1973,29 @@ vk_gpu_draw_indexed :: proc(index_count: i32, first_index: u32) {
 	// texture, whose upload must run outside a render pass.
 	set1 := vk_color_set()
 	if !g_vk.in_pass && !vk_pass_begin_color() { return }
-	key := Vk_Pipeline_Key{program = g_vk.program, state = g_vk.draw_state, depth_only = g_vk.pass_depth_only, cull_front = g_vk.pass_cull_front}
-	if key.depth_only { key.state.blend = false }
+	state := g_vk.draw_state
+	key := Vk_Pipeline_Key{program = g_vk.program, blend = state.blend && !g_vk.pass_depth_only, wireframe = state.wireframe, depth_only = g_vk.pass_depth_only}
 	pipeline := vk_pipeline_get(key)
 	if pipeline == 0 { return }
 	if pipeline != g_vk.bound_pipeline {
 		vk.CmdBindPipeline(cmd, .GRAPHICS, pipeline)
 		g_vk.bound_pipeline = pipeline
 	}
+	vk_dynamic_state_apply(cmd, {valid = true, cull_front = g_vk.pass_depth_only && g_vk.pass_cull_front, depth_test = state.depth_test, depth_write = state.depth_write})
 	set0 := vk_set0()
-	offsets := [2]u32{g_vk.pass_offset, g_vk.draw_offset}
+	offsets := [2]u32{g_vk.pass_offset, u32(g_vk.slot * VK_UNIFORM_RING_PER_FRAME)}
 	if set0 != g_vk.bound_set0 || offsets != g_vk.bound_offsets {
 		vk.CmdBindDescriptorSets(cmd, .GRAPHICS, g_vk.pipeline_layout, 0, 1, &set0, 2, &offsets[0])
 		g_vk.bound_set0, g_vk.bound_offsets = set0, offsets
+		g_vk_stats.set0_binds += 1
 	}
 	if set1 != g_vk.bound_set1 && set1 != 0 {
 		vk.CmdBindDescriptorSets(cmd, .GRAPHICS, g_vk.pipeline_layout, 1, 1, &set1, 0, nil)
 		g_vk.bound_set1 = set1
+	}
+	if g_vk.draw_vec4 != g_vk.pushed_draw_vec4 {
+		vk.CmdPushConstants(cmd, g_vk.pipeline_layout, {.VERTEX}, 0, size_of(u32), &g_vk.draw_vec4)
+		g_vk.pushed_draw_vec4 = g_vk.draw_vec4
 	}
 	if g_vk.transient_active {
 		if g_vk.bound_input != 0 || g_vk.bound_transient != g_vk.transient_offsets {
@@ -2087,12 +2201,57 @@ vk_swapchain_build :: proc() -> bool {
 		append(&sc.rendered, semaphore)
 	}
 	sc.dirty = false
-	fmt.printfln("[Vulkan] Swapchain %dx%d, %d images, %v, %v", extent.width, extent.height, count, surface_format.format, mode)
+	sc.first_id = sc.present_id + 1
+	fmt.printfln("[Vulkan] Swapchain %dx%d, %d images, %v, %v%s", extent.width, extent.height, count, surface_format.format, mode, sc.present_wait ? ", present wait" : "")
 	return true
 }
 
 // Before a window frame: follows the framebuffer size (window target and
 // swapchain) and applies vsync changes. Waits for the GPU only on a change.
+// The device offers VK_KHR_present_id and VK_KHR_present_wait with both
+// features. SR_VK_PRESENT_WAIT=0 turns the pacing off.
+@(private = "file")
+vk_present_wait_supported :: proc(physical: vk.PhysicalDevice) -> bool {
+	if os.get_env("SR_VK_PRESENT_WAIT", context.temp_allocator) == "0" { return false }
+	count: u32
+	vk.EnumerateDeviceExtensionProperties(physical, nil, &count, nil)
+	extensions := make([]vk.ExtensionProperties, count, context.temp_allocator)
+	vk.EnumerateDeviceExtensionProperties(physical, nil, &count, raw_data(extensions))
+	has_id, has_wait: bool
+	for &e in extensions {
+		name := string(cstring(&e.extensionName[0]))
+		if name == vk.KHR_PRESENT_ID_EXTENSION_NAME { has_id = true }
+		if name == vk.KHR_PRESENT_WAIT_EXTENSION_NAME { has_wait = true }
+	}
+	if !has_id || !has_wait { return false }
+	present_id := vk.PhysicalDevicePresentIdFeaturesKHR{sType = .PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR}
+	present_wait := vk.PhysicalDevicePresentWaitFeaturesKHR{sType = .PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR, pNext = &present_id}
+	features := vk.PhysicalDeviceFeatures2{sType = .PHYSICAL_DEVICE_FEATURES_2, pNext = &present_wait}
+	vk.GetPhysicalDeviceFeatures2(physical, &features)
+	return bool(present_id.presentId) && bool(present_wait.presentWait)
+}
+
+// With vsync on: waits until the frame before the last presented one is on
+// screen, so the next frame samples input as late as the display allows
+// while one frame stays queued (no missed refresh when a frame runs long).
+// A timeout (minimised, occluded) just lets the frame go ahead.
+@(private = "file")
+vk_present_wait_pace :: proc() {
+	sc := &g_vk.present
+	if !sc.present_wait || !sc.vsync || sc.swapchain == 0 || sc.dirty || sc.present_id < 2 { return }
+	target := sc.present_id - 1
+	if target < sc.first_id { return } // presented on an earlier swapchain
+	start := time.tick_now()
+	result := vk.WaitForPresentKHR(g_vk.device, sc.swapchain, target, 100 * 1_000_000)
+	#partial switch result {
+	case .SUCCESS, .TIMEOUT, .SUBOPTIMAL_KHR:
+	case .ERROR_OUT_OF_DATE_KHR: sc.dirty = true
+	case: vk_ok(result, "vkWaitForPresentKHR")
+	}
+	g_vk_stats.present_waits += 1
+	g_vk_stats.present_wait_ms += time.duration_milliseconds(time.tick_since(start))
+}
+
 @(private = "file")
 vk_window_sync :: proc() {
 	sc := &g_vk.present
@@ -2171,6 +2330,14 @@ vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 		sType = .PRESENT_INFO_KHR, waitSemaphoreCount = 1, pWaitSemaphores = &rendered,
 		swapchainCount = 1, pSwapchains = &sc.swapchain, pImageIndices = &index,
 	}
+	present_id: vk.PresentIdKHR
+	id: u64
+	if sc.present_wait {
+		sc.present_id += 1
+		id = sc.present_id
+		present_id = {sType = .PRESENT_ID_KHR, swapchainCount = 1, pPresentIds = &id}
+		present.pNext = &present_id
+	}
 	presented := vk.QueuePresentKHR(g_vk.queue, &present)
 	#partial switch presented {
 	case .SUCCESS:
@@ -2202,6 +2369,15 @@ vk_readback_copy :: proc(target: Gpu_Render_Target, depth: bool, width, height: 
 	vk_transition(cmd, img, 0, 1, .TRANSFER_SRC_OPTIMAL)
 	region := vk.BufferImageCopy{imageSubresource = {aspectMask = img.aspect, layerCount = 1}, imageExtent = {u32(width), u32(height), 1}}
 	vk.CmdCopyImageToBuffer(cmd, img.image, .TRANSFER_SRC_OPTIMAL, g_vk.readback.buffer, 1, &region)
+	// The copy's writes become visible to the CPU, which reads the mapped
+	// buffer after the fence.
+	to_host := vk.MemoryBarrier2{
+		sType = .MEMORY_BARRIER_2,
+		srcStageMask = {.ALL_TRANSFER}, srcAccessMask = {.TRANSFER_WRITE},
+		dstStageMask = {.HOST}, dstAccessMask = {.HOST_READ},
+	}
+	host_dep := vk.DependencyInfo{sType = .DEPENDENCY_INFO, memoryBarrierCount = 1, pMemoryBarriers = &to_host}
+	vk.CmdPipelineBarrier2(cmd, &host_dep)
 	vk_transition(cmd, img, 0, 1, attachment_layout == .UNDEFINED ? (depth ? .DEPTH_ATTACHMENT_OPTIMAL : .COLOR_ATTACHMENT_OPTIMAL) : attachment_layout)
 	slot := g_vk.slot
 	vk_submit()
