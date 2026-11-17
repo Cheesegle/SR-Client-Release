@@ -18,17 +18,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(960, 540, "Inspect animation", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.Viewport(0, 0, 960, 540)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(960, 540, "Inspect animation")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), 960, 540)
 		client := Client{scene=scene_init(), fps_scene=scene_init(), bindings=menuui.default_bindings(), viewmodel_settings=menuui.DEFAULT_VIEWMODEL_SETTINGS}
 		previous_client := g_client
 		g_client = &client
@@ -65,12 +60,10 @@ when ODIN_TEST {
 				down := stage==1 && client_action_down(&client, .INSPECT, read_f)
 				client_update_inspect(&client, down, true, stage==2, stage==1 ? 1 : 0)
 				player_update_meshes(player, false)
-				gl.ClearColor(0, 0, 0, 1)
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+				gpu_set_clear_color({0, 0, 0})
+				gpu_clear(color = true, depth = true)
 				scene_render(client.fps_scene, &camera, 960, 540)
-				ui_flush()
-				gl.ReadPixels(0, 0, 960, 540, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+				test_read_rgb(0, 0, 960, 540, raw_data(pixels))
 				if stage==0 { copy(baseline, pixels) }
 				visible, changed := 0, 0
 				for value, i in pixels {
@@ -90,7 +83,7 @@ when ODIN_TEST {
 			}
 			client_clear_players(&client)
 		}
-		testing.expect(t, gl.GetError()==gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 
 	@(test)

@@ -137,7 +137,7 @@ crash_filter :: proc "system" (pointers: ^win.EXCEPTION_POINTERS) -> win.LONG {
 	info.stack = g_crash.stack[:frames]
 	info.stack_modules = g_crash.stack_modules[:min(frames, module_slots)]
 	info.stack_bases = g_crash.stack_bases[:min(frames, module_slots)]
-	info.detail = "Please send logs/crash.log (and logs/crash.dmp, plus logs/gl-debug.log if you ran with --gl-debug)."
+	info.detail = "Please send logs/crash.log (and logs/crash.dmp, plus logs/gl-debug.log or logs/gpu-debug.log if you ran with --gpu-debug)."
 	written := crash_log_write(CRASH_LOG_PATH, info)
 	crash_write_dump(win.L(CRASH_DUMP_PATH), pointers, win.GetCurrentThreadId())
 	if written { fmt.eprintln("\n[Crash] Report written to", CRASH_LOG_PATH) }
@@ -183,7 +183,7 @@ crash_write_hang_report :: proc() {
 }
 
 // Installs the unhandled-exception filter and the hang watchdog. Call from the
-// main thread. Reports include the GL strings once diagnostics_capture_gl_info
+// main thread. Reports include the GL strings once diagnostics_capture_gpu_info
 // has run; the watchdog ignores the time before the first frame.
 crash_handler_install :: proc() {
 	if g_crash.installed { return }

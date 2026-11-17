@@ -81,6 +81,7 @@ when ODIN_TEST {
 	// raise GL errors or warnings, keep creating GL objects or heap memory,
 	// rebuild map batches, rerun the batching self-test, compile shaders, load
 	// textures, or enumerate monitor modes except once per opening.
+	when !SR_VULKAN {
 	@(test)
 	settings_tabs_are_gl_clean_and_steady :: proc(t: ^testing.T) {
 		// Resource caches outlive the test (as in the other GL tests), so the
@@ -111,8 +112,7 @@ when ODIN_TEST {
 		log_path := "bin/settings-gl-stress.log"
 		if !testing.expect(t, gl_debug_install(log_path), "KHR_debug must be available") do return
 		defer gl_debug_shutdown()
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, 1280, 720)
+		gpu_set_target(test_gpu_current_target(), 1280, 720)
 
 		client := new(Client)
 		defer free(client)
@@ -241,4 +241,5 @@ when ODIN_TEST {
 			for tab in menuui.Settings_Tab { fmt.printf("  %v: %d draw calls, %.2f ms/frame\n", tab, draw_calls[tab], frame_ms[tab]) }
 		}
 	}
+	} // GL-only test (OpenGL state or contexts)
 }

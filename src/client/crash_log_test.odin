@@ -14,8 +14,8 @@ when ODIN_TEST {
 		old_diag := g_diag
 		defer g_diag = old_diag
 		g_diag = {}
-		g_diag.gl_renderer_len = copy(g_diag.gl_renderer[:], "Test Renderer")
-		g_diag.gl_vendor_len = copy(g_diag.gl_vendor[:], "Test Vendor")
+		g_diag.gpu_renderer_len = copy(g_diag.gpu_renderer[:], "Test Renderer")
+		g_diag.gpu_vendor_len = copy(g_diag.gpu_vendor[:], "Test Vendor")
 		// More phases than the ring holds: only the newest PHASE_RING_SIZE remain.
 		for i in 0 ..< PHASE_RING_SIZE + 5 {
 			phase_frame_begin()
@@ -45,7 +45,7 @@ when ODIN_TEST {
 		if !testing.expect(t, err == nil, "the report must be readable") do return
 		defer delete(data)
 		report := string(data)
-		for expected in ([]string{"SR Client crash report", "GL_RENDERER: Test Renderer", "Exception: 0xC0000005 EXCEPTION_ACCESS_VIOLATION",
+		for expected in ([]string{"SR Client crash report", "GPU: Test Renderer", "Exception: 0xC0000005 EXCEPTION_ACCESS_VIOLATION",
 			"Access violation: read of address 0x10", "Stack (innermost first):", "0x1234", "settings: build Main tab",
 			"settings: build Visuals tab", "render scene", "GL_INVALID_OPERATION in glDrawElements(test)", "1 errors"}) {
 			testing.expectf(t, strings.contains(report, expected), "report is missing %q:\n%s", expected, report)

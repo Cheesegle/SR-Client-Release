@@ -3,12 +3,19 @@ rem Build helper for Windows (requires Odin compiler in PATH).
 rem
 rem Usage:
 rem   build.bat client            build the client      -> bin\sr_client.exe
+rem                               (OpenGL and Vulkan; client, dev and check
+rem                               recompile the SPIR-V first when the Vulkan
+rem                               SDK's glslc is on PATH, else use the committed
+rem                               src\client\spirv\*.spv)
 rem   build.bat dev               developer client with debug tools (F3 window)
 rem                                                     -> bin\sr_client_dev.exe
 rem                               never packaged; releases use sr_client.exe
 rem   build.bat browser           build browser helper and restore WebView2 loader
 rem   build.bat server            build the server      -> bin\sr_server.exe
 rem   build.bat tests             build + run the sim tests
+rem   build.bat tests-vk          build + run the client tests on the Vulkan
+rem                               backend with validation on (any validation
+rem                               error fails the test that raised it)
 rem   build.bat check             typecheck client + server without linking
 rem   build.bat spirv             recompile the Vulkan shaders (needs glslc; the .spv files are committed)
 rem   build.bat all               build client + server
@@ -32,7 +39,7 @@ if "%SERVER_PROFILE%"=="" set "SERVER_PROFILE=%PROFILE%"
 
 if /i "%TARGET%"=="help" goto usage
 set "VALID_TARGET="
-for %%T in (client dev browser server tests check spirv all clean) do if /i "%TARGET%"=="%%T" (
+for %%T in (client dev browser server tests tests-vk check spirv all clean) do if /i "%TARGET%"=="%%T" (
     set "TARGET=%%T"
     set "VALID_TARGET=1"
 )
@@ -85,6 +92,8 @@ exit /b %errorlevel%
 :client
 call :clay
 if errorlevel 1 exit /b %errorlevel%
+call :spirv_optional
+if errorlevel 1 exit /b %errorlevel%
 call :browser
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% build src/client -out:%BIN_DIR%\sr_client.exe -o:%PROFILE% -subsystem:windows -resource:installer\sr-client.rc
@@ -94,10 +103,22 @@ exit /b %errorlevel%
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\build-spirv.ps1
 exit /b %errorlevel%
 
+:spirv_optional
+rem Recompiles the committed SPIR-V when glslc is available, so it never goes
+rem stale after a shader edit; without the Vulkan SDK the committed files are used.
+where glslc >nul 2>nul
+if errorlevel 1 (
+    echo glslc not found; using the committed SPIR-V in src\client\spirv
+    exit /b 0
+)
+goto spirv
+
 :dev
 rem Developer build: compiles in the debug tools (SR_DEV). It uses its own
 rem file name so it can never be packaged or mistaken for a tester build.
 call :clay
+if errorlevel 1 exit /b %errorlevel%
+call :spirv_optional
 if errorlevel 1 exit /b %errorlevel%
 call :browser
 if errorlevel 1 exit /b %errorlevel%
@@ -116,8 +137,20 @@ if errorlevel 1 exit /b %errorlevel%
 %ODIN% test src/browser_access -out:%BIN_DIR%\browser_access_tests.exe -o:none
 exit /b %errorlevel%
 
+:tests-vk
+call :spirv
+if errorlevel 1 exit /b %errorlevel%
+set "SR_VK_VALIDATION=1"
+set "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+%ODIN% build src/client -build-mode:test -o:none -define:SR_VULKAN=true -define:ODIN_TEST_THREADS=1 -out:%BIN_DIR%\client_tests_vk.exe
+if errorlevel 1 exit /b %errorlevel%
+"%BIN_DIR%\client_tests_vk.exe"
+exit /b %errorlevel%
+
 :check
 %ODIN% check src/browser_helper
+if errorlevel 1 exit /b %errorlevel%
+call :spirv_optional
 if errorlevel 1 exit /b %errorlevel%
 %ODIN% check src/client
 if errorlevel 1 exit /b %errorlevel%
@@ -157,7 +190,7 @@ call :usage
 exit /b 1
 
 :usage
-echo Usage: build.bat [client ^| dev ^| browser ^| server ^| tests] [level]
+echo Usage: build.bat [client ^| dev ^| browser ^| server ^| tests ^| tests-vk ^| check ^| spirv] [level]
 echo        build.bat all [client-level] [server-level]
 echo        build.bat [check ^| clean ^| help]
 echo Levels: none, minimal, size, speed, aggressive ^(default^).

@@ -20,15 +20,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1600, 900, "Menu typography", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(1600, 900, "Menu typography")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		ui := ui_init()
 		defer { ui_fini(ui); resource_cache_fini() }
 		state: menuui.State
@@ -76,12 +72,11 @@ when ODIN_TEST {
 		view.visuals = menuui.DEFAULT_VISUAL_SETTINGS
 		view.max_anisotropy = 16
 		view.secondaries = secondaries[:]
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 		sizes := [?][2]i32{{1280,720}, {1920,1080}, {2560,1600}}
 		for size in sizes {
-			glfw.SetWindowSize(window, size[0], size[1])
+			test_gpu_resize(size[0], size[1])
 			glfw.PollEvents()
-			gl.Viewport(0, 0, size[0], size[1])
+			gpu_set_target(test_gpu_current_target(), size[0], size[1])
 			ui_update(ui, f32(size[0]), f32(size[1]))
 			full_players: [32]menuui.Player
 			for &player, i in full_players { player = {name="Competitive player with a long name", class_name="Run N Gun", team=i32(i%2+1), is_you=i==0} }
@@ -288,19 +283,16 @@ when ODIN_TEST {
 						}
 					}
 				}
-				gl.ClearColor(0.17, 0.17, 0.17, 1)
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT)
+				gpu_set_clear_color({0.17, 0.17, 0.17})
+				gpu_clear(color = true, depth = false)
 				menu_render_commands(ui, commands)
 				if page == .SETTINGS && state.settings_tab == .VIDEO && state.settings_dropdown == .NONE && !menuui.settings_searching(&state) {
 					box := clay.GetElementData(clay.ID("CrosshairPreview")).boundingBox
 					pixel: [3]u8
-					ui_flush()
-					gl.ReadPixels(i32(box.x+box.width*0.5), size[1]-1-i32(box.y+box.height*0.5), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
+					test_read_rgb(i32(box.x+box.width*0.5), size[1]-1-i32(box.y+box.height*0.5), 1, 1, &pixel[0])
 					testing.expectf(t, pixel[0]>240 && pixel[1]>240 && pixel[2]>240, "the Precision reticle must actually render in the preview at %v (scenario %d)", size, scenario)
 					if scenario == 44 {
-						ui_flush()
-						gl.ReadPixels(i32(box.x-4), size[1]-1-i32(box.y+box.height*0.5), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
+						test_read_rgb(i32(box.x-4), size[1]-1-i32(box.y+box.height*0.5), 1, 1, &pixel[0])
 						testing.expect(t, pixel[0]<100 && pixel[1]<100 && pixel[2]<100, "extreme crosshair sizes must stay clipped to the preview")
 					}
 				}
@@ -397,9 +389,7 @@ when ODIN_TEST {
 				}
 				if #config(MENU_PREVIEW, false) && (#config(MENU_PREVIEW_SCENARIO, -1) < 0 || scenario == #config(MENU_PREVIEW_SCENARIO, -1)) {
 					pixels := make([]u8, int(size[0] * size[1] * 3))
-					gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-					ui_flush()
-					gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+					test_read_rgb(0, 0, size[0], size[1], raw_data(pixels))
 					header := fmt.aprintf("P6\n%d %d\n255\n", size[0], size[1])
 					file := make([dynamic]u8)
 					append(&file, ..transmute([]u8)header)

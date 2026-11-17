@@ -458,6 +458,19 @@ create_sphere_geo :: proc() -> ^Geometry {
 // .indices) for map batching. Indices must be in range of `vertices`.
 create_geometry :: proc(vertices: []Vertex, indices: []u32) -> ^Geometry {
 	geometry := new(Geometry)
+	geometry_upload(geometry, vertices, indices)
+	geometry.ref_count = 1
+	return geometry
+}
+
+// (Re)builds the geometry's CPU copies and GPU buffers from `vertices` and
+// `indices`; a live mod reload replaces a model's data this way.
+geometry_upload :: proc(geometry: ^Geometry, vertices: []Vertex, indices: []u32) {
+	gpu_vertex_input_destroy(&geometry.input)
+	gpu_buffer_destroy(&geometry.vertex_buffer)
+	gpu_buffer_destroy(&geometry.index_buffer)
+	delete(geometry.vertices)
+	delete(geometry.indices)
 	geometry.vertices = make([]Vertex, len(vertices))
 	geometry.indices = make([]u32, len(indices))
 	copy(geometry.vertices, vertices)
@@ -467,10 +480,7 @@ create_geometry :: proc(vertices: []Vertex, indices: []u32) -> ^Geometry {
 	geometry.index_buffer = gpu_buffer_create(.Index, slice.to_bytes(geometry.indices))
 	geometry.input = gpu_vertex_input_create(.Basic, geometry.vertex_buffer, geometry.index_buffer)
 	geometry.index_count = i32(len(indices))
-	geometry.ref_count = 1
 	geometry_set_bounds(geometry, vertices)
-
-	return geometry
 }
 
 geometry_set_bounds :: proc(geometry: ^Geometry, vertices: []Vertex) {

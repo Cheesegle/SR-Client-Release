@@ -362,8 +362,6 @@ client_apply_settings_draft :: proc(client: ^Client) {
 	client.last_swap_key = 0
 	if client.vsync != values.vsync {
 		client.vsync = values.vsync
-		// The renderer applies at the next start (saved now).
-		client.opengl = !values.vulkan
 		if client.window != nil { gpu_set_vsync(client.vsync) }
 	}
 	client.opengl = !values.vulkan // takes effect at the next start

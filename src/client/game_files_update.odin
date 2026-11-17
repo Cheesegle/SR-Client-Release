@@ -145,6 +145,7 @@ game_files_write_body :: proc "c" (buffer: [^]byte, size, count: c.size_t, outpu
 
 @(private = "file")
 game_files_update_run :: proc() {
+	cpu_pin_current_thread_off_game_core() // never on the game thread's core
 	defer sync.atomic_store(&g_game_files.done, true)
 	if curl.global_init(curl.GLOBAL_DEFAULT) != .E_OK { return }
 	defer curl.global_cleanup()

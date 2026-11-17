@@ -1,9 +1,11 @@
 # GPU Compatibility
 
-SR Client renders with Vulkan 1.3 by default and falls back to OpenGL 4.5 when Vulkan is missing
-(or when "Vulkan Renderer" is turned off in Settings, or with `--opengl`). Support depends on the operating system and
-installed driver, so the families below are practical examples rather than an exhaustive certified
-hardware list.
+The client has two renderers in one binary. It starts with **Vulkan 1.3** (with the
+`dynamicRendering`, `synchronization2` and `shaderDemoteToHelperInvocation` features) and falls
+back to an **OpenGL 4.5** core context when the GPU or driver cannot run Vulkan. Settings > Video >
+Vulkan Renderer, or `--opengl` / `--vulkan`, choose one explicitly. Support depends on the operating
+system and installed driver, so the families below are practical examples rather than an
+exhaustive certified hardware list.
 
 ## Vulkan 1.3
 

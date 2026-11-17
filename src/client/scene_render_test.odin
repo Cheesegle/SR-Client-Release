@@ -46,12 +46,10 @@ when ODIN_TEST {
 	}
 
 	scene_test_pixel :: proc(t: ^testing.T, scene: ^Scene, camera: ^Camera, x, y: i32, expected: [3]u8) {
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_clear(color = true, depth = true)
 		scene_render(scene, camera, 64, 64)
 		pixel: [4]u8
-		ui_flush()
-		gl.ReadPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, &pixel[0])
+		test_read_rgba(x, y, 1, 1, &pixel[0])
 		for value, i in expected {
 			testing.expect(t, abs(i32(pixel[i]) - i32(value)) <= 3, "each render pass must use its current camera, environment, material and GL state")
 		}
@@ -62,18 +60,13 @@ when ODIN_TEST {
 		context = runtime.default_context()
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(64, 64, "Render pass regression", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, 64, 64)
-		gl.ClearColor(0, 0, 0, 1)
+		test_gpu := test_gpu_open(64, 64, "Render pass regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), 64, 64)
+		gpu_set_clear_color({0, 0, 0})
 		scene := scene_init()
 		material := basic_material_init()
 		if !testing.expect(t, material != nil, "basic material failed") do return
@@ -122,22 +115,21 @@ when ODIN_TEST {
 		material.transparent = false
 		material.color.w = 1
 		material.wireframe = true
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_clear(color = true, depth = true)
 		scene_render(scene, &camera, 64, 64)
 		polygon_modes: [2]i32
-		gl.GetIntegerv(gl.POLYGON_MODE, &polygon_modes[0])
-		testing.expect(t, polygon_modes == [2]i32{gl.FILL, gl.FILL}, "wireframe must not leak into HUD drawing")
+		when !SR_VULKAN { gl.GetIntegerv(gl.POLYGON_MODE, &polygon_modes[0]) } // GL state
+		when !SR_VULKAN { testing.expect(t, polygon_modes == [2]i32{gl.FILL, gl.FILL}, "wireframe must not leak into HUD drawing") } // GL state
 		material.wireframe = false
 		ui_update(ui, 64, 64)
 		ui_fill_rect(ui, {0, 1, 0, 1}, 0, 0, 64, 64)
-		gl.ActiveTexture(gl.TEXTURE1)
+		when !SR_VULKAN { gl.ActiveTexture(gl.TEXTURE1) } // GL state
 		scene_test_pixel(t, scene, &camera, 32, 32, {255, 255, 255})
-		testing.expect(t, !bool(gl.IsEnabled(gl.BLEND)), "a new opaque pass must reset HUD blending")
+		when !SR_VULKAN { testing.expect(t, !bool(gl.IsEnabled(gl.BLEND)), "a new opaque pass must reset HUD blending") } // GL state
 		testing.expect(t, load_glyph('0') != nil, "UI font must load")
 		ui_fini(ui)
 		ui = ui_init()
 		testing.expect(t, load_glyph('0') != nil, "recreating the UI must rebuild its font cache safely")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "render pass produced an OpenGL error")
+		testing.expect(t, test_gpu_no_error(), "render pass produced an OpenGL error")
 	}
 }

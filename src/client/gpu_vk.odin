@@ -1125,7 +1125,7 @@ vk_sampler_get :: proc(desc: Gpu_Sampler_Desc, anisotropy: f32) -> vk.Sampler {
 	filter: vk.Filter = desc.filter == .Linear ? .LINEAR : .NEAREST
 	wrap: vk.SamplerAddressMode = desc.wrap == .Repeat ? .REPEAT : .CLAMP_TO_EDGE
 	info := vk.SamplerCreateInfo{
-		sType = .SAMPLER_CREATE_INFO, magFilter = filter, minFilter = filter, mipmapMode = desc.filter == .Linear ? .LINEAR : .NEAREST,
+		sType = .SAMPLER_CREATE_INFO, magFilter = filter, minFilter = filter, mipmapMode = desc.mip_linear ? .LINEAR : .NEAREST,
 		addressModeU = wrap, addressModeV = wrap, addressModeW = wrap,
 		// Without mip selection GL samples only the base level.
 		maxLod = desc.mip_filter ? vk.LOD_CLAMP_NONE : 0,
@@ -1156,14 +1156,44 @@ vk_retire_set :: proc(set: vk.DescriptorSet) {
 }
 
 vk_gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu_Texture {
-	if desc.width <= 0 || desc.height <= 0 || desc.layers < 0 || desc.layers > VK_MAX_LAYERS || !g_vk.ready { return 0 }
+	texture, ok := vk_texture_make(desc, pixels)
+	if !ok { return 0 }
+	return Gpu_Texture(vk_table_add(&g_vk.textures, texture))
+}
+
+// Gives an existing 2D texture new contents, size and sampling while keeping
+// its handle, so everything that holds it draws the new image.
+vk_gpu_texture_replace :: proc(texture: Gpu_Texture, desc: Gpu_Texture_Desc, pixels: []u8) -> bool {
+	t := vk_table_get(&g_vk.textures, u32(texture))
+	if t == nil || desc.layers != 0 { return false }
+	fresh, ok := vk_texture_make(desc, pixels)
+	if !ok { return false }
+	vk_texture_release(t)
+	t^ = fresh
+	g_vk.bound_set1 = 0
+	if g_vk.shadow_texture == texture || g_vk.player_texture == texture { g_vk.set0_dirty = true }
+	return true
+}
+
+// Frees a texture's image and descriptor sets once the frames that could
+// still read them have finished.
+@(private = "file")
+vk_texture_release :: proc(t: ^Vk_Texture) {
+	vk_retire_set(t.set)
+	vk_retire_set(t.override_set)
+	vk_retire({image = t.image})
+}
+
+@(private = "file")
+vk_texture_make :: proc(desc: Gpu_Texture_Desc, pixels: []u8) -> (texture: Vk_Texture, ok: bool) {
+	if desc.width <= 0 || desc.height <= 0 || desc.layers < 0 || desc.layers > VK_MAX_LAYERS || !g_vk.ready { return }
 	w, h := u32(desc.width), u32(desc.height)
 	mips: u32 = 1
 	if desc.mipmaps { mips = u32(math.floor(math.log2(f32(max(w, h))))) + 1 }
 	usage: vk.ImageUsageFlags = {.SAMPLED, .TRANSFER_DST}
 	if desc.mipmaps { usage += {.TRANSFER_SRC} }
 	if desc.format == .Depth { usage += {.DEPTH_STENCIL_ATTACHMENT} }
-	texture := Vk_Texture{format = desc.format, desc = desc.sampler}
+	texture = Vk_Texture{format = desc.format, desc = desc.sampler}
 	texture.image = vk_image_make(w, h, u32(max(desc.layers, 1)), mips, desc.layers > 0, vk_format(desc.format), usage)
 	img := &texture.image
 
@@ -1182,7 +1212,7 @@ vk_gpu_texture_create :: proc(desc: Gpu_Texture_Desc, pixels: []u8 = nil) -> Gpu
 
 	texture.sampler = vk_sampler_get(desc.sampler, 1)
 	if desc.format != .Depth { texture.set = vk_texture_set(img.view, texture.sampler) }
-	return Gpu_Texture(vk_table_add(&g_vk.textures, texture))
+	return texture, true
 }
 
 // Level 0 is in TRANSFER_DST; builds the chain with linear blits and leaves
@@ -1261,9 +1291,7 @@ vk_gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
 	t := vk_table_get(&g_vk.textures, u32(texture^))
 	if t == nil { texture^ = 0; return }
 	if g_active_texture == texture^ { g_active_texture = 0 }
-	vk_retire_set(t.set)
-	vk_retire_set(t.override_set)
-	vk_retire({image = t.image})
+	vk_texture_release(t)
 	if g_vk.color_texture == texture^ { g_vk.color_texture = 0 }
 	if g_vk.shadow_texture == texture^ { g_vk.shadow_texture = 0; g_vk.set0_dirty = true }
 	if g_vk.player_texture == texture^ { g_vk.player_texture = 0; g_vk.set0_dirty = true }
@@ -1285,6 +1313,18 @@ vk_gpu_sampler_set_anisotropy :: proc(sampler: Gpu_Sampler, value: f32) {
 	if s.anisotropy == value { return }
 	s.anisotropy = value
 	s.sampler = vk_sampler_get(s.desc, value)
+	s.version += 1
+}
+
+// World texture filtering (Settings > Smooth textures): .Linear blends texels
+// and mip levels, .Nearest keeps Krunker's pixelated look.
+vk_gpu_sampler_set_filter :: proc(sampler: Gpu_Sampler, filter: Gpu_Filter) {
+	s := vk_table_get(&g_vk.sampler_objects, u32(sampler))
+	if s == nil { return }
+	linear := filter == .Linear
+	if s.desc.filter == filter && s.desc.mip_linear == linear { return }
+	s.desc.filter, s.desc.mip_linear = filter, linear
+	s.sampler = vk_sampler_get(s.desc, s.anisotropy)
 	s.version += 1
 }
 

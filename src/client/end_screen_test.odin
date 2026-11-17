@@ -195,27 +195,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "End screen", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.ClearColor(0.16, 0.18, 0.20, 1)
-		framebuffer, color_texture: u32
-		gl.GenFramebuffers(1, &framebuffer)
-		gl.GenTextures(1, &color_texture)
-		defer gl.DeleteFramebuffers(1, &framebuffer)
-		defer gl.DeleteTextures(1, &color_texture)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-		gl.BindTexture(gl.TEXTURE_2D, color_texture)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, 1280, 720, 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-		gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-		gl.BindTexture(gl.TEXTURE_2D, 0)
+		test_gpu := test_gpu_open(1280, 720, "End screen")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_clear_color({0.16, 0.18, 0.20})
 		g_active_texture = 0
 		client := Client{ui = ui_init(), bindings = menuui.default_bindings(), local_practice = true}
 		defer { overlay_fini(); ui_fini(client.ui); resource_cache_fini() }
@@ -225,24 +210,20 @@ when ODIN_TEST {
 		client.game.ready = true
 		client.game.match = {phase = .ENDED, team_scores = {0, 540, 1200}}
 		client.viewport_width, client.viewport_height = 1280, 720
-		gl.Viewport(0, 0, 1280, 720)
+		gpu_set_target(test_gpu_current_target(), 1280, 720)
 		testing.expect(t, client_end_screen_update(&client, 10, false))
 		snapshot :: proc(client: ^Client, now: f64, pixels: []u8) {
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_clear(color = true, depth = true)
 			ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 			end_screen_render(client, now)
-			ui_flush()
-			gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, client.viewport_width, client.viewport_height, raw_data(pixels))
 		}
 		blank := make([]u8, 1280*720*3)
 		title := make([]u8, len(blank))
 		standings := make([]u8, len(blank))
 		defer { delete(blank); delete(title); delete(standings) }
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT)
-		ui_flush()
-		gl.ReadPixels(0, 0, 1280, 720, gl.RGB, gl.UNSIGNED_BYTE, raw_data(blank))
+		gpu_clear(color = true, depth = false)
+		test_read_rgb(0, 0, 1280, 720, raw_data(blank))
 		snapshot(&client, 11, title)
 		snapshot(&client, 10+END_SCREEN_PANEL_DELAY+0.1, standings)
 		w, h := client.ui.width/client.ui.scale, client.ui.height/client.ui.scale
@@ -257,6 +238,6 @@ when ODIN_TEST {
 				testing.expect(t, os.write_entire_file(fmt.tprintf("bin/end-screen-%d.ppm", i), file[:]) == nil)
 			}
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

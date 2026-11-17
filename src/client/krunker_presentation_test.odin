@@ -178,15 +178,11 @@ when ODIN_TEST {
 	krunker_live_local_and_remote_tracers_render :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(640, 360, "Live bullet effects regression", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(640, 360, "Live bullet effects regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		client: Client
 		map_inst: shared.Map
 		krunker_presentation_fixture(&client, &map_inst)
@@ -208,13 +204,11 @@ when ODIN_TEST {
 		testing.expect(t, len(client.tracer_markers) == 1, "a live local input must create a world tracer mesh")
 		pixels := make([]u8, 640*360*3, context.temp_allocator)
 		for pass in 0..<2 {
-			gl.Viewport(0, 0, 640, 360)
-			gl.ClearColor(0, 0, 0, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_set_target(test_gpu_current_target(), 640, 360)
+			gpu_set_clear_color({0, 0, 0})
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &client.camera, 640, 360)
-			ui_flush()
-			gl.ReadPixels(0, 0, 640, 360, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, 640, 360, raw_data(pixels))
 			visible := 0
 			for i := 0; i < len(pixels); i += 3 {
 				if pixels[i] > 0 || pixels[i+1] > 0 || pixels[i+2] > 0 { visible += 1 }
@@ -232,6 +226,6 @@ when ODIN_TEST {
 			client_tick_impacts(&client, 0.02)
 			testing.expect(t, len(client.tracer_markers) == 1, "a server tracer packet must create a world tracer mesh")
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "live tracer rendering must not produce OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "live tracer rendering must not produce OpenGL errors")
 	}
 }

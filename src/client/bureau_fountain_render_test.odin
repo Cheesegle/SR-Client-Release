@@ -17,12 +17,10 @@ when ODIN_TEST {
 
 	@(private = "file")
 	fountain_frame :: proc(client: ^Client, pixels: []u8) {
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		gl.Viewport(0, 0, FT_W, FT_H)
+		test_gpu_use_device_target()
+		gpu_set_target(test_gpu_current_target(), FT_W, FT_H)
 		client_render_world(client)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, FT_W, FT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, FT_W, FT_H, raw_data(pixels))
 	}
 
 	// Bureau's fountain through the game's own frame path. Its top is two
@@ -36,16 +34,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(FT_W, FT_H, "Bureau fountain", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(FT_W, FT_H, "Bureau fountain")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		os.make_directory("bin/map-fixes")
 		tag := os.get_env("SR_SHOT_TAG", context.temp_allocator)
 		if tag == "" do tag = "after"
@@ -108,8 +101,7 @@ when ODIN_TEST {
 				"the sphere at %v must fill its box %v (got %v, %v)", object.position, object.scale, mesh.transform.position, mesh.transform.scale)
 			// No `t` and tv=1: Krunker's WALL texture, variant 1 (wall_0_1).
 			width: i32
-			gl.BindTexture(gl.TEXTURE_2D, u32(material.texture))
-			gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_WIDTH, &width)
+			if entry, ok := g_texture_by_id[material.texture]; ok { width = entry.width } // the loaded image's width
 			testing.expectf(t, material.texture != 0 && width > 1, "the sphere at %v must use the map texture, not the white fallback", object.position)
 			testing.expect(t, !material.base.transparent && material.color.w == 1, "fountain spheres are opaque")
 		}
@@ -142,7 +134,7 @@ when ODIN_TEST {
 		}
 		fmt.printfln("[fountain] spheres cover %d px", changed)
 		testing.expectf(t, changed > 2000, "the fountain spheres must be drawn (%d px changed)", changed)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "Bureau must render without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "Bureau must render without OpenGL errors")
 		client_clear_players(client)
 		free_all(context.temp_allocator)
 	}

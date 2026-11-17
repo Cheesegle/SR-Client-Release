@@ -92,8 +92,16 @@ Developer builds (`SR-Client-Dev-*`, debug panel) are never attached to releases
 ## Building locally
 Install [Odin dev-2026-10](https://github.com/odin-lang/Odin/releases/tag/dev-2026-10)
 and Visual Studio Build Tools, then run `build.bat all` from the
-"x64 Native Tools Command Prompt". Put the contents of
+"x64 Native Tools Command Prompt". Client builds compile the shaders to SPIR-V
+first, so the [Vulkan SDK](https://vulkan.lunarg.com/)'s `glslc` must be on `PATH`
+(playing needs only a Vulkan or OpenGL driver). Put the contents of
 `game-files/sr-game-files.zip` next to `bin\sr_client.exe`.
+
+Renderer switches: `--vulkan` / `--opengl` override the setting for one run;
+`--gpu-debug` logs driver messages (OpenGL: `logs/gl-debug.log`; Vulkan: validation
+layers to `logs/gpu-debug.log`, needs the Vulkan SDK); `SR_GPU=<index or part of a
+name>` picks the Vulkan GPU on a multi-GPU machine. `build.bat tests-vk` runs the
+client tests on Vulkan with validation on.
 Engine notes: [`doc/ENGINE-README.md`](doc/ENGINE-README.md).
 
 ## Logs

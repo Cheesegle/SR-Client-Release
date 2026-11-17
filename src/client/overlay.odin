@@ -2,7 +2,6 @@ package main
 
 import "core:fmt"
 import glfw "vendor:glfw"
-import gl "vendor:OpenGL"
 import shared "../shared"
 
 ammo_icon: Gpu_Texture
@@ -102,10 +101,8 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	}
 
 	// Krunker's HUD (timer and match info, team scores, rounds, leaderboard
-	// and counters, player panel, weapons, ammo, chat, FPS): drawn into a
-	// cached texture only when something on it changed, then shown with
-	// one draw call per frame.
-	hud_cache_render(client)
+	// and counters, player panel, weapons, ammo, chat, FPS).
+	hud_draw(client)
 
 	// Normally fades out for ADS, leaving the scope's own reticle. Always show
 	// and custom opacity can explicitly keep Precision visible over the scope.
@@ -132,20 +129,12 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	death_cam_render(client)
 }
 
-// ------------------------------------------------------------ HUD cache
+// ------------------------------------------------------------ HUD
 
-// The HUD is several hundred small draw calls (every box and every letter),
-// so it is drawn into a texture and composited with one draw call per frame.
-// It is redrawn only when something it shows changed (hud_signature), and at
-// least HUD_CACHE_MIN_RATE times a second as a safety net for anything the
-// signature misses (chat lines expiring, for instance).
-HUD_CACHE_MIN_RATE :: 10.0
-Hud_Cache :: struct { framebuffer, texture: u32, width, height: i32, drawn_at: f64, valid: bool, signature: u64 }
-g_hud_cache: Hud_Cache
-
-hud_cache_invalidate :: proc() { g_hud_cache.valid = false }
-
-hud_cache_draw :: proc(client: ^Client) {
+// The HUD goes through the interface draw list (ui_box), which batches its
+// boxes and letters into a few draws, so it is drawn every frame on both
+// renderers instead of being cached in an offscreen texture.
+hud_draw :: proc(client: ^Client) {
 	krunker_hud_render(client)
 	kill_chat_render(client) // Krunker's chat box: chat and kill lines
 	fps_render(client)       // beside the timer, at the same UI Scale
@@ -156,72 +145,7 @@ hud_cache_draw :: proc(client: ^Client) {
 	}
 }
 
-hud_cache_render :: proc(client: ^Client) {
-	// The interface is batched (a handful of draws for the whole HUD), so the
-	// HUD is drawn directly every frame on both renderers.
-	hud_cache_draw(client)
-}
-
-// Everything the cached HUD shows, folded into one number (FNV-1a). Cheap:
-// a few dozen values a frame, no drawing.
-hud_signature :: proc(client: ^Client) -> u64 {
-	h: u64 = 14695981039346656037
-	mix :: proc(h: ^u64, value: u64) {
-		v := value
-		for _ in 0..<8 { h^ = (h^ ~ (v & 0xff)) * 1099511628211; v >>= 8 }
-	}
-	text :: proc(h: ^u64, value: string) {
-		for i in 0..<len(value) { h^ = (h^ ~ u64(value[i])) * 1099511628211 }
-		mix(h, u64(len(value)))
-	}
-	f :: proc(value: f32) -> u64 { return u64(transmute(u32)value) }
-	mix(&h, u64(transmute(u32)client.ui.width)); mix(&h, u64(transmute(u32)client.ui.height))
-	settings := client.hud_settings
-	for b in transmute([size_of(settings)]u8)settings { h = (h ~ u64(b)) * 1099511628211 }
-	text(&h, krunker_client_timer_label(client))
-	mix(&h, u64(client.show_fps)); mix(&h, u64(client.fps_value))
-	ping, received, available := client_ping(client)
-	mix(&h, u64(u32(ping))); mix(&h, u64(received)); mix(&h, u64(available))
-	mix(&h, u64(client.in_game)); mix(&h, u64(client.mouse_state.locked)); mix(&h, u64(g_death.active))
-	mix(&h, u64(client.scoreboard_open)); mix(&h, u64(client.krunker.connected)); mix(&h, u64(client.local_practice))
-	if me := client.me; me != nil {
-		mix(&h, f(me.health)); mix(&h, u64(me.max_health)); mix(&h, u64(u32(me.class_index))); mix(&h, u64(u32(me.team)))
-		mix(&h, u64(u32(me.loadout_index))); mix(&h, u64(me.kills)); mix(&h, u64(me.deaths))
-		for id in me.loadout { mix(&h, u64(u32(id))) }
-		for ammo in me.ammo { mix(&h, u64(u32(ammo))) }
-		mix(&h, u64(uintptr(me.weapon)))
-		if me.reload_timer > 0 { mix(&h, u64(me.reload_timer*60)) } // the reload fill, 60 steps a second
-	} else { mix(&h, 0xdead) }
-	match := &client.game.match
-	for v in match.team_scores { mix(&h, u64(v)) }
-	for v in match.round_wins { mix(&h, u64(v)) }
-	mix(&h, u64(match.round_current)); mix(&h, u64(match.phase))
-	mix(&h, u64(match.objective.rotation_remaining + 0.999)); mix(&h, u64(match.phase_remaining + 0.999))
-	text(&h, krunker_client_countdown_label(client, glfw.GetTime()))
-	world := &client.krunker_world
-	mix(&h, u64(world.mode_index)); mix(&h, u64(world.map_index)); mix(&h, u64(world.rounds_total))
-	for player in world.players {
-		mix(&h, u64(u32(player.sid))); mix(&h, u64(player.score)); mix(&h, u64(player.kills)); mix(&h, u64(player.deaths))
-		mix(&h, u64(u32(player.team))); text(&h, player.name)
-	}
-	for player in client.game.players {
-		if player == nil { continue }
-		mix(&h, u64(player.uid)); mix(&h, u64(player.score)); mix(&h, u64(player.kills)); mix(&h, u64(u32(player.team)))
-	}
-	mix(&h, g_chat.serial); mix(&h, u64(g_chat.count)); mix(&h, u64(g_chat.channel))
-	mix(&h, u64(g_enemy_counter.count)); mix(&h, u64(g_enemy_counter.enemy_team))
-	mix(&h, u64(len(g_map_name)))
-	return h
-}
-
-hud_cache_fini :: proc() {
-	if g_hud_cache.framebuffer != 0 { gl.DeleteFramebuffers(1, &g_hud_cache.framebuffer) }
-	if g_hud_cache.texture != 0 { gl.DeleteTextures(1, &g_hud_cache.texture) }
-	g_hud_cache = {}
-}
-
 overlay_fini :: proc() {
-	hud_cache_fini()
 	kill_feed_fini()
 	for _, icon in weapon_icons {
 		texture_release(icon)

@@ -94,11 +94,11 @@ when ODIN_TEST {
 		}
 		glfw.MakeContextCurrent(window)
 		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 		return window
 	}
 
 	// Driver side of the contract: the linked program reports the same layout.
+	when !SR_VULKAN {
 	@(test)
 	map_batch_program_layout_matches_driver :: proc(t: ^testing.T) {
 		logger := context.logger
@@ -116,6 +116,7 @@ when ODIN_TEST {
 		testing.expect_value(t, g_map_batch_shader_layout_reason, "")
 		testing.expect_value(t, map_batch_program_layout_reason(u32(program)), "")
 	}
+	} // GL-only test (OpenGL state or contexts)
 
 	@(private = "file")
 	self_test_load :: proc(t: ^testing.T, client: ^Client, map_name: string) -> bool {
@@ -145,6 +146,7 @@ when ODIN_TEST {
 	// The map-load self-test keeps batching on for a correct driver and turns
 	// it off, for the session, when batched rendering is broken (injected
 	// fault: every storage-buffer transform reads as zero).
+	when !SR_VULKAN {
 	@(test)
 	map_batch_self_test_disables_batching_on_mismatch :: proc(t: ^testing.T) {
 		logger := context.logger
@@ -202,7 +204,7 @@ when ODIN_TEST {
 			client_unload_map(&client)
 			client_load_current_map(&client)
 			testing.expect(t, client.scene.batches == nil, "batching stays off after the next map load")
-			testing.expect(t, gl.GetError() == gl.NO_ERROR, "the self-test must not leave OpenGL errors")
+			testing.expect(t, test_gpu_no_error(), "the self-test must not leave OpenGL errors")
 			self_test_unload(&client)
 		}
 
@@ -218,4 +220,5 @@ when ODIN_TEST {
 		testing.expect(t, map_batch_compare(off[:], on[:], depth[:], depth[:]) == Map_Batch_Compare{max_diff = 40, tie_pixels = 1, first_geometry = -1})
 		testing.expect(t, map_batch_compare(off[:], on[:], depth[:], depth_moved[:]) == Map_Batch_Compare{max_diff = 40, max_geometry_diff = 40, geometry_pixels = 1, first_geometry = 1})
 	}
+	} // GL-only test (OpenGL state or contexts)
 }

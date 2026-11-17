@@ -137,26 +137,19 @@ when ODIN_TEST {
 		H :: 200
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(W, H, "Hitmarker", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.Viewport(0, 0, W, H)
-		gl.Enable(gl.BLEND)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(W, H, "Hitmarker")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), W, H)
 		ui := ui_init()
 		defer { ui_fini(ui); resource_cache_fini() }
 		ui_update(ui, W, H)
 		settings := menuui.DEFAULT_HITMARKER_SETTINGS
 		settings.colors[.HEADSHOT] = 0xffd000
-		gl.ClearColor(56.0/255, 61.0/255, 69.0/255, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT)
+		gpu_set_clear_color({56.0/255, 61.0/255, 69.0/255})
+		gpu_clear(color = true, depth = false)
 		crosshair := menuui.DEFAULT_CROSSHAIR_SETTINGS
 		for kind in 0..<3 {
 			cx := f32(100 + kind*200)
@@ -166,8 +159,7 @@ when ODIN_TEST {
 			hit_marker_render(ui, marker, settings, cx, 100, 1)
 		}
 		pixel :: proc(x, y: int) -> (p: [3]u8) {
-			ui_flush()
-			gl.ReadPixels(i32(x), i32(H-1-y), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &p[0])
+			test_read_rgb(i32(x), i32(H-1-y), 1, 1, &p[0])
 			return
 		}
 		// Bars are centered 37 px from the middle along each diagonal.
@@ -181,10 +173,8 @@ when ODIN_TEST {
 		os.make_directory("bin/hit_feedback")
 		pixels := make([]u8, W*H*3)
 		defer delete(pixels)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, W, H, raw_data(pixels))
 		testing.expect(t, stbi.write_png("bin/hit_feedback/hitmarkers.png", W, H, 3, &pixels[(H-1)*W*3], -W*3) != 0)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

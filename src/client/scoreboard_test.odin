@@ -111,27 +111,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "Scoreboard", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.ClearColor(0.16, 0.18, 0.20, 1)
-		framebuffer, color_texture: u32
-		gl.GenFramebuffers(1, &framebuffer)
-		gl.GenTextures(1, &color_texture)
-		defer gl.DeleteFramebuffers(1, &framebuffer)
-		defer gl.DeleteTextures(1, &color_texture)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-		gl.BindTexture(gl.TEXTURE_2D, color_texture)
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, 1280, 720, 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-		gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-		gl.BindTexture(gl.TEXTURE_2D, 0)
+		test_gpu := test_gpu_open(1280, 720, "Scoreboard")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_clear_color({0.16, 0.18, 0.20})
 		g_active_texture = 0
 		mode := shared.Game_Mode{objective = true}
 		client := Client{ui = ui_init(), game = {mode = &mode}, crosshair_settings = menuui.DEFAULT_CROSSHAIR_SETTINGS}
@@ -141,7 +126,7 @@ when ODIN_TEST {
 		for &player in players { append(&client.game.players, &player) }
 		client.game.match = {phase = .LIVE, round_current = 1, time_remaining = 180, team_scores = {0, 540, 1200}}
 		client.viewport_width, client.viewport_height = 1280, 720
-		gl.Viewport(0, 0, 1280, 720)
+		gpu_set_target(test_gpu_current_target(), 1280, 720)
 		before := make([]u8, 1280*720*3)
 		after := make([]u8, len(before))
 		defer delete(before)
@@ -160,6 +145,6 @@ when ODIN_TEST {
 			for row := 719; row >= 0; row -= 1 { append(&file, ..after[row*1280*3:(row+1)*1280*3]) }
 			testing.expect(t, os.write_entire_file("bin/scoreboard-1280x720.ppm", file[:]) == nil)
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

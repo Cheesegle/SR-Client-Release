@@ -159,25 +159,18 @@ when ODIN_TEST {
 		H :: 360
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(W, H, "Damage borders", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.Viewport(0, 0, W, H)
-		gl.Enable(gl.BLEND)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(W, H, "Damage borders")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), W, H)
 		ui := ui_init()
 		defer { ui_fini(ui); resource_cache_fini() }
 		ui_update(ui, W, H)
 		testing.expect(t, ui.vignette != 0, "the overlay texture is created with the UI")
-		gl.ClearColor(120.0/255, 140.0/255, 160.0/255, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT)
+		gpu_set_clear_color({120.0/255, 140.0/255, 160.0/255})
+		gpu_clear(color = true, depth = false)
 		// Left: Krunker defaults at 40% health, hit from the front right.
 		// Right: SR Client custom colors mid-flash, hit from behind.
 		custom := menuui.DEFAULT_DAMAGE_SETTINGS
@@ -193,8 +186,7 @@ when ODIN_TEST {
 			damage_indicator_render(ui, settings.colors[.INDICATOR], i == 0 ? 1 : 0.7, x+W/4, H/2, radius, 0.5, direction)
 		}
 		pixel :: proc(x, y: int) -> (p: [3]u8) {
-			ui_flush()
-			gl.ReadPixels(i32(x), i32(H-1-y), 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &p[0])
+			test_read_rgb(i32(x), i32(H-1-y), 1, 1, &p[0])
 			return
 		}
 		edge, middle := pixel(2, H/2), pixel(W/4, H/2+40)
@@ -211,10 +203,8 @@ when ODIN_TEST {
 		os.make_directory("bin/hit_feedback")
 		pixels := make([]u8, W*H*3)
 		defer delete(pixels)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, W, H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, W, H, raw_data(pixels))
 		testing.expect(t, stbi.write_png("bin/hit_feedback/damage_borders.png", W, H, 3, &pixels[(H-1)*W*3], -W*3) != 0)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

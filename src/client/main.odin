@@ -422,7 +422,7 @@ Client_Options :: struct {
 	bench_seconds: f32,
 	bench_sizes: string, // Comma-separated WxH or "native".
 	no_batching: bool,
-	gl_debug: bool, // Debug GL context with a KHR_debug logger (logs/gl-debug.log).
+	gpu_debug: bool, // GL: debug context + KHR_debug log (logs/gl-debug.log); Vulkan: validation (logs/gpu-debug.log).
 	no_cpu_pinning: bool, // Leave thread placement to the OS (cpu_affinity.odin).
 	backend: Gpu_Backend, // --vulkan / --opengl, over the saved Graphics API setting
 	backend_set: bool,
@@ -451,8 +451,9 @@ print_client_help :: proc() {
 	fmt.println("                        Shadows/Lighting configuration, and print frame times.")
 	fmt.println("                        Sizes are WxH or native, comma-separated (default native)")
 	fmt.println("      --no-batching     Draw every map object individually, without culling")
-	fmt.println("      --gl-debug        Use a debug OpenGL context and log driver messages")
-	fmt.println("                        to logs/gl-debug.log (crashes and hangs are always")
+	fmt.println("      --gpu-debug       Log driver messages: a debug OpenGL context to")
+	fmt.println("                        logs/gl-debug.log, or Vulkan validation to")
+	fmt.println("                        logs/gpu-debug.log (crashes and hangs are always")
 	fmt.println("                        logged to logs/crash.log and logs/hang.log)")
 	fmt.println("      --vulkan, --opengl")
 	fmt.println("                        Draw with this graphics API for this run (default:")
@@ -520,7 +521,7 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 		case "--no-batching":
 			options.no_batching = true
 		case "--gpu-debug", "--gl-debug":
-			options.gl_debug = true
+			options.gpu_debug = true
 		case "--vulkan":
 			options.backend, options.backend_set = .Vulkan, true
 		case "--opengl":
@@ -1685,7 +1686,7 @@ main :: proc() {
 		glfw.WindowHint(glfw.CLIENT_API, glfw.NO_API)
 		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
 		glfw.DefaultWindowHints()
-		g_vk_debug.wanted = options.gl_debug
+		g_vk_debug.wanted = options.gpu_debug
 		g_gpu_backend = .Vulkan
 		if client.window == nil || !gpu_vk_init(client.window) {
 			fmt.eprintln("[GPU] Vulkan is not available on this GPU or driver; using OpenGL")
@@ -1696,7 +1697,7 @@ main :: proc() {
 	g_gpu_backend = backend
 	if backend == .OpenGL {
 		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		if options.gl_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
+		if options.gpu_debug { glfw.WindowHint(glfw.OPENGL_DEBUG_CONTEXT, glfw.TRUE) }
 
 		when ODIN_OS == .Darwin {
 			glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
@@ -1706,7 +1707,8 @@ main :: proc() {
 			glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
 			glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
 		}
-		// Settings > Render > Anti-aliasing (MSAA, applies on start; OpenGL).
+
+		// Settings > Render > Anti-aliasing (MSAA, applies on start).
 		if preferences.hud.anti_alias { glfw.WindowHint(glfw.SAMPLES, 4) }
 		client.window = glfw.CreateWindow(1280, 720, window_title, nil, nil)
 	}
@@ -1740,11 +1742,12 @@ main :: proc() {
 	defer client_mouse_fini()
 
 	if backend == .Vulkan {
+		if g_vk_debug.log != nil { fmt.printfln("[Vulkan] Validation on; logging to %s", GPU_DEBUG_LOG_PATH) }
 		diagnostics_capture_gpu_info()
 	} else {
 		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		diagnostics_capture_gl_info()
-		if options.gl_debug {
+		diagnostics_capture_gpu_info()
+		if options.gpu_debug {
 			if gl_debug_install() {
 				fmt.printf("[GL] Debug output on (debug context: %v); logging to %s\n", g_diag.gl_debug_context, GL_DEBUG_LOG_PATH)
 			} else {
@@ -1861,6 +1864,11 @@ main :: proc() {
 			prev_cpu_ms = cpu_ms
 		}
 		last_frame_start = frame_start
+		// A lost Vulkan device (driver reset or crash) cannot draw again.
+		if gpu_device_lost() {
+			fmt.eprintln("[GPU] The Vulkan device was lost (VK_ERROR_DEVICE_LOST); closing. If this repeats, update the graphics driver or turn off Settings > Video > Vulkan Renderer.")
+			break
+		}
 		if client.settings_dirty {
 			client.settings_dirty = false
 			client_settings_save(client_settings_snapshot(client))

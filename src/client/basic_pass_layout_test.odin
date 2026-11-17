@@ -9,6 +9,7 @@ import glfw "vendor:glfw"
 when ODIN_TEST {
 	// basic.vert/basic.frag's `Pass` block, as the driver lays it out, must match
 	// Basic_Pass_Uniforms byte for byte: it is uploaded as is.
+	when !SR_VULKAN {
 	@(test)
 	basic_pass_block_matches_struct :: proc(t: ^testing.T) {
 		logger := context.logger
@@ -16,15 +17,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(16, 16, "Pass layout", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(16, 16, "Pass layout")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 
 		Member :: struct { name: string, offset: uintptr }
 		members := [?]Member{
@@ -90,4 +87,5 @@ when ODIN_TEST {
 		}
 		resource_cache_fini()
 	}
+	} // GL-only test (OpenGL state or contexts)
 }

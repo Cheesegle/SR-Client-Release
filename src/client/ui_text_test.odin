@@ -17,16 +17,10 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(320, 240, "Text measure", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		defer glfw.DefaultWindowHints()
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(320, 240, "Text measure")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
 		ui := ui_init()
 		defer { ui_fini(ui); resource_cache_fini() }
 		ui_update(ui, 320, 240)

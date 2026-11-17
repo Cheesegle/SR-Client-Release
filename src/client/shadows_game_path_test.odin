@@ -28,12 +28,10 @@ when ODIN_TEST {
 		client.camera.position.y += me.height - shared.GAME_CONSTANTS.camera_height
 		client.camera.rotation = {me.direction.x, me.direction.y, 0}
 		player_update_meshes(me, false)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		gl.Viewport(0, 0, GAME_PATH_W, GAME_PATH_H)
+		test_gpu_use_device_target()
+		gpu_set_target(test_gpu_current_target(), GAME_PATH_W, GAME_PATH_H)
 		client_render_world(client)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, GAME_PATH_W, GAME_PATH_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, GAME_PATH_W, GAME_PATH_H, raw_data(pixels))
 	}
 
 	@(private = "file")
@@ -57,16 +55,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(GAME_PATH_W, GAME_PATH_H, "Shadows game path", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(GAME_PATH_W, GAME_PATH_H, "Shadows game path")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 
 		path := "bin/client-settings-game-path-test.json"
 		defer os.remove(path)
@@ -167,9 +160,7 @@ when ODIN_TEST {
 					me.direction = {-0.48, -0.1}
 					client_tick(client, f32(glfw.GetTime()), 1.0 / 60)
 				}
-				gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-				ui_flush()
-				gl.ReadPixels(0, 0, GAME_PATH_W, GAME_PATH_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+				test_read_rgb(0, 0, GAME_PATH_W, GAME_PATH_H, raw_data(pixels))
 			}
 			tick_off := make([]u8, len(pixels))
 			defer delete(tick_off)
@@ -200,6 +191,6 @@ when ODIN_TEST {
 		for _ in 0 ..< 2 { game_path_frame(client, pixels) }
 		testing.expect(t, game_path_changed(baseline, pixels) > 2000, "turning Shadows back on must bring them back")
 		client.menu.settings_active = false
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "the game path must render shadows without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "the game path must render shadows without OpenGL errors")
 	}
 }

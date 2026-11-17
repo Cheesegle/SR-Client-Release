@@ -42,20 +42,17 @@ when ODIN_TEST {
 		testing.expect(t, client.menu.settings_draft.visuals.values == menuui.DEFAULT_VISUAL_SETTINGS.values && !client.menu.settings_draft.visuals.color_override[.SKY], "Reset must stage neutral settings and restore map colors")
 	}
 
+	when !SR_VULKAN {
 	@(test)
 	graphics_shader_preview_and_sampler_isolation :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
 		glfw.DefaultWindowHints()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(64, 64, "Graphics regression", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(64, 64, "Graphics regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		gl.Viewport(0,0,64,64)
 		client := Client{visual_settings=menuui.DEFAULT_VISUAL_SETTINGS}
 		client_graphics_init(&client)
@@ -115,6 +112,7 @@ when ODIN_TEST {
 		g_lighting_config.ambient_color, g_lighting_config.ambient_intensity, g_lighting_config.light_intensity = {1,1,1}, 1, 0
 		material.unlit, material.color = false, {0.5,0.5,0.5,1}
 		scene_test_pixel(t, scene, &camera, 32,32, {64,64,64})
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "graphics preview and filtering must not generate OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "graphics preview and filtering must not generate OpenGL errors")
 	}
+	} // GL-only test (OpenGL state or contexts)
 }

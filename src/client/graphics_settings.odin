@@ -60,10 +60,6 @@ client_update_graphics :: proc(client: ^Client) {
 	quality = menuui.quality_settings_validate(quality)
 	if client.graphics_sampler_ready && client.graphics_quality == quality { return }
 	client.graphics_quality, client.graphics_sampler_ready = quality, true
-	// Smooth textures change the filter: recreate the sampler (Vulkan bakes
-	// filters into samplers; on GL this is just a new sampler object).
-	gpu_sampler_destroy(&client.graphics_sampler)
-	desc := GPU_SAMPLER_WORLD
-	desc.filter = quality.smooth_textures ? .Linear : .Nearest
-	client.graphics_sampler = gpu_sampler_create(desc, f32(quality.anisotropy))
+	gpu_sampler_set_filter(client.graphics_sampler, quality.smooth_textures ? .Linear : .Nearest)
+	gpu_sampler_set_anisotropy(client.graphics_sampler, f32(quality.anisotropy))
 }

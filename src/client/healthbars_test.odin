@@ -57,12 +57,10 @@ when ODIN_TEST {
 	// Draws with the current nameplate alphas. red_level sums the red channel
 	// of red-dominant pixels, so it scales with the bar's alpha.
 	nameplate_test_draw :: proc(client: ^Client, pixels: []u8) -> (red, green, white, red_level: int) {
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_clear(color = true, depth = true)
 		scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height))
 		player_healthbars_render(client)
-		ui_flush()
-		gl.ReadPixels(0, 0, client.viewport_width, client.viewport_height, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, client.viewport_width, client.viewport_height, raw_data(pixels))
 		for i := 0; i < len(pixels); i += 3 {
 			if pixels[i] > 200 && pixels[i+1] < 120 && pixels[i+2] < 120 { red += 1 }
 			if pixels[i] < 190 && pixels[i+1] > 200 && pixels[i+2] < 140 { green += 1 }
@@ -76,18 +74,13 @@ when ODIN_TEST {
 	healthbars_render_above_players_as_unclipped_overlay :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(640, 360, "Overhead health bar regression", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, 640, 360)
-		gl.ClearColor(0, 0, 0, 1)
+		test_gpu := test_gpu_open(640, 360, "Overhead health bar regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), 640, 360)
+		gpu_set_clear_color({0, 0, 0})
 		local := shared.Player{active = true, is_you = true, team = 1, position = {0, 0, -80}, height = 11, health = 100, max_health = 100}
 		enemy := shared.Player{active = true, team = 2, position = {-20, 0, -80}, height = 11, health = 100, max_health = 100}
 		ally := shared.Player{active = true, team = 1, position = {20, 0, -80}, height = 11, health = 100, max_health = 100}
@@ -121,7 +114,7 @@ when ODIN_TEST {
 		// cut the bars: Krunker draws them on a 2D overlay canvas.
 		covered_red, covered_green := healthbar_test_colors(&client, pixels)
 		testing.expectf(t, covered_red == half_red && covered_green == green, "geometry in front of a shown bar must never clip it, even partially (%d/%d red, %d/%d green)", covered_red, half_red, covered_green, green)
-		testing.expect(t, !gl.IsEnabled(gl.DEPTH_TEST), "overlay bars must be drawn without depth testing")
+		when !SR_VULKAN { testing.expect(t, !gl.IsEnabled(gl.DEPTH_TEST), "overlay bars must be drawn without depth testing") } // GL state
 		wall.transform.position, wall.transform.scale = {-10, -100, -40}, {3, 200, 1}
 		half_covered_red, half_covered_green := healthbar_test_colors(&client, pixels)
 		testing.expectf(t, half_covered_red == half_red && half_covered_green == green, "a surface covering half a bar must not cut that bar in half (%d/%d red)", half_covered_red, half_red)
@@ -164,7 +157,7 @@ when ODIN_TEST {
 		enemy.active, ally.health = false, 0
 		dead_red, dead_green := healthbar_test_colors(&client, pixels)
 		testing.expect(t, dead_red == 0 && dead_green == 0, "inactive/dead players and the local player must not get overhead bars")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "health bar and world rendering must preserve valid OpenGL state")
+		testing.expect(t, test_gpu_no_error(), "health bar and world rendering must preserve valid OpenGL state")
 	}
 
 	healthbar_test_settle :: proc(client: ^Client, seconds: f32 = 1) {
@@ -525,18 +518,13 @@ when ODIN_TEST {
 	nameplates_render_names_and_bars_independently :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "Nameplate regression", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, 1280, 720)
-		gl.ClearColor(0, 0, 0, 1)
+		test_gpu := test_gpu_open(1280, 720, "Nameplate regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), 1280, 720)
+		gpu_set_clear_color({0, 0, 0})
 		// FFA: every bar is the enemy colour and every name is white.
 		local := shared.Player{active = true, is_you = true, uid = 1, position = {0, 0, -40}, height = 11, health = 100, max_health = 100}
 		left := shared.Player{active = true, uid = 2, position = {-20, 0, -80}, height = 11, health = 100, max_health = 100}
@@ -602,6 +590,6 @@ when ODIN_TEST {
 		client.hud_settings.hide_healthbars = true
 		team_red, team_green, team_white := nameplate_test_colors(&client, pixels)
 		testing.expectf(t, team_red > 20 && team_white > 20 && team_green == 0, "enemy names use the enemy colour, teammate names stay white (%d red, %d white)", team_red, team_white)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "nameplate rendering must preserve valid OpenGL state")
+		testing.expect(t, test_gpu_no_error(), "nameplate rendering must preserve valid OpenGL state")
 	}
 }

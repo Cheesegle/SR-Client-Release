@@ -133,6 +133,7 @@ Gpu_Wrap :: enum u8 {
 Gpu_Sampler_Desc :: struct {
 	filter:     Gpu_Filter, // minification and magnification
 	mip_filter: bool,       // pick the nearest mip level when minifying
+	mip_linear: bool,       // with mip_filter: blend the two nearest levels instead
 	wrap:       Gpu_Wrap,
 	// Depth comparison (reference <= stored), for shadow samplers.
 	compare:    bool,
@@ -430,6 +431,19 @@ gpu_texture_destroy :: proc(texture: ^Gpu_Texture) {
 gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
 	if g_gpu_backend == .Vulkan { vk_gpu_texture_set_filter(texture, filter); return }
 	gl_gpu_texture_set_filter(texture, filter)
+}
+
+// Gives an existing 2D texture new contents, size and sampling while keeping
+// its handle (live mod reload).
+gpu_texture_replace :: proc(texture: Gpu_Texture, desc: Gpu_Texture_Desc, pixels: []u8) -> bool {
+	if g_gpu_backend == .Vulkan { return vk_gpu_texture_replace(texture, desc, pixels) }
+	return gl_gpu_texture_replace(texture, desc, pixels)
+}
+
+// World texture filtering (Settings > Smooth textures).
+gpu_sampler_set_filter :: proc(sampler: Gpu_Sampler, filter: Gpu_Filter) {
+	if g_gpu_backend == .Vulkan { vk_gpu_sampler_set_filter(sampler, filter); return }
+	gl_gpu_sampler_set_filter(sampler, filter)
 }
 
 gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width, height: i32, pixels: []u8) {

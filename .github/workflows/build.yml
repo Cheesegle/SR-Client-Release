@@ -30,6 +30,14 @@ jobs:
           Add-Content $env:GITHUB_PATH $odin
           Remove-Item odin.zip
 
+      - name: Install the Vulkan SDK (glslc compiles the shaders to SPIR-V)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -UseBasicParsing "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile vulkan-sdk.exe
+          Start-Process -Wait -FilePath .\vulkan-sdk.exe -ArgumentList "--root", "C:\VulkanSDK", "--accept-licenses", "--default-answer", "--confirm-command", "install"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\Bin"
+          Remove-Item vulkan-sdk.exe
+
       - name: Build
         shell: cmd
         run: build.bat all

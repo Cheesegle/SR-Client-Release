@@ -14,16 +14,11 @@ when ODIN_TEST {
 		context = runtime.default_context()
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "Scope and Undergrowth", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(1280, 720, "Scope and Undergrowth")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		ui := ui_init()
 		client := Client{scene = scene_init(), ui = ui}
 		g_client = &client
@@ -58,26 +53,22 @@ when ODIN_TEST {
 		camera.rotation = {-0.12, 0.3, 0}
 		for dimensions in ([][2]i32{{1280, 720}, {1920, 1080}, {2560, 1600}}) {
 			w, h := dimensions[0], dimensions[1]
-			glfw.SetWindowSize(window, w, h)
-			gl.Viewport(0, 0, w, h)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			test_gpu_resize(w, h)
+			gpu_set_target(test_gpu_current_target(), w, h)
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, f32(w), f32(h))
 			ui_update(ui, f32(w), f32(h))
 			overlay_scope_render(ui)
 			testing.expect(t, scope_icon != 0, "the packaged default scope image must load")
 			pixel: [3]u8
-			ui_flush()
-			gl.ReadPixels(0, h/2, 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
+			test_read_rgb(0, h/2, 1, 1, &pixel[0])
 			testing.expect(t, pixel == ([3]u8{}), "scope borders must mask the sides on wide screens")
-			ui_flush()
-			gl.ReadPixels(w/2, h/2, 1, 1, gl.RGB, gl.UNSIGNED_BYTE, &pixel[0])
+			test_read_rgb(w/2, h/2, 1, 1, &pixel[0])
 			testing.expect(t, pixel[0] < 20 && pixel[1] < 20 && pixel[2] < 20, "scope reticle must stay centered")
-			testing.expect(t, gl.GetError() == gl.NO_ERROR, "map and scope must render without OpenGL errors")
+			testing.expect(t, test_gpu_no_error(), "map and scope must render without OpenGL errors")
 			when #config(WEAPON_PREVIEW, false) {
 				pixels := make([]u8, int(w*h*3))
-				ui_flush()
-				gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+				test_read_rgb(0, 0, w, h, raw_data(pixels))
 				file := make([dynamic]u8)
 				append(&file, ..transmute([]u8)fmt.tprintf("P6\n%d %d\n255\n", w, h))
 				for row := h-1; row >= 0; row -= 1 { append(&file, ..pixels[row*w*3:(row+1)*w*3]) }

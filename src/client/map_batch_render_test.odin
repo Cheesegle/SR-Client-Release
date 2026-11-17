@@ -93,17 +93,13 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(64, 64, "Map batching", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		fmt.printf("[batch-eq] GL_RENDERER: %s; GL_VERSION: %s\n", cstring(gl.GetString(gl.RENDERER)), cstring(gl.GetString(gl.VERSION)))
+		test_gpu := test_gpu_open(64, 64, "Map batching")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		info := gpu_device_info()
+		fmt.printf("[batch-eq] %s on %s: %s\n", info.api, info.renderer, info.version)
 
 		w, h := i32(1280), i32(720)
 		target := bench_target_init(w, h)
@@ -117,17 +113,10 @@ when ODIN_TEST {
 		defer delete(depth_off)
 		defer delete(depth_on)
 
-		smooth: u32
-		gl.GenSamplers(1, &smooth)
-		defer gl.DeleteSamplers(1, &smooth)
-		gl.SamplerParameteri(smooth, gl.TEXTURE_WRAP_S, gl.REPEAT)
-		gl.SamplerParameteri(smooth, gl.TEXTURE_WRAP_T, gl.REPEAT)
-		gl.SamplerParameteri(smooth, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
-		gl.SamplerParameteri(smooth, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-		max_anisotropy: f32 = 1
-		gl.GetFloatv(0x84FF, &max_anisotropy)
-		if max_anisotropy >= 2 { gl.SamplerParameterf(smooth, 0x84FE, min(16, max_anisotropy)) }
-		_ = gl.GetError()
+		// Linear filtering with mip selection and anisotropy, like the High
+		// graphics preset (the other pass uses each texture's own sampling).
+		smooth := gpu_sampler_create({filter = .Linear, mip_filter = true, wrap = .Repeat}, min(16, gpu_max_anisotropy()))
+		defer gpu_sampler_destroy(&smooth)
 
 		old_lighting, old_visuals := g_lighting_config, g_visual_settings
 		defer { g_lighting_config, g_visual_settings = old_lighting, old_visuals; g_night_low_tint, g_night_unlit_tint = {1, 1, 1}, {1, 1, 1} }
@@ -165,7 +154,7 @@ when ODIN_TEST {
 					g_lighting_config = toggle.night ? night_lighting(map_inst.lighting, visuals.night_strength) : map_inst.lighting
 					g_night_low_tint, g_night_unlit_tint = night_tints(visuals)
 					client_update_map_details(&client, visuals)
-					samplers := [2]Gpu_Sampler{0, Gpu_Sampler(smooth)}
+					samplers := [2]Gpu_Sampler{0, smooth}
 					// The smooth sampler pass runs once per view to cover mip selection.
 					for sampler, sampler_index in samplers {
 						if sampler_index == 1 && toggle_index != 0 do continue
@@ -203,7 +192,7 @@ when ODIN_TEST {
 					}
 				}
 			}
-			testing.expect(t, gl.GetError() == gl.NO_ERROR, fmt.tprintf("%s must render without OpenGL errors", map_name))
+			testing.expect(t, test_gpu_no_error(), fmt.tprintf("%s must render without OpenGL errors", map_name))
 
 			client_unload_map(&client)
 			shared.map_destroy(map_inst)
@@ -225,16 +214,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(64, 64, "Map culling", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(64, 64, "Map culling")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 
 		w, h := i32(320), i32(180)
 		target := bench_target_init(w, h)

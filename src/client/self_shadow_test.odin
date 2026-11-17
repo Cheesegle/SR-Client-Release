@@ -18,12 +18,10 @@ when ODIN_TEST {
 	@(private = "file")
 	self_shadow_frame :: proc(client: ^Client, quality: menuui.Quality_Settings, pixels: []u8) {
 		client.quality_settings = quality
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		gl.Viewport(0, 0, SELF_SHADOW_W, SELF_SHADOW_H)
+		test_gpu_use_device_target()
+		gpu_set_target(test_gpu_current_target(), SELF_SHADOW_W, SELF_SHADOW_H)
 		client_render_world(client)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, SELF_SHADOW_W, SELF_SHADOW_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, SELF_SHADOW_W, SELF_SHADOW_H, raw_data(pixels))
 	}
 
 	@(private = "file")
@@ -43,16 +41,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(SELF_SHADOW_W, SELF_SHADOW_H, "Self shadow", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(SELF_SHADOW_W, SELF_SHADOW_H, "Self shadow")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 
 		config := shared.config_load_gameplay("assets/config/game.toml")
 		defer shared.config_destroy_gameplay(config)
@@ -182,6 +175,6 @@ when ODIN_TEST {
 		sharp.shadow_quality = 1
 		self_shadow_frame(client, sharp, pixels)
 		testing.expect(t, self_shadow_luma(pixels, px, py) + 60 < self_shadow_luma(pixels, lit_px, py), "Sharp must show your shadow too")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "Self shadow must not generate OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "Self shadow must not generate OpenGL errors")
 	}
 }

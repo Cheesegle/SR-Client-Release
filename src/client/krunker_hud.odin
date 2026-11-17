@@ -66,9 +66,10 @@ kh_load :: proc(texture: ^Gpu_Texture, path: string, smooth := false) -> Gpu_Tex
 
 kh_texture_aspect :: proc(texture: Gpu_Texture) -> f32 {
 	if texture == 0 { return 1 }
-	w, h: i32
-	if entry, ok := g_texture_by_id[texture]; ok { w, h = entry.width, entry.height }
-	return h > 0 ? f32(w)/f32(h) : 1
+	// HUD icons come from load_texture, whose cache knows the size.
+	entry, ok := g_texture_by_id[texture]
+	if !ok || entry.height <= 0 { return 1 }
+	return f32(entry.width)/f32(entry.height)
 }
 
 kh_map_name :: proc(client: ^Client) -> string {

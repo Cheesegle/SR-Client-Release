@@ -14,16 +14,11 @@ when ODIN_TEST {
 		context = runtime.default_context()
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(640, 360, "Bullet trails regression", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(640, 360, "Bullet trails regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		client := Client{window = window, scene = scene_init()}
 		g_client = &client
 		defer { g_client = nil }
@@ -56,21 +51,19 @@ when ODIN_TEST {
 
 		client.camera = camera_init(math.PI / 2)
 		client.camera.position = {0, 0, 40}
-		gl.Viewport(0, 0, 640, 360)
-		gl.ClearColor(0, 0, 0, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_set_target(test_gpu_current_target(), 640, 360)
+		gpu_set_clear_color({0, 0, 0})
+		gpu_clear(color = true, depth = true)
 		scene_render(client.scene, &client.camera, 640, 360)
 		pixels := make([]u8, 640 * 360 * 3)
 		defer delete(pixels)
-		ui_flush()
-		gl.ReadPixels(0, 0, 640, 360, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, 640, 360, raw_data(pixels))
 		visible := 0
 		for i := 0; i < len(pixels); i += 3 {
 			if pixels[i] > 0 || pixels[i + 1] > 0 || pixels[i + 2] > 0 { visible += 1 }
 		}
 		testing.expect(t, visible > 3 && visible < 1000, "the moving tracer must produce a short visible streak in the world render")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "bullet tracer render produced an OpenGL error")
+		testing.expect(t, test_gpu_no_error(), "bullet tracer render produced an OpenGL error")
 		client_tick_tracers(&client, 0.02)
 		testing.expect(t, abs(client.tracer_markers[0].mesh.transform.position.x - 12) < 0.001, "a second frame must advance the streak rather than fade a static beam")
 		client_tick_tracers(&client, 1)

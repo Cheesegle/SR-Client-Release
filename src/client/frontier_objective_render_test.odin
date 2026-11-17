@@ -18,13 +18,11 @@ when ODIN_TEST {
 
 	@(private = "file")
 	site_frame :: proc(client: ^Client, pixels: []u8) {
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		gl.Viewport(0, 0, SITE_W, SITE_H)
+		test_gpu_use_device_target()
+		gpu_set_target(test_gpu_current_target(), SITE_W, SITE_H)
 		client_update_objective_visuals(client)
 		client_render_world(client)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, SITE_W, SITE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, SITE_W, SITE_H, raw_data(pixels))
 	}
 
 	// Frontier's hardpoint sites through the game's own frame path: for each
@@ -39,16 +37,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(SITE_W, SITE_H, "Frontier sites", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(SITE_W, SITE_H, "Frontier sites")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		os.make_directory("bin/map-fixes")
 		tag := os.get_env("SR_SHOT_TAG", context.temp_allocator)
 		if tag == "" do tag = "after"
@@ -125,15 +118,12 @@ when ODIN_TEST {
 			top.rotation = {-math.PI / 2, 0, 0}
 			camera_update_projection_matrix(&top, f32(SITE_W) / f32(SITE_H))
 			camera_update_world_inverse_matrix(&top)
-			gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-			gl.Viewport(0, 0, SITE_W, SITE_H)
-			gl.ClearColor(0, 0, 0, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			test_gpu_use_device_target()
+			gpu_set_target(test_gpu_current_target(), SITE_W, SITE_H)
+			gpu_set_clear_color({0, 0, 0})
+			gpu_clear(color = true, depth = true)
 			scene_render(marker_only, &top, SITE_W, SITE_H)
-			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-			ui_flush()
-			gl.ReadPixels(0, 0, SITE_W, SITE_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, SITE_W, SITE_H, raw_data(pixels))
 			scene_fini(marker_only)
 			lo := [2]f32{SITE_W, SITE_H}
 			hi := [2]f32{0, 0}
@@ -172,7 +162,7 @@ when ODIN_TEST {
 
 			shared.game_rotate_objective(&client.game)
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "Frontier sites must render without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "Frontier sites must render without OpenGL errors")
 		client_clear_players(client)
 		free_all(context.temp_allocator)
 	}

@@ -47,16 +47,11 @@ when ODIN_TEST {
 	krunker_server_explosions_render_and_expire_without_damage :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(320, 180, "Live explosion regression", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(320, 180, "Live explosion regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		client: Client
 		map_inst: shared.Map
 		krunker_presentation_fixture(&client, &map_inst)
@@ -72,20 +67,18 @@ when ODIN_TEST {
 		gameplay_packet(&client.krunker_world, "ex", i64(0), i64(0), i64(0), i64(50), i64(0), i64(0))
 		krunker_client_present_projectiles(&client)
 		krunker_client_tick_explosions(&client, 0.1)
-		gl.Viewport(0,0,320,180)
-		gl.ClearColor(0,0,0,1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_set_target(test_gpu_current_target(), 320, 180)
+		gpu_set_clear_color({0, 0, 0})
+		gpu_clear(color = true, depth = true)
 		scene_render(client.scene, &client.camera, 320,180)
 		pixels := make([]u8, 320*180*3, context.temp_allocator)
-		ui_flush()
-		gl.ReadPixels(0,0,320,180,gl.RGB,gl.UNSIGNED_BYTE,raw_data(pixels))
+		test_read_rgb(0, 0, 320, 180, raw_data(pixels))
 		visible := 0
 		for i := 0; i < len(pixels); i += 3 { if pixels[i] > 0 { visible += 1 } }
 		testing.expect(t, visible > 20 && len(client.explosions) == 1, "server explosions must produce a visible world effect")
 		krunker_client_tick_explosions(&client, 0.4)
 		testing.expect(t, len(client.explosions) == 0 && client.scene.mesh_count == 0 && client.me.health == 100,
 			"explosions must release their meshes without applying local damage")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

@@ -21,19 +21,16 @@ when ODIN_TEST {
 		testing.expectf(t, opaque > 10 && clear > 10, "the arrow has both drawn and transparent pixels (%dx%d, %d opaque, %d clear)", width, height, opaque, clear)
 	}
 
+	when !SR_VULKAN {
 	@(test)
 	software_cursor_hidden_window_lifecycle :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(160, 120, "Software cursor regression", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(160, 120, "Software cursor regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		defer software_cursor_fini()
 		cursor := &g_software_cursor
 
@@ -63,4 +60,5 @@ when ODIN_TEST {
 		glfw.SetInputMode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 		testing.expect(t, !software_cursor_wanted(true, glfw.GetInputMode(window, glfw.CURSOR) == glfw.CURSOR_DISABLED, false, true), "disabled cursor means no game-drawn cursor")
 	}
+	} // GL-only test (OpenGL state or contexts)
 }

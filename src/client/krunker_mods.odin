@@ -96,6 +96,7 @@ download_write :: proc "c" (buffer: [^]byte, size, count: c.size_t, output: rawp
 
 @(private = "file")
 download_run :: proc(job: ^Download_Job) {
+	cpu_pin_current_thread_off_game_core() // never on the game thread's core
 	defer sync.atomic_store(&job.done, true)
 	if len(job.local_path) > 0 {
 		data, err := os.read_entire_file_from_path(job.local_path, context.allocator)

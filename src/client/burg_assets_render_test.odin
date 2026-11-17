@@ -15,16 +15,11 @@ when ODIN_TEST {
 		context = runtime.default_context()
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "Burg hosted art", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(1280, 720, "Burg hosted art")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		client := Client{scene = scene_init()}
 		g_client = &client
 		old_lighting := g_lighting_config
@@ -51,9 +46,8 @@ when ODIN_TEST {
 			mesh := cast(^Mesh)object.mesh
 			testing.expect(t, mesh.geometry != nil && mesh.geometry.index_count > 0, "hosted models need triangles")
 			material := cast(^Basic_Material)mesh.material
-			gl.BindTexture(gl.TEXTURE_2D, u32(material.texture))
 			width: i32
-			gl.GetTexLevelParameteriv(gl.TEXTURE_2D, 0, gl.TEXTURE_WIDTH, &width)
+			if entry, ok := g_texture_by_id[material.texture]; ok { width = entry.width } // the loaded image's width
 			testing.expect(t, material.texture != 0 && (width > 1 || aid == "27432g"), "hosted models must use original images rather than the white fallback")
 			scale := shared.get_json_f32(raw["ms"])
 			testing.expect(t, mesh.transform.scale == (shared.Vec3{scale, scale, scale}), "map ms must set hosted asset scale")
@@ -73,7 +67,7 @@ when ODIN_TEST {
 		camera.position = {-90, 220, 180}
 		camera.rotation = {-0.48, -0.1, 0}
 		w, h := i32(1280), i32(720)
-		gl.Viewport(0, 0, w, h)
+		gpu_set_target(test_gpu_current_target(), w, h)
 		before, after := make([]u8, int(w*h*3)), make([]u8, int(w*h*3))
 		defer delete(before)
 		defer delete(after)
@@ -84,19 +78,17 @@ when ODIN_TEST {
 					(cast(^Mesh)object.mesh).visible = pass == 1
 				}
 			}
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, f32(w), f32(h))
 			pixels := before if pass == 0 else after
-			ui_flush()
-			gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, w, h, raw_data(pixels))
 		}
 		changed := 0
 		for value, index in after {
 			if value != before[index] do changed += 1
 		}
 		testing.expect(t, changed > 3000, "restored art must visibly contribute to the Burg courtyard")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "Burg must render without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "Burg must render without OpenGL errors")
 		when #config(WEAPON_PREVIEW, false) {
 			file := make([dynamic]u8)
 			append(&file, ..transmute([]u8)fmt.tprintf("P6\n%d %d\n255\n", w, h))

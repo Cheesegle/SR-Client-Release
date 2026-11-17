@@ -9,7 +9,7 @@ PROFILE ?= none
 
 UNAME_S := $(shell uname -s)
 
-.PHONY: all client dev server test check clean dist-windows
+.PHONY: all client dev spirv server test check clean dist-windows
 
 all: client server
 
@@ -27,6 +27,9 @@ endif
 client: spirv
 	mkdir -p $(BIN_DIR)
 	$(ODIN) build src/client -out:$(BIN_DIR)/sr_client -o:$(PROFILE)
+
+spirv:
+	sh tools/build-spirv.sh
 
 # Developer client with debug tools (SR_DEV, F3 window). Separate file
 # name so it is never packaged for testers.

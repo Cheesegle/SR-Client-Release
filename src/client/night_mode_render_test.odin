@@ -36,12 +36,10 @@ when ODIN_TEST {
 
 	@(private = "file")
 	night_frame :: proc(client: ^Client, pixels: []u8) {
-		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		gl.Viewport(0, 0, NIGHT_W, NIGHT_H)
+		test_gpu_use_device_target()
+		gpu_set_target(test_gpu_current_target(), NIGHT_W, NIGHT_H)
 		client_render_world(client)
-		gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-		ui_flush()
-		gl.ReadPixels(0, 0, NIGHT_W, NIGHT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+		test_read_rgb(0, 0, NIGHT_W, NIGHT_H, raw_data(pixels))
 	}
 
 	@(private = "file")
@@ -83,16 +81,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(NIGHT_W, NIGHT_H, "Night mode", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(NIGHT_W, NIGHT_H, "Night mode")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		os.make_directory("bin/night")
 
 		old_lighting, old_visuals := g_lighting_config, g_visual_settings
@@ -191,7 +184,7 @@ when ODIN_TEST {
 					}
 				}
 			}
-			testing.expect(t, gl.GetError() == gl.NO_ERROR, fmt.tprintf("%s: night mode must render without OpenGL errors", view.map_name))
+			testing.expect(t, test_gpu_no_error(), fmt.tprintf("%s: night mode must render without OpenGL errors", view.map_name))
 
 			client_clear_players(client)
 			client_unload_map(client)

@@ -25,61 +25,6 @@ g_font_height_units: f32
 g_kern_caches: [Font_Slot][128][128]i32
 g_kern_cacheds: [Font_Slot][128][128]bool
 
-// Glyphs above U+00FF (chat: č, š, ž, ...) are cached by rune here (per font).
-g_glyph_extras: [Font_Slot]map[rune]^Glyph_Cache_Entry
-
-// Two fonts: the menu's (Rajdhani) and Krunker's game font for the in-game
-// HUD. The globals above are always the active font; ui_use_font swaps only
-// the small font state, the glyph and kerning caches are kept per font.
-// Both fonts share the one glyph atlas.
-Font_Slot :: enum { UI, GAME }
-Font_State :: struct {
-	info: stbtt.fontinfo,
-	loaded: bool,
-	data: []byte,
-	height_units: f32,
-}
-g_font_slot: Font_Slot
-g_font_saved: [Font_Slot]Font_State
-FONT_FILES := [Font_Slot]string{.UI = "css/fonts/Rajdhani-SemiBold.ttf", .GAME = "css/fonts/FrVrKrunkerBold2.ttf"}
-
-ui_use_font :: proc(slot: Font_Slot) {
-	if slot == g_font_slot { return }
-	saved := &g_font_saved[g_font_slot]
-	saved.info, saved.loaded, saved.data, saved.height_units = g_font_info, g_font_loaded, g_font_data, g_font_height_units
-	next := &g_font_saved[slot]
-	g_font_info, g_font_loaded, g_font_data, g_font_height_units = next.info, next.loaded, next.data, next.height_units
-	next^ = {}
-	g_font_slot = slot
-}
-
-load_glyph_rune :: proc(c: rune) -> ^Glyph_Cache_Entry {
-	if c >= 0 && c < 256 { return load_glyph(u8(c)) }
-	if cached, ok := g_glyph_extras[g_font_slot][c]; ok { return cached }
-	if !g_font_loaded { load_font() }
-	if !g_font_loaded { return load_glyph('?') }
-	glyph: ^Glyph_Cache_Entry
-	if stbtt.FindGlyphIndex(&g_font_info, c) != 0 {
-		glyph = glyph_create(c)
-	} else if g_font_slot == .GAME && g_font_saved[.UI].loaded && stbtt.FindGlyphIndex(&g_font_saved[.UI].info, c) != 0 {
-		// Krunker's font has no č, š, ž...: borrow the menu font's glyph.
-		glyph = glyph_create(c, &g_font_saved[.UI].info)
-	} else {
-		return load_glyph('?')
-	}
-	if glyph != nil { g_glyph_extras[g_font_slot][c] = glyph }
-	return glyph
-}
-
-// Forgets every cached glyph of both fonts (the atlas was emptied).
-ui_glyphs_forget :: proc() {
-	for slot in Font_Slot {
-		for &glyph in g_glyph_caches[slot] { if glyph != nil { free(glyph); glyph = nil } }
-		for _, glyph in g_glyph_extras[slot] { free(glyph) }
-		clear(&g_glyph_extras[slot])
-	}
-}
-
 // The interface program, shared by every UI (resource_cache_fini frees it).
 g_ui_program: Gpu_Program
 
@@ -143,6 +88,52 @@ stb_font_metrics :: proc(ascent, descent, gap: ^i32) {
 	}
 }
 
+// Glyphs above U+00FF (chat: č, š, ž, ...) are cached by rune here (per font).
+g_glyph_extras: [Font_Slot]map[rune]^Glyph_Cache_Entry
+
+// Two fonts: the menu's (Rajdhani) and Krunker's game font for the in-game
+// HUD. The globals above are always the active font; ui_use_font swaps only
+// the small font state, the glyph and kerning caches are kept per font
+// (copying them on every switch cost about 0.5 MB of memory traffic a frame).
+Font_Slot :: enum { UI, GAME }
+Font_State :: struct {
+	info: stbtt.fontinfo,
+	loaded: bool,
+	data: []byte,
+	height_units: f32,
+}
+g_font_slot: Font_Slot
+g_font_saved: [Font_Slot]Font_State
+FONT_FILES := [Font_Slot]string{.UI = "css/fonts/Rajdhani-SemiBold.ttf", .GAME = "css/fonts/FrVrKrunkerBold2.ttf"}
+
+ui_use_font :: proc(slot: Font_Slot) {
+	if slot == g_font_slot { return }
+	saved := &g_font_saved[g_font_slot]
+	saved.info, saved.loaded, saved.data, saved.height_units = g_font_info, g_font_loaded, g_font_data, g_font_height_units
+	next := &g_font_saved[slot]
+	g_font_info, g_font_loaded, g_font_data, g_font_height_units = next.info, next.loaded, next.data, next.height_units
+	next^ = {}
+	g_font_slot = slot
+}
+
+load_glyph_rune :: proc(c: rune) -> ^Glyph_Cache_Entry {
+	if c >= 0 && c < 256 { return load_glyph(u8(c)) }
+	if cached, ok := g_glyph_extras[g_font_slot][c]; ok { return cached }
+	if !g_font_loaded { load_font() }
+	if !g_font_loaded { return load_glyph('?') }
+	glyph: ^Glyph_Cache_Entry
+	if stbtt.FindGlyphIndex(&g_font_info, c) != 0 {
+		glyph = glyph_create(c)
+	} else if g_font_slot == .GAME && g_font_saved[.UI].loaded && stbtt.FindGlyphIndex(&g_font_saved[.UI].info, c) != 0 {
+		// Krunker's font has no č, š, ž...: borrow the menu font's glyph.
+		glyph = glyph_create(c, &g_font_saved[.UI].info)
+	} else {
+		return load_glyph('?')
+	}
+	if glyph != nil { g_glyph_extras[g_font_slot][c] = glyph }
+	return glyph
+}
+
 // Copies a w x h coverage bitmap into the atlas; `texel` is its top-left
 // texel there. A full atlas is emptied (glyphs then reload on use).
 @(private = "file")
@@ -158,7 +149,7 @@ ui_atlas_insert :: proc(bitmap: []u8, w, h: i32) -> (texel: [2]i32, ok: bool) {
 	if atlas.y + ch > UI_ATLAS_SIZE {
 		fmt.eprintln("[UI] Glyph atlas full; rebuilding it")
 		ui_flush() // queued text still reads the old cells
-		ui_glyphs_forget()
+		ui_glyph_caches_free()
 		atlas.x, atlas.y, atlas.row = 0, 0, 0
 	}
 	cell := make([]u8, int(cw) * int(ch), context.temp_allocator)
@@ -175,6 +166,15 @@ ui_atlas_insert :: proc(bitmap: []u8, w, h: i32) -> (texel: [2]i32, ok: bool) {
 	return texel, true
 }
 
+// Forgets every cached glyph of both fonts (their atlas cells are reused).
+ui_glyph_caches_free :: proc() {
+	for slot in Font_Slot {
+		for &glyph in g_glyph_caches[slot] { if glyph != nil { free(glyph); glyph = nil } }
+		for _, glyph in g_glyph_extras[slot] { free(glyph) }
+		clear(&g_glyph_extras[slot])
+	}
+}
+
 load_glyph :: proc(c: u8) -> ^Glyph_Cache_Entry {
 	if cached := g_glyph_caches[g_font_slot][c]; cached != nil {
 		return cached
@@ -185,6 +185,7 @@ load_glyph :: proc(c: u8) -> ^Glyph_Cache_Entry {
 }
 
 glyph_create :: proc(c: rune, from: ^stbtt.fontinfo = nil) -> ^Glyph_Cache_Entry {
+
 	// Font is loaded lazily from assets (matches C's freetype usage).
 	if !g_font_loaded {
 		load_font()
@@ -289,7 +290,13 @@ ui_batch_command :: proc(texture: Gpu_Texture) -> ^UI_Command {
 // Appends a box (x, y: top-left in UI pixels). `uv` maps local (0,0) and (1,1)
 // to texture coordinates: uv[0] + local * uv[1].
 @(private = "file")
-ui_box :: proc(ui: ^UI, kind: UI_Kind, texture: Gpu_Texture, x, y, width, height: f32, color: shared.Vec4, radius: f32 = 0, aspect: f32 = 1, r_clip: f32 = 0, stroke: f32 = 0, uv := [2][2]f32{{0, 0}, {1, 1}}, radii_mask := [4]f32{1, 1, 1, 1}) {
+ui_box :: proc(ui: ^UI, kind: UI_Kind, texture: Gpu_Texture, x, y, width, height: f32, color: shared.Vec4, radius: f32 = 0, aspect: f32 = 1, r_clip: f32 = 0, stroke: f32 = 0, uv := [2][2]f32{{0, 0}, {1, 1}}) {
+	ui_box_radii(ui, kind, texture, x, y, width, height, color, {radius, radius, radius, radius}, aspect, r_clip, stroke, uv)
+}
+
+// ui_box with a radius per corner: bottom-left, bottom-right, top-left,
+// top-right (in units of the shorter side, like ui_box's radius).
+ui_box_radii :: proc(ui: ^UI, kind: UI_Kind, texture: Gpu_Texture, x, y, width, height: f32, color: shared.Vec4, radii: [4]f32, aspect: f32 = 1, r_clip: f32 = 0, stroke: f32 = 0, uv := [2][2]f32{{0, 0}, {1, 1}}) {
 	// A minimized window (0x0) or a NaN layout box would send NaN/Inf vertex
 	// positions to the driver; draw nothing instead.
 	finite :: proc(value: f32) -> bool { return !math.is_nan(value) && !math.is_inf(value) }
@@ -313,7 +320,7 @@ ui_box :: proc(ui: ^UI, kind: UI_Kind, texture: Gpu_Texture, x, y, width, height
 			local    = local,
 			uv       = uv[0] + local * uv[1],
 			color    = color,
-			radii    = radius * radii_mask, // bottom left, bottom right, top left, top right
+			radii    = radii,
 			params   = params,
 		})
 	}
@@ -355,7 +362,8 @@ ui_round_rect :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: 
 
 // A rectangle with only its top corners rounded (border-radius: r r 0 0).
 ui_round_rect_top :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius: f32) {
-	ui_box(ui, .Solid, 0, x, y, width, height, color, radius / min(width, height), width / height, radii_mask = {0, 0, 1, 1})
+	r := radius / min(width, height)
+	ui_box_radii(ui, .Solid, 0, x, y, width, height, color, {0, 0, r, r}, width / height)
 }
 
 ui_fill_rect_rclip :: proc(ui: ^UI, color: shared.Vec4, x, y, width, height, radius, r_clip: f32) {
@@ -494,11 +502,9 @@ ui_fini :: proc(ui: ^UI) {
 	if ui == nil {
 		return
 	}
-
 	// Free both fonts' glyphs (the inactive font's file stays loaded).
-	ui_glyphs_forget()
-	for slot in Font_Slot { delete(g_glyph_extras[slot]); g_glyph_extras[slot] = nil }
-	g_kern_cacheds = {}
+	ui_glyph_caches_free()
+	for slot in Font_Slot { delete(g_glyph_extras[slot]); g_glyph_extras[slot] = nil; g_kern_cacheds[slot] = {} }
 	// Elements queued for this UI are dropped with it.
 	delete(g_ui_batch.vertices)
 	delete(g_ui_batch.indices)

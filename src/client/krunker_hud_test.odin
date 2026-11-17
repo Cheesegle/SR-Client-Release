@@ -4,7 +4,6 @@ import "base:runtime"
 import "core:fmt"
 import "core:os"
 import "core:testing"
-import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 import kproto "../krunker"
 import menuui "../menu"
@@ -35,23 +34,13 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(640, 360, "HUD preview", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.ClearColor(67.0/255, 45.0/255, 29.0/255, 1) // the brown wall behind glorp's HUD
-		framebuffer, color_texture: u32
-		gl.GenFramebuffers(1, &framebuffer)
-		gl.GenTextures(1, &color_texture)
-		defer gl.DeleteFramebuffers(1, &framebuffer)
-		defer gl.DeleteTextures(1, &color_texture)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
+		test_gpu := test_gpu_open(640, 360, "HUD preview")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		gpu_set_clear_color({67.0/255, 45.0/255, 29.0/255}) // the brown wall behind glorp's HUD
+		framebuffer: Gpu_Render_Target
+		defer test_gpu_target_destroy(&framebuffer)
 
 		config := shared.config_load_gameplay("assets/config/game.toml")
 		defer shared.config_destroy_gameplay(config)
@@ -94,13 +83,13 @@ when ODIN_TEST {
 
 		for size in ([?][2]i32{{1920, 1080}, {1280, 720}}) {
 			for scale in ([?]f32{0.7, 0.9}) {
-				gl.BindTexture(gl.TEXTURE_2D, color_texture)
-				gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, size[0], size[1], 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-				gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-				gl.BindTexture(gl.TEXTURE_2D, 0)
+				test_gpu_target_destroy(&framebuffer)
+				framebuffer = test_gpu_target(size[0], size[1])
+				if !testing.expect(t, framebuffer != 0) { return }
+				test_gpu_use_target(framebuffer, size[0], size[1])
 				g_active_texture = 0
 				client.viewport_width, client.viewport_height = size[0], size[1]
-				gl.Viewport(0, 0, size[0], size[1])
+				gpu_set_target(test_gpu_current_target(), size[0], size[1])
 				client.hud_settings.ui_scale = scale
 				pixels := make([]u8, int(size[0]*size[1]*3))
 				defer delete(pixels)
@@ -112,6 +101,6 @@ when ODIN_TEST {
 				testing.expect(t, os.write_entire_file(fmt.tprintf("bin/krunker-hud-%dx%d-%.1f.ppm", size[0], size[1], scale), file[:]) == nil)
 			}
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

@@ -11,12 +11,10 @@ import shared "../shared"
 
 when ODIN_TEST {
 	objective_test_render :: proc(scene: ^Scene, camera: ^Camera, y: i32) -> [4]u8 {
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_clear(color = true, depth = true)
 		scene_render(scene, camera, 320, 180)
 		pixel: [4]u8
-		ui_flush()
-		gl.ReadPixels(160, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, &pixel[0])
+		test_read_rgba(160, y, 1, 1, &pixel[0])
 		return pixel
 	}
 
@@ -25,18 +23,13 @@ when ODIN_TEST {
 		context = runtime.default_context()
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(320, 180, "Objective perimeter regression", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, 320, 180)
-		gl.ClearColor(0, 0, 0, 1)
+		test_gpu := test_gpu_open(320, 180, "Objective perimeter regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), 320, 180)
+		gpu_set_clear_color({0, 0, 0})
 		scene := scene_init()
 		defer { scene_fini(scene); resource_cache_fini() }
 		raw := make(json.Object)
@@ -69,11 +62,11 @@ when ODIN_TEST {
 			"the yellow perimeter must fade upward across the wall instead of tiling or filling the floor")
 		depth: f32
 		ui_flush()
-		gl.ReadPixels(160, 84, 1, 1, gl.DEPTH_COMPONENT, gl.FLOAT, &depth)
-		testing.expect(t, depth == 1, "translucent objective walls must leave world depth untouched")
+		when !SR_VULKAN { gl.ReadPixels(160, 84, 1, 1, gl.DEPTH_COMPONENT, gl.FLOAT, &depth) } // GL state
+		when !SR_VULKAN { testing.expect(t, depth == 1, "translucent objective walls must leave world depth untouched") } // GL depth readback
 		depth_write: bool
-		gl.GetBooleanv(gl.DEPTH_WRITEMASK, &depth_write)
-		testing.expect(t, depth_write == gl.TRUE, "depth writes must be restored for subsequent render passes")
+		when !SR_VULKAN { gl.GetBooleanv(gl.DEPTH_WRITEMASK, &depth_write) } // GL state
+		when !SR_VULKAN { testing.expect(t, depth_write == gl.TRUE, "depth writes must be restored for subsequent render passes") } // GL state
 		camera.position.z = -30
 		inside := objective_test_render(scene, &camera, 55)
 		testing.expect(t, inside[0] > 30, "the perimeter must also be visible from inside the zone")
@@ -108,14 +101,13 @@ when ODIN_TEST {
 			objective_test_render(scene, &camera, 90)
 			pixels := make([]u8, 320*180*3)
 			defer delete(pixels)
-			ui_flush()
-			gl.ReadPixels(0, 0, 320, 180, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, 320, 180, raw_data(pixels))
 			file := make([dynamic]u8)
 			defer delete(file)
 			append(&file, "P6\n320 180\n255\n")
 			for row := 179; row >= 0; row -= 1 { append(&file, ..pixels[row*320*3:(row+1)*320*3]) }
 			testing.expect(t, os.write_entire_file("bin/objective-preview.ppm", file[:]) == nil)
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "objective rendering must preserve valid OpenGL state")
+		testing.expect(t, test_gpu_no_error(), "objective rendering must preserve valid OpenGL state")
 	}
 }

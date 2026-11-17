@@ -363,23 +363,14 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) { return }
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(1280, 720, "Debug UI", nil, nil)
-		if !testing.expect(t, window != nil) { return }
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.ClearColor(0.16, 0.18, 0.20, 1)
-		framebuffer, color_texture: u32
-		gl.GenFramebuffers(1, &framebuffer)
-		gl.GenTextures(1, &color_texture)
-		defer gl.DeleteFramebuffers(1, &framebuffer)
-		defer gl.DeleteTextures(1, &color_texture)
-		gl.BindFramebuffer(gl.FRAMEBUFFER, framebuffer)
+		test_gpu := test_gpu_open(1280, 720, "Debug UI")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_clear_color({0.16, 0.18, 0.20})
+		framebuffer: Gpu_Render_Target
+		defer test_gpu_target_destroy(&framebuffer)
 		client := new(Client)
 		defer free(client)
 		client.ui, client.window, client.bindings = ui_init(), window, menuui.default_bindings()
@@ -390,19 +381,17 @@ when ODIN_TEST {
 		perf_overlay_set(client, true)
 		for i in 0..<300 { perf_push(&client.perf, i % 50 == 0 ? 40 : 7, 3) }
 		for size in ([?][2]i32{{1280, 720}, {1920, 1080}, {2560, 1600}}) {
-			gl.BindTexture(gl.TEXTURE_2D, color_texture)
-			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB8, size[0], size[1], 0, gl.RGB, gl.UNSIGNED_BYTE, nil)
-			gl.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color_texture, 0)
-			if !testing.expect(t, gl.CheckFramebufferStatus(gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE) { return }
-			gl.BindTexture(gl.TEXTURE_2D, 0)
+			test_gpu_target_destroy(&framebuffer)
+			framebuffer = test_gpu_target(size[0], size[1])
+			if !testing.expect(t, framebuffer != 0) { return }
+			test_gpu_use_target(framebuffer, size[0], size[1])
 			g_active_texture = 0
 			client.viewport_width, client.viewport_height = size[0], size[1]
-			gl.Viewport(0, 0, size[0], size[1])
+			gpu_set_target(test_gpu_current_target(), size[0], size[1])
 			client.mouse_state.locked = true // Display-only: no GLFW input is read.
 			counts: Debug_UI_Draw_Counts
 			for _ in 0..<3 {
-				ui_flush()
-				gl.Clear(gl.COLOR_BUFFER_BIT)
+				gpu_clear(color = true, depth = false)
 				ui_update(client.ui, f32(size[0]), f32(size[1]))
 				testing.expect(t, !debug_ui_update(client), "a locked cursor never feeds the window")
 				counts = debug_ui_render(client)
@@ -410,10 +399,9 @@ when ODIN_TEST {
 			testing.expectf(t, counts.rects > PERF_GRAPH_FRAMES && counts.texts >= 18 && counts.icons >= 2, "microui commands map to rects, text and icons: %v", counts)
 			testing.expectf(t, counts.clips > 0, "the long map name produces clip commands: %v", counts)
 			testing.expectf(t, counts.min_x >= 0 && counts.min_y >= 0 && counts.max_x <= size[0] && counts.max_y <= size[1], "the window draws within %v: %v", size, counts)
-			testing.expect(t, !gl.IsEnabled(gl.SCISSOR_TEST), "scissor is restored after the window")
+			when !SR_VULKAN { testing.expect(t, !gl.IsEnabled(gl.SCISSOR_TEST), "scissor is restored after the window") } // GL state
 			pixels := make([]u8, int(size[0]*size[1]*3), context.temp_allocator)
-			ui_flush()
-			gl.ReadPixels(0, 0, size[0], size[1], gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, size[0], size[1], raw_data(pixels))
 			window_rect := mu.get_container(&client.debug_ui.ctx, DEBUG_WINDOW_TITLE).rect
 			changed, outside := 0, 0
 			for y in 0..<int(size[1]) {
@@ -439,14 +427,13 @@ when ODIN_TEST {
 		// Frame GPU times (gpu_frame_begin/end) arrive a few frames later.
 		for _ in 0..<12 {
 			gpu_frame_begin()
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT)
+			gpu_clear(color = true, depth = false)
 			gpu_frame_end()
-			gl.Finish()
+			gpu_wait_idle()
 			client_collect_gpu_times(client)
 		}
 		gpu_frames_fini()
 		testing.expect(t, client.perf.gpu_frames > 0 && client.perf.gpu_valid && client.perf.gpu_ms >= 0, "frame GPU times reach the window")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

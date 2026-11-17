@@ -59,13 +59,11 @@ when ODIN_TEST {
 
 	shadow_test_pixel :: proc(scene: ^Scene, camera: ^Camera, map_inst: ^shared.Map, quality: menuui.Quality_Settings, x, y: i32) -> [4]u8 {
 		shadow_prepare(scene, map_inst, quality, 0, {0, 0, 64, 64}, camera.position)
-		gl.Viewport(0, 0, 64, 64)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_set_target(test_gpu_current_target(), 64, 64)
+		gpu_clear(color = true, depth = true)
 		scene_render(scene, camera, 64, 64)
 		pixel: [4]u8
-		ui_flush()
-		gl.ReadPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, &pixel[0])
+		test_read_rgba(x, y, 1, 1, &pixel[0])
 		return pixel
 	}
 
@@ -76,16 +74,12 @@ when ODIN_TEST {
 		context = runtime.default_context()
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(64, 64, "Shadow regression", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.ClearColor(0, 0, 0, 1)
+		test_gpu := test_gpu_open(64, 64, "Shadow regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_clear_color({0, 0, 0})
 
 		scene := scene_init()
 		floor_material, box_material := basic_material_init(), basic_material_init()
@@ -194,7 +188,7 @@ when ODIN_TEST {
 
 		shadow_release_map()
 		testing.expect(t, g_shadow.texture == 0 && g_shadow.fbos[0] == 0 && g_shadow.player_texture == 0, "a map change must free the shadow maps")
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "shadows must not generate OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "shadows must not generate OpenGL errors")
 	}
 
 	// Sharp cascades: wherever the camera is within the redraw thresholds of

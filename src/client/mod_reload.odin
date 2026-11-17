@@ -2,15 +2,14 @@ package main
 
 import "core:fmt"
 import "core:strings"
-import gl "vendor:OpenGL"
 import stbi "vendor:stb/image"
 import ma "vendor:miniaudio"
 import shared "../shared"
 
 // Live mod switching, like Krunker: after a mod is loaded or removed the mod
 // index is rebuilt and every cached texture, model and sound whose file
-// changed is reloaded in place. Textures keep their OpenGL id and models keep
-// their buffers, so everything that already uses them (map, weapons, HUD)
+// changed is reloaded in place. Textures keep their GPU handle and models keep
+// their Geometry, so everything that already uses them (map, weapons, HUD)
 // shows the new files on the next frame without a restart.
 
 Mod_Snapshot :: struct {
@@ -77,10 +76,10 @@ texture_reload_in_place :: proc(entry: ^Texture_Cache_Entry) -> bool {
 	data := stbi.load(c_path, &w, &h, &channels, 4)
 	if data == nil { return false }
 	defer stbi.image_free(data)
-	// Same handle, so everything using it shows the new pixels. A different
-	// size cannot be swapped in place on every backend: it applies on restart.
-	if w != entry.width || h != entry.height { return false }
-	gpu_texture_update(entry.id, .RGBA8, 0, 0, w, h, data[:int(w)*int(h)*4])
+	// Same handle: everything holding it shows the new image; the sampling
+	// matches load_texture's.
+	if !gpu_texture_replace(entry.id, {width = w, height = h, format = .RGBA8, mipmaps = true, sampler = {filter = .Nearest, wrap = .Repeat}}, data[:int(w) * int(h) * 4]) { return false }
+	entry.width, entry.height = w, h
 	return true
 }
 
@@ -94,17 +93,8 @@ geometry_reload_in_place :: proc(geometry: ^Geometry) -> bool {
 	indices := make([]u32, len(vertices))
 	defer delete(indices)
 	for i in 0..<len(vertices) { indices[i] = u32(i) }
-	// New buffers behind the same ^Geometry, so every mesh using it updates.
-	fresh := create_geometry(vertices[:], indices[:])
-	gpu_vertex_input_destroy(&geometry.input)
-	gpu_buffer_destroy(&geometry.vertex_buffer)
-	gpu_buffer_destroy(&geometry.index_buffer)
-	delete(geometry.vertices)
-	delete(geometry.indices)
-	geometry.input, geometry.vertex_buffer, geometry.index_buffer = fresh.input, fresh.vertex_buffer, fresh.index_buffer
-	geometry.vertices, geometry.indices, geometry.index_count = fresh.vertices, fresh.indices, fresh.index_count
-	geometry.bounds_min, geometry.bounds_max, geometry.has_bounds = fresh.bounds_min, fresh.bounds_max, fresh.has_bounds
-	free(fresh)
+	// Same ^Geometry: draws that hold it use the new buffers.
+	geometry_upload(geometry, vertices[:], indices)
 	return true
 }
 

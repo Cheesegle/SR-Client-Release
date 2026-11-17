@@ -111,8 +111,8 @@ Diagnostics :: struct {
 	phase_head: u32,
 	phases:     [PHASE_RING_SIZE]Phase_Entry,
 	// Copied once at startup so the crash handler never calls into GL.
-	gl_vendor, gl_renderer, gl_version: [128]u8,
-	gl_vendor_len, gl_renderer_len, gl_version_len: int,
+	gpu_api, gpu_vendor, gpu_renderer, gpu_version: [128]u8,
+	gpu_api_len, gpu_vendor_len, gpu_renderer_len, gpu_version_len: int,
 	gl_debug_context: bool, // The context reports CONTEXT_FLAG_DEBUG_BIT.
 	gl_debug_output: bool,  // The KHR_debug callback is installed.
 	gl_debug_log: ^os.File,
@@ -168,22 +168,23 @@ diagnostics_make_log_dir :: proc() {
 	if !os.exists(DIAGNOSTICS_LOG_DIR) { os.make_directory(DIAGNOSTICS_LOG_DIR) }
 }
 
-// Records the GL strings for crash reports. Call once after the context exists.
-diagnostics_capture_gl_info :: proc() {
-	copy_gl_string :: proc(name: u32, dst: ^[128]u8, length: ^int) {
-		value := cstring(gl.GetString(name))
-		length^ = value == nil ? 0 : copy(dst[:], string(value))
+// Records the GPU strings for crash reports. Call once after the device or
+// context exists.
+diagnostics_capture_gpu_info :: proc() {
+	info := gpu_device_info()
+	g_diag.gpu_api_len = copy(g_diag.gpu_api[:], info.api)
+	g_diag.gpu_vendor_len = copy(g_diag.gpu_vendor[:], info.vendor)
+	g_diag.gpu_renderer_len = copy(g_diag.gpu_renderer[:], info.renderer)
+	g_diag.gpu_version_len = copy(g_diag.gpu_version[:], info.version)
+	if g_gpu_backend == .OpenGL {
+		flags: i32
+		gl.GetIntegerv(gl.CONTEXT_FLAGS, &flags)
+		g_diag.gl_debug_context = flags & gl.CONTEXT_FLAG_DEBUG_BIT != 0
 	}
-	copy_gl_string(gl.VENDOR, &g_diag.gl_vendor, &g_diag.gl_vendor_len)
-	copy_gl_string(gl.RENDERER, &g_diag.gl_renderer, &g_diag.gl_renderer_len)
-	copy_gl_string(gl.VERSION, &g_diag.gl_version, &g_diag.gl_version_len)
-	flags: i32
-	gl.GetIntegerv(gl.CONTEXT_FLAGS, &flags)
-	g_diag.gl_debug_context = flags & gl.CONTEXT_FLAG_DEBUG_BIT != 0
 }
 
-diagnostics_gl_renderer :: proc() -> string {
-	return string(g_diag.gl_renderer[:g_diag.gl_renderer_len])
+diagnostics_gpu_renderer :: proc() -> string {
+	return string(g_diag.gpu_renderer[:g_diag.gpu_renderer_len])
 }
 
 // --- KHR_debug ---------------------------------------------------------------
@@ -292,7 +293,7 @@ gl_debug_install :: proc(log_path := GL_DEBUG_LOG_PATH) -> bool {
 		if err == nil {
 			g_diag.gl_debug_log = file
 			fmt.fprintf(file, "SR Client GL debug log\nGL_VENDOR: %s\nGL_RENDERER: %s\nGL_VERSION: %s\nDebug context: %v\n\n",
-				string(g_diag.gl_vendor[:g_diag.gl_vendor_len]), diagnostics_gl_renderer(), string(g_diag.gl_version[:g_diag.gl_version_len]), g_diag.gl_debug_context)
+				string(g_diag.gpu_vendor[:g_diag.gpu_vendor_len]), diagnostics_gpu_renderer(), string(g_diag.gpu_version[:g_diag.gpu_version_len]), g_diag.gl_debug_context)
 		}
 	}
 	gl.Enable(gl.DEBUG_OUTPUT)
@@ -374,7 +375,7 @@ gl_check :: proc(site: string, per_phase := false) -> bool {
 			file, err := os.open(GL_ERROR_LOG_PATH, {.Write, .Create, .Trunc})
 			if err == nil {
 				g_diag.gl_error_log = file
-				fmt.fprintf(file, "GL_RENDERER: %s\nGL_VERSION: %s\n", diagnostics_gl_renderer(), string(g_diag.gl_version[:g_diag.gl_version_len]))
+				fmt.fprintf(file, "GL_RENDERER: %s\nGL_VERSION: %s\n", diagnostics_gpu_renderer(), string(g_diag.gpu_version[:g_diag.gpu_version_len]))
 			}
 		}
 		if g_diag.gl_error_log != nil { os.write_string(g_diag.gl_error_log, line) }
@@ -405,8 +406,14 @@ crash_report_format :: proc(buffer: []u8, info: Crash_Info) -> string {
 	b := strings.builder_from_bytes(buffer)
 	fmt.sbprintf(&b, "SR Client %s\n", info.title)
 	fmt.sbprintf(&b, "Build: %s%s\n", SR_VERSION, SR_DEV ? " (dev)" : "")
-	fmt.sbprintf(&b, "GL_VENDOR: %s\nGL_RENDERER: %s\nGL_VERSION: %s\n", string(g_diag.gl_vendor[:g_diag.gl_vendor_len]), diagnostics_gl_renderer(), string(g_diag.gl_version[:g_diag.gl_version_len]))
-	fmt.sbprintf(&b, "GL debug output: %v\n\n", g_diag.gl_debug_output)
+	fmt.sbprintf(&b, "GPU: %s (vendor %s)\nGraphics API: %s %s\n", diagnostics_gpu_renderer(), string(g_diag.gpu_vendor[:g_diag.gpu_vendor_len]),
+		string(g_diag.gpu_api[:g_diag.gpu_api_len]), string(g_diag.gpu_version[:g_diag.gpu_version_len]))
+	if g_gpu_backend == .Vulkan {
+		fmt.sbprintf(&b, "Vulkan: validation %s (%d errors), --gpu-debug log %s\n\n",
+			g_vk_debug.validation ? "on" : "off", g_vk_validation_errors, g_vk_debug.log != nil ? "on" : "off")
+	} else {
+		fmt.sbprintf(&b, "GL debug output: %v\n\n", g_diag.gl_debug_output)
+	}
 	if info.code != 0 { fmt.sbprintf(&b, "Exception: 0x%08X %s\n", info.code, info.code_name) }
 	if info.address != 0 {
 		if len(info.module_path) > 0 {
@@ -449,19 +456,4 @@ g_crash_buffer: [16384]u8
 crash_log_write :: proc(path: string, info: Crash_Info) -> bool {
 	report := crash_report_format(g_crash_buffer[:], info)
 	return crash_file_write(path, transmute([]u8)report)
-}
-
-// The Vulkan device's strings for crash reports (diagnostics_capture_gl_info
-// on OpenGL).
-diagnostics_capture_gpu_info :: proc() {
-	info := gpu_device_info()
-	g_diag.gl_vendor_len = copy(g_diag.gl_vendor[:], info.vendor)
-	g_diag.gl_renderer_len = copy(g_diag.gl_renderer[:], info.renderer)
-	g_diag.gl_version_len = copy(g_diag.gl_version[:], fmt.tprintf("%s %s", info.api, info.version))
-	g_diag.gl_debug_context = false
-	if g_gpu_backend == .OpenGL {
-		flags: i32
-		gl.GetIntegerv(gl.CONTEXT_FLAGS, &flags)
-		g_diag.gl_debug_context = flags & gl.CONTEXT_FLAG_DEBUG_BIT != 0
-	}
 }

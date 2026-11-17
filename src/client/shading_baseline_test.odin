@@ -25,32 +25,24 @@ when ODIN_TEST {
 		for view, i in views {
 			camera := camera_init(DEFAULT_WEAPON_FOV)
 			camera.position, camera.rotation = view[0], view[1]
-			gl.Viewport(0, 0, w, h)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_set_target(test_gpu_current_target(), w, h)
+			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, f32(w), f32(h))
-			ui_flush()
-			gl.ReadPixels(0, 0, w, h, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels[int(w*h*3)*i:]))
+			test_read_rgb(0, 0, w, h, raw_data(pixels[int(w*h*3)*i:]))
 		}
 		return pixels
 	}
 
-	shading_baseline_setup :: proc(t: ^testing.T, client: ^Client) -> (window: glfw.WindowHandle, ok: bool) {
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window = glfw.CreateWindow(SHADING_BASELINE_W, SHADING_BASELINE_H, "Shading baseline", nil, nil)
-		if !testing.expect(t, window != nil) do return nil, false
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	shading_baseline_setup :: proc(t: ^testing.T, client: ^Client, gpu: ^Test_Gpu) -> (ok: bool) {
+		gpu^ = test_gpu_open(SHADING_BASELINE_W, SHADING_BASELINE_H, "Shading baseline")
+		if !testing.expect(t, gpu.ok, "no GPU device for the test") do return false
+		g_test_gpu = gpu
 		client.scene = scene_init()
 		map_inst, map_ok := shared.map_load_from_file("assets/maps/burg.json")
-		if !testing.expect(t, map_ok && map_inst != nil) do return window, false
+		if !testing.expect(t, map_ok && map_inst != nil) do return false
 		client.game.map_inst = map_inst
 		client_load_current_map(client)
-		return window, true
+		return true
 	}
 
 	// The Krunker "Shadows" and "Lighting" settings must cost nothing and change
@@ -65,7 +57,8 @@ when ODIN_TEST {
 		client := Client{}
 		g_client = &client
 		old_lighting := g_lighting_config
-		window, ok := shading_baseline_setup(t, &client)
+		test_gpu: Test_Gpu
+		ok := shading_baseline_setup(t, &client, &test_gpu)
 		defer {
 			client_unload_map(&client)
 			if client.game.map_inst != nil { shared.map_destroy(client.game.map_inst) }
@@ -73,7 +66,7 @@ when ODIN_TEST {
 			resource_cache_fini()
 			g_client = nil
 			g_lighting_config = old_lighting
-			if window != nil { glfw.DestroyWindow(window) }
+			test_gpu_close(&test_gpu, t)
 		}
 		if !ok do return
 		// The frame goes through the per-frame shadow step exactly as the client
@@ -111,6 +104,6 @@ when ODIN_TEST {
 			shadow_release_map()
 			testing.expect(t, g_shadow.texture == 0 && g_shadow.fbos[0] == 0 && g_shadow.player_texture == 0, "unloading must free the shadow map")
 		}
-		testing.expect(t, gl.GetError() == gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

@@ -18,17 +18,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(640, 360, "Weapon models", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, 640, 360)
+		test_gpu := test_gpu_open(640, 360, "Weapon models")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), 640, 360)
 		client := Client{scene = scene_init(), fps_scene = scene_init()}
 		g_client = &client
 		defer { g_client = nil }
@@ -121,9 +116,8 @@ when ODIN_TEST {
 					}
 					// Isolate the weapon: visible hands/body must not mask a missing gun.
 					for mesh in scene.meshes { mesh.visible = mesh.visible && (mesh == gun || mesh == arms.weapon_left || mesh == arms.attachment) }
-					gl.ClearColor(0, 0, 0, 1)
-					ui_flush()
-					gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+					gpu_set_clear_color({0, 0, 0})
+					gpu_clear(color = true, depth = true)
 					scene_render(scene, &camera, 640, 360)
 					if first_person && aim == 1 {
 						// Sight/weapon pose in camera space must remain stable when
@@ -143,14 +137,13 @@ when ODIN_TEST {
 						player.direction, camera.rotation = {}, {}
 						player_update_meshes(player, false)
 					}
-					ui_flush()
-					gl.ReadPixels(0, 0, 640, 360, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+					test_read_rgb(0, 0, 640, 360, raw_data(pixels))
 					visible := 0
 					for i := 0; i < len(pixels); i += 3 {
 						if pixels[i] > 0 || pixels[i + 1] > 0 || pixels[i + 2] > 0 { visible += 1 }
 					}
 					testing.expect(t, (scoped && visible == 0) || (!scoped && visible > 20 && visible < 640 * 360 * 0.8), fmt.tprintf("weapon %d %s must render at a sensible size (first person=%v aim=%v pixels=%d)", id, weapon.name, first_person, aim, visible))
-					testing.expect(t, gl.GetError() == gl.NO_ERROR, fmt.tprintf("weapon %d must render without OpenGL errors", id))
+					testing.expect(t, test_gpu_no_error(), fmt.tprintf("weapon %d must render without OpenGL errors", id))
 					when #config(WEAPON_PREVIEW, false) {
 						if first_person {
 							file := make([dynamic]u8)

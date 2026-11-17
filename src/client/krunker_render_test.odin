@@ -14,15 +14,11 @@ when ODIN_TEST {
 	billboard_textures_use_browser_registry_bounds :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(320, 180, "Billboard texture regression", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(320, 180, "Billboard texture regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		defer resource_cache_fini()
 		raw := make(json.Object)
 		defer delete(raw)
@@ -99,15 +95,11 @@ when ODIN_TEST {
 	krunker_join_render_handoff :: proc(t: ^testing.T) {
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(320, 240, "Krunker render regression", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
+		test_gpu := test_gpu_open(320, 240, "Krunker render regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		client := Client{window = window}
 		g_client = &client
 		defer { g_client = nil }
@@ -348,6 +340,6 @@ when ODIN_TEST {
 		client.camera.position.y += client.me.height - shared.GAME_CONSTANTS.camera_height
 		scene_render(client.scene, &client.camera, 320, 240)
 		scene_render(client.fps_scene, &client.camera, 320, 240)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "spawned map/view-model render produced an OpenGL error")
+		testing.expect(t, test_gpu_no_error(), "spawned map/view-model render produced an OpenGL error")
 	}
 }

@@ -78,17 +78,14 @@ when ODIN_TEST {
 	// -define:LEGS_PREVIEW=true [-define:LEGS_TAG=before] writes each side view
 	// to bin/legs/<tag>_<state>.png for checking by eye.
 	legs_shot :: proc(t: ^testing.T, scene: ^Scene, camera: ^Camera, name: string) {
-		gl.ClearColor(0.75, 0.8, 0.85, 1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+		gpu_set_clear_color({0.75, 0.8, 0.85})
+		gpu_clear(color = true, depth = true)
 		scene_render(scene, camera, LEGS_SHOT_W, LEGS_SHOT_H)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "player rig must render without OpenGL errors")
+		testing.expect(t, test_gpu_no_error(), "player rig must render without OpenGL errors")
 		when #config(LEGS_PREVIEW, false) {
 			pixels := make([]u8, LEGS_SHOT_W * LEGS_SHOT_H * 3)
 			defer delete(pixels)
-			gl.PixelStorei(gl.PACK_ALIGNMENT, 1)
-			ui_flush()
-			gl.ReadPixels(0, 0, LEGS_SHOT_W, LEGS_SHOT_H, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, LEGS_SHOT_W, LEGS_SHOT_H, raw_data(pixels))
 			os.make_directory("bin/legs")
 			path := fmt.ctprintf("bin/legs/%s_%s.png", #config(LEGS_TAG, "after"), name)
 			stbi.write_png(path, LEGS_SHOT_W, LEGS_SHOT_H, 3, &pixels[(LEGS_SHOT_H - 1) * LEGS_SHOT_W * 3], -LEGS_SHOT_W * 3)
@@ -109,17 +106,12 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(LEGS_SHOT_W, LEGS_SHOT_H, "Player legs", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-		gl.Viewport(0, 0, LEGS_SHOT_W, LEGS_SHOT_H)
+		test_gpu := test_gpu_open(LEGS_SHOT_W, LEGS_SHOT_H, "Player legs")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), LEGS_SHOT_W, LEGS_SHOT_H)
 		client := Client{window = window, scene = scene_init(), fps_scene = scene_init()}
 		g_client = &client
 		defer { g_client = nil }

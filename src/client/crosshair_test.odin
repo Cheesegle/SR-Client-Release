@@ -80,47 +80,35 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(400, 400, "Precision crosshair", nil, nil)
-		if !testing.expect(t, window != nil) do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.Viewport(0,0,400,400)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(400, 400, "Precision crosshair")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
+		gpu_set_target(test_gpu_current_target(), 400, 400)
 		ui := ui_init()
 		defer { ui_fini(ui); resource_cache_fini() }
 		ui_update(ui, 400, 400)
 		settings := menuui.DEFAULT_CROSSHAIR_SETTINGS
 		settings.color, settings.shadow_color = 0x00ff00, 0xff0000
 		settings.values[.THICKNESS], settings.values[.SIZE], settings.values[.GAP], settings.values[.SHADOW] = 4, 10, 5, 2
-		gl.ClearColor(0,0,0,1)
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT)
+		gpu_set_clear_color({0, 0, 0})
+		gpu_clear(color = true, depth = false)
 		crosshair_render(ui, settings, 200, 200, 1, 0.5)
 		pixel: [3]u8
-		ui_flush()
-		gl.ReadPixels(200,200,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
+		test_read_rgb(200, 200, 1, 1, &pixel[0])
 		testing.expect(t, pixel[0]==0 && pixel[1]>=126 && pixel[1]<=129 && pixel[2]==0, "the dot must use the configured color and alpha")
-		ui_flush()
-		gl.ReadPixels(200,220,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
+		test_read_rgb(200, 220, 1, 1, &pixel[0])
 		testing.expect(t, pixel[1]>=126 && pixel[0]==0, "the top arm must render at the expected gap/length")
-		ui_flush()
-		gl.ReadPixels(200,208,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
+		test_read_rgb(200, 208, 1, 1, &pixel[0])
 		testing.expect(t, pixel==[3]u8{}, "positive gap must leave the expected empty space")
-		ui_flush()
-		gl.ReadPixels(195,220,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
+		test_read_rgb(195, 220, 1, 1, &pixel[0])
 		testing.expect(t, pixel[0]>=126 && pixel[1]==0, "shadow must straddle the arm's edge with its own color")
 		settings.toggles[.DOT] = false
-		ui_flush()
-		gl.Clear(gl.COLOR_BUFFER_BIT)
+		gpu_clear(color = true, depth = false)
 		crosshair_render(ui, settings, 200,200,1,1)
-		ui_flush()
-		gl.ReadPixels(200,200,1,1,gl.RGB,gl.UNSIGNED_BYTE,&pixel[0])
+		test_read_rgb(200, 200, 1, 1, &pixel[0])
 		testing.expect(t, pixel==[3]u8{}, "disabling the dot must leave the center empty")
-		testing.expect(t, gl.GetError()==gl.NO_ERROR)
+		testing.expect(t, test_gpu_no_error())
 	}
 }

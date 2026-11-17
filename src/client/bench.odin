@@ -317,7 +317,7 @@ bench_map :: proc(client: ^Client, config: ^shared.Gameplay_Config, map_name: st
 }
 
 // A hidden window with the same context flags as the game (GPU reset
-// notification is not used by SR), so the benchmark measures what
+// notification unless --no-gl-robustness), so the benchmark measures what
 // players run.
 bench_gl_window :: proc() -> glfw.WindowHandle {
 	glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)

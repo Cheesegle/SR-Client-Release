@@ -17,16 +17,11 @@ when ODIN_TEST {
 		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
-		glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
-		glfw.WindowHint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MAJOR, 4)
-		glfw.WindowHint(glfw.CONTEXT_VERSION_MINOR, 5)
-		window := glfw.CreateWindow(960, 540, "Trooper render regression", nil, nil)
-		if !testing.expect(t, window != nil, "hidden OpenGL window failed") do return
-		defer glfw.DestroyWindow(window)
-		glfw.MakeContextCurrent(window)
-		gl.load_up_to(4, 5, glfw.gl_set_proc_address)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		test_gpu := test_gpu_open(960, 540, "Trooper render regression")
+		if !testing.expect(t, test_gpu.ok, "no GPU device for the test") do return
+		defer test_gpu_close(&test_gpu, t)
+		g_test_gpu = &test_gpu
+		window := test_gpu.window
 		client := Client{window = window, scene = scene_init(), fps_scene = scene_init()}
 		g_client = &client
 		defer { g_client = nil }
@@ -60,7 +55,7 @@ when ODIN_TEST {
 		scene_add_player_mesh(client.fps_scene, mesh, int(player.loadout_size))
 		client.camera = camera_init(110 * math.PI / 180)
 		client.camera.position.y = player.height - shared.GAME_CONSTANTS.camera_height
-		gl.Viewport(0, 0, 960, 540)
+		gpu_set_target(test_gpu_current_target(), 960, 540)
 		pixels := make([]u8, 960 * 540 * 3)
 		defer delete(pixels)
 		aims := [?]f32{0, 1}
@@ -75,12 +70,10 @@ when ODIN_TEST {
 				testing.expect(t, abs(mesh.arms[0].anchor.position.y - (-0.722)) < 0.0001, "Blaster ADS must include both the reflex and weapon aim offsets")
 				testing.expect(t, abs(mesh.arms[0].anchor.rotation.x - player.weapon.rotation_offset_aim) < 0.0001, "ADS rig must use the calibrated rotation without residual idle or step bob")
 			}
-			gl.ClearColor(0, 0, 0, 1)
-			ui_flush()
-			gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+			gpu_set_clear_color({0, 0, 0})
+			gpu_clear(color = true, depth = true)
 			scene_render(client.fps_scene, &weapon_camera, 960, 540)
-			ui_flush()
-			gl.ReadPixels(0, 0, 960, 540, gl.RGB, gl.UNSIGNED_BYTE, raw_data(pixels))
+			test_read_rgb(0, 0, 960, 540, raw_data(pixels))
 			visible := 0
 			for i := 0; i < len(pixels); i += 3 {
 				if pixels[i] > 0 || pixels[i + 1] > 0 || pixels[i + 2] > 0 { visible += 1 }
@@ -112,7 +105,7 @@ when ODIN_TEST {
 		position := client.game.projectiles[0].position
 		testing.expect(t, abs(tip.x - position.x) < 0.001 && abs(tip.y - position.y) < 0.001 && abs(tip.z - position.z) < 0.001, "bolt mesh must point along its travel direction")
 		scene_render(client.scene, &client.camera, 960, 540)
-		testing.expect(t, gl.GetError() == gl.NO_ERROR, "Blaster and bolt render produced an OpenGL error")
+		testing.expect(t, test_gpu_no_error(), "Blaster and bolt render produced an OpenGL error")
 		shared.game_tick_projectiles(&client.game, 1)
 		client_tick_projectiles(&client)
 		testing.expect(t, len(client.projectile_meshes) == 0 && client.scene.mesh_count == 0, "expired bolts must release their meshes")

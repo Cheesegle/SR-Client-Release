@@ -23,7 +23,8 @@ import shared "../shared"
 	@(private="file")
 	gl_min_filter :: proc(sampler: Gpu_Sampler_Desc, mipmapped: bool) -> i32 {
 		if sampler.mip_filter && mipmapped {
-			return sampler.filter == .Linear ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST_MIPMAP_NEAREST
+			if sampler.mip_linear { return sampler.filter == .Linear ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST_MIPMAP_LINEAR }
+			return sampler.filter == .Linear ? gl.LINEAR_MIPMAP_NEAREST : gl.NEAREST_MIPMAP_NEAREST
 		}
 		return sampler.filter == .Linear ? gl.LINEAR : gl.NEAREST
 	}
@@ -56,22 +57,53 @@ import shared "../shared"
 		if desc.layers > 0 {
 			gl.CreateTextures(gl.TEXTURE_2D_ARRAY, 1, &name)
 			gl.TextureStorage3D(name, levels, internal, desc.width, desc.height, desc.layers)
-		} else {
-			gl.CreateTextures(gl.TEXTURE_2D, 1, &name)
-			gl.TextureStorage2D(name, levels, internal, desc.width, desc.height)
-		}
-		gl_apply_texture_sampler(name, desc.sampler, desc.mipmaps)
-		if pixels != nil && len(pixels) >= int(desc.width) * int(desc.height) * gpu_format_bytes_per_pixel(desc.format) {
-			gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
-			if desc.layers > 0 {
+			gl_apply_texture_sampler(name, desc.sampler, desc.mipmaps)
+			if pixels != nil && len(pixels) >= int(desc.width) * int(desc.height) * gpu_format_bytes_per_pixel(desc.format) {
+				gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 				gl.TextureSubImage3D(name, 0, 0, 0, 0, desc.width, desc.height, 1, upload, type, raw_data(pixels))
-			} else {
-				gl.TextureSubImage2D(name, 0, 0, 0, desc.width, desc.height, upload, type, raw_data(pixels))
+				gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+				if desc.mipmaps { gl.GenerateTextureMipmap(name) }
 			}
-			gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
-			if desc.mipmaps { gl.GenerateTextureMipmap(name) }
+			return Gpu_Texture(name)
 		}
+		// 2D textures use mutable storage so gpu_texture_replace can give the
+		// same name a new size (live mod reload).
+		gl.CreateTextures(gl.TEXTURE_2D, 1, &name)
+		gl_texture_specify_2d(name, desc, levels, pixels)
 		return Gpu_Texture(name)
+	}
+
+	@(private="file")
+	gl_texture_specify_2d :: proc(name: u32, desc: Gpu_Texture_Desc, levels: i32, pixels: []u8) {
+		internal, upload, type := gl_texture_formats(desc.format)
+		has_pixels := pixels != nil && len(pixels) >= int(desc.width) * int(desc.height) * gpu_format_bytes_per_pixel(desc.format)
+		// TexImage2D has no DSA form: bind, then restore the unit's binding.
+		previous: i32
+		gl.GetIntegerv(gl.TEXTURE_BINDING_2D, &previous)
+		gl.BindTexture(gl.TEXTURE_2D, name)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, levels - 1)
+		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+		w, h := desc.width, desc.height
+		for level in 0 ..< levels {
+			gl.TexImage2D(gl.TEXTURE_2D, level, i32(internal), w, h, 0, upload, type, level == 0 && has_pixels ? raw_data(pixels) : nil)
+			w, h = max(1, w / 2), max(1, h / 2)
+		}
+		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+		gl.BindTexture(gl.TEXTURE_2D, u32(previous))
+		gl_apply_texture_sampler(name, desc.sampler, desc.mipmaps)
+		if has_pixels && desc.mipmaps { gl.GenerateTextureMipmap(name) }
+	}
+
+	// Gives an existing 2D texture new contents, size and sampling while
+	// keeping its handle, so everything that holds it draws the new image.
+	gl_gpu_texture_replace :: proc(texture: Gpu_Texture, desc: Gpu_Texture_Desc, pixels: []u8) -> bool {
+		if texture == 0 || desc.width <= 0 || desc.height <= 0 || desc.layers != 0 { return false }
+		levels: i32 = 1
+		if desc.mipmaps {
+			levels = i32(math.floor(math.log2(f32(max(desc.width, desc.height))))) + 1
+		}
+		gl_texture_specify_2d(u32(texture), desc, levels, pixels)
+		return true
 	}
 
 	// Replaces a width*height region of level 0 of a 2D texture. `format` must be
@@ -129,6 +161,15 @@ import shared "../shared"
 		limit := gl_gpu_max_anisotropy()
 		if sampler == 0 || limit < 2 { return }
 		gl.SamplerParameterf(u32(sampler), 0x84FE, clamp(value, 1, limit)) // TEXTURE_MAX_ANISOTROPY_EXT
+	}
+
+	// World texture filtering (Settings > Smooth textures): .Linear blends
+	// texels and mip levels, .Nearest keeps Krunker's pixelated look.
+	gl_gpu_sampler_set_filter :: proc(sampler: Gpu_Sampler, filter: Gpu_Filter) {
+		if sampler == 0 { return }
+		linear := filter == .Linear
+		gl.SamplerParameteri(u32(sampler), gl.TEXTURE_MIN_FILTER, linear ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST_MIPMAP_NEAREST)
+		gl.SamplerParameteri(u32(sampler), gl.TEXTURE_MAG_FILTER, linear ? gl.LINEAR : gl.NEAREST)
 	}
 
 	// 0 unbinds: the texture's own sampling applies again.
@@ -532,7 +573,11 @@ import shared "../shared"
 	gl_gpu_program_create_ui :: proc() -> Gpu_Program {
 		dir := shared.concat(shared.assets_path(), "shaders/")
 		defer delete(dir)
-		return Gpu_Program(shader_compile_ui(dir, "ui.vert", "ui.frag"))
+		vert := shared.concat(dir, "ui.vert")
+		defer delete(vert)
+		frag := shared.concat(dir, "ui.frag")
+		defer delete(frag)
+		return Gpu_Program(shader_compile(vert, frag))
 	}
 
 	// ---------------------------------------------------------------------------

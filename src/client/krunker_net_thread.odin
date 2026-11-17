@@ -82,6 +82,7 @@ krunker_net_thread_stop :: proc() {
 
 @(private = "file")
 krunker_net_thread_run :: proc(state: ^Krunker_WS_State) {
+	cpu_pin_current_thread_off_game_core() // never on the game thread's core
 	net := &g_net_thread
 	buffer: [16384]byte
 	for !sync.atomic_load(&net.stop) {
