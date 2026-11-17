@@ -129,8 +129,13 @@ network_log_is_problem :: proc(stage, message: string) -> bool {
 	if stage == "server-error" { return true }
 	if strings.has_prefix(message, "ERROR") || strings.has_prefix(message, "WARNING") { return true }
 	if strings.has_prefix(message, "HTTP=") {
-		status := message[5:]
-		return !(len(status) >= 3 && status[0] == '2')
+		// 101 (WebSocket upgrade), 2xx and 3xx are fine; 4xx, 5xx and "no reply" (0) are not.
+		status := 0
+		for c in message[5:] {
+			if c < '0' || c > '9' { break }
+			status = status*10 + int(c - '0')
+		}
+		return status == 0 || status >= 400
 	}
 	lower := strings.to_lower(message, context.temp_allocator)
 	words := []string{"failed", "failure", "rejected", "could not", "cannot", "unavailable", "invalid", "unexpected", "missing", "denied", "kicked", "banned", "captcha"}

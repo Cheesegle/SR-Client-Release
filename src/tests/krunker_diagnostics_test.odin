@@ -153,6 +153,10 @@ test_network_log_errors_only :: proc() -> bool {
 		fmt.eprintf("A problem must be written with the lines before it, and nothing routine after it: %q\n", text)
 		return false
 	}
+	if krunker.network_log_is_problem("websocket", "HTTP=101 curl=E_OK (0: No error) detail=") || krunker.network_log_is_problem("seek-game", "HTTP=200 curl=E_OK (0: No error) detail=") || !krunker.network_log_is_problem("seek-game", "HTTP=0 curl=E_COULDNT_CONNECT detail=") || !krunker.network_log_is_problem("seek-game", "HTTP=503 curl=E_OK detail=") {
+		fmt.eprintln("HTTP 101/200 are fine, 0 and 5xx are problems")
+		return false
+	}
 	if krunker.network_log_is_problem("world-player", "LOCAL READY sid=1 class=0 team=1") || !krunker.network_log_is_problem("world-player", "ERROR player allocation failed") {
 		fmt.eprintln("A normal spawn must not count as a problem; a world-player ERROR must")
 		return false
