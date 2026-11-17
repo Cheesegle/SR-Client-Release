@@ -1,7 +1,7 @@
 # SR Client
 
 A native Krunker client for competitive and custom lobbies. The game runs as a
-real desktop program (Odin + OpenGL), not inside a browser.
+real desktop program (Odin + Vulkan), not inside a browser.
 
 ## Download & play
 1. Go to **Releases** and download `SR-Client-Setup-x.y.z.exe`.
@@ -11,7 +11,8 @@ real desktop program (Odin + OpenGL), not inside a browser.
 Prefer no installer? Download `SR-Client-Portable-x.y.z.zip`, unzip anywhere,
 run `sr_client.exe`.
 
-Requirements: Windows 10/11 and a GPU with OpenGL 4.5. The Krunker login window
+Requirements: Windows 10/11 and a GPU with Vulkan 1.3 (any GPU from about
+the last ten years); older GPUs use OpenGL 4.5 automatically. The Krunker login window
 uses Microsoft's [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/),
 which is already installed on almost every PC. WebView2 is only used to sign in
 (and for Krunker's verification check and Mods window); the game itself does not
@@ -56,7 +57,7 @@ modded.
   browser players. Krunker's server decides every hit, kill and round, exactly
   as in the browser.
 - **Native instead of a browser.** Krunker normally runs as a web page. SR
-  draws the game itself in a desktop program (Odin + OpenGL), with Krunker's
+  draws the game itself in a desktop program (Odin + Vulkan), with Krunker's
   maps, models, textures and sounds as plain files. No browser engine runs
   while you play, which is where the FPS gains come from.
 - **What you see matches the server.** Other players are drawn from the same
@@ -69,7 +70,7 @@ modded.
   matchmaking is blocked.
 
 ## How it's built
-- Written in [Odin](https://odin-lang.org) with OpenGL 4.5 for rendering and
+- Written in [Odin](https://odin-lang.org) with Vulkan 1.3 (OpenGL 4.5 fallback) for rendering and
   [Clay](https://github.com/nicbarker/clay) for the menus.
 - `src/client`: the game client (rendering, input, HUD, audio, settings).
 - `src/krunker`: Krunker's network protocol (messages, game state).
