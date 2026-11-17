@@ -159,7 +159,9 @@ utf16_string :: proc(text: []u16, allocator := context.temp_allocator) -> string
 vrr_detect :: proc(monitor: glfw.MonitorHandle) -> (info: Vrr_Info) {
 	if monitor == nil { return }
 	if mode := glfw.GetVideoMode(monitor); mode != nil { info.refresh_hz = f64(mode.refresh_rate) }
-	gdi_name := string(glfw.GetWin32Monitor(monitor)) // \\.\DISPLAY1
+	// The adapter output's GDI name (\\.\DISPLAY1), which the display
+	// configuration and NVAPI use (GetWin32Monitor adds \Monitor0).
+	gdi_name := string(glfw.GetWin32Adapter(monitor))
 	num_path, num_mode: u32
 	if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &num_path, &num_mode) != 0 || num_path == 0 { return }
 	paths := make([]DISPLAYCONFIG_PATH_INFO, num_path, context.temp_allocator)
@@ -202,7 +204,10 @@ vrr_detect :: proc(monitor: glfw.MonitorHandle) -> (info: Vrr_Info) {
 		return
 	}
 	info.driver = true
-	info.enabled = vrr.bits & 0x1 != 0
+	// bit 0: VRR running for an application right now; bit 4: the display is
+	// in VRR mode (G-SYNC / G-SYNC Compatible turned on for it). Either means
+	// frames will drive the refresh rate.
+	info.enabled = vrr.bits & 0x1 != 0 || vrr.bits & 0x10 != 0
 	info.capable = info.capable || vrr.bits & 0x2 != 0
 	info.source = "NVIDIA driver"
 	return
