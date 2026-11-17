@@ -268,7 +268,11 @@ Vk_Frame :: struct {
 	serial:    u64,          // which recording this slot holds
 	submitted: bool,
 	timed:     bool,
+	marked:    bit_set[Gpu_Pass], // gpu_pass_mark timestamps written (queries 2 + pass)
 }
+
+// Timestamp queries per frame: begin, end, then one per Gpu_Pass.
+VK_FRAME_QUERIES :: 2 + len(Gpu_Pass)
 
 // The window: a surface, its swapchain, and the offscreen target the frame is
 // drawn into (gpu_window_target). gpu_present blits that target, flipped
@@ -636,7 +640,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		vk.CreateSemaphore(g_vk.device, &semaphore_info, nil, &frame.acquired)
 		dp := vk.DescriptorPoolCreateInfo{sType = .DESCRIPTOR_POOL_CREATE_INFO, maxSets = VK_FRAME_SETS, poolSizeCount = len(frame_pool_sizes), pPoolSizes = &frame_pool_sizes[0]}
 		vk.CreateDescriptorPool(g_vk.device, &dp, nil, &frame.pool)
-		qp := vk.QueryPoolCreateInfo{sType = .QUERY_POOL_CREATE_INFO, queryType = .TIMESTAMP, queryCount = 2}
+		qp := vk.QueryPoolCreateInfo{sType = .QUERY_POOL_CREATE_INFO, queryType = .TIMESTAMP, queryCount = VK_FRAME_QUERIES}
 		vk.CreateQueryPool(g_vk.device, &qp, nil, &frame.queries)
 	}
 
@@ -1558,10 +1562,21 @@ vk_collect :: proc(slot: int) {
 	vk_release_retired()
 	if frame.timed {
 		stamps: [2]u64
+		period := f64(g_vk.props.limits.timestampPeriod)
 		if vk.GetQueryPoolResults(g_vk.device, frame.queries, 0, 2, size_of(stamps), &stamps[0], size_of(u64), {._64, .WAIT}) == .SUCCESS {
-			append(&g_vk.completed, f64(stamps[1] - stamps[0]) * f64(g_vk.props.limits.timestampPeriod) / 1e6)
+			append(&g_vk.completed, f64(stamps[1] - stamps[0]) * period / 1e6)
+			if frame.marked != {} {
+				passes: [Gpu_Pass]u64
+				for pass in frame.marked {
+					stamp: u64
+					vk.GetQueryPoolResults(g_vk.device, frame.queries, 2 + u32(pass), 1, size_of(u64), &stamp, size_of(u64), {._64, .WAIT})
+					passes[pass] = u64(f64(stamp) * period)
+				}
+				gpu_pass_times_add(passes, frame.marked, u64(f64(stamps[1]) * period))
+			}
 		}
 		frame.timed = false
+		frame.marked = {}
 	}
 }
 
@@ -1575,7 +1590,7 @@ vk_begin_recording :: proc(timed: bool) {
 	begin := vk.CommandBufferBeginInfo{sType = .COMMAND_BUFFER_BEGIN_INFO, flags = {.ONE_TIME_SUBMIT}}
 	vk.BeginCommandBuffer(frame.cmd, &begin)
 	if timed {
-		vk.CmdResetQueryPool(frame.cmd, frame.queries, 0, 2)
+		vk.CmdResetQueryPool(frame.cmd, frame.queries, 0, VK_FRAME_QUERIES)
 		vk.CmdWriteTimestamp2(frame.cmd, {.TOP_OF_PIPE}, frame.queries, 0)
 	}
 	frame.timed = timed
@@ -1623,6 +1638,15 @@ vk_submit :: proc(wait: vk.Semaphore = 0, signal: vk.Semaphore = 0) {
 	g_vk.recording = false
 	g_vk.in_pass = false
 	g_vk.slot = (g_vk.slot + 1) % GPU_FRAMES_IN_FLIGHT
+}
+
+// After everything recorded so far has finished on the GPU.
+vk_gpu_pass_mark :: proc(pass: Gpu_Pass) {
+	if !g_vk.recording { return }
+	frame := &g_vk.frames[g_vk.slot]
+	if !frame.timed || pass in frame.marked { return }
+	vk.CmdWriteTimestamp2(frame.cmd, {.ALL_COMMANDS}, frame.queries, 2 + u32(pass))
+	frame.marked += {pass}
 }
 
 vk_gpu_frame_wait :: proc() {
@@ -2362,6 +2386,7 @@ vk_window_sync :: proc() {
 // gpu_frame_end.
 vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 	gpu_flush_deferred()
+	vk_gpu_pass_mark(.Present)
 	sc := &g_vk.present
 	if sc.window == nil || sc.swapchain == 0 || sc.dirty { return }
 	t := vk_table_get(&g_vk.targets, u32(sc.target))

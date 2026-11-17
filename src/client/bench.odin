@@ -49,6 +49,7 @@ Bench_Result :: struct {
 	extra_ms:    f64, // One-off GPU work when the configuration is applied (static shadow map).
 	draw_calls:  f64, // Average draw calls per measured frame (world + viewmodel).
 	culled:      f64, // Average map batches culled per frame.
+	pass_ms:     [Gpu_Pass]f64, // Average GPU ms per frame section.
 }
 
 // Static: bench_map frees the temp allocator after every configuration.
@@ -66,6 +67,8 @@ BENCH_CONFIGS := [?]Bench_Config{
 	{name = "Sharp", quality = {shadows = true, shadow_quality = 1, lighting = 1}, batching = true, culling = true},
 	{name = "Sharp + soft + dynamic", quality = {shadows = true, soft_shadows = true, dynamic_shadows = true, shadow_quality = 1, lighting = 1}, batching = true, culling = true},
 	{name = "Sharp + self shadow", quality = {shadows = true, self_shadow = true, shadow_quality = 1, lighting = 1}, batching = true, culling = true},
+	{name = "Krunker default + 4x MSAA", quality = {shadows = true, lighting = 1, msaa = 4}, batching = true, culling = true},
+	{name = "Krunker default + 8x MSAA", quality = {shadows = true, lighting = 1, msaa = 8}, batching = true, culling = true},
 }
 
 bench_parse_size :: proc(text: string) -> (w, h: i32, ok: bool) {
@@ -200,6 +203,7 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	for frame in 1 ..= BENCH_WARMUP_FRAMES { bench_frame(client, target, frame) }
 	gpu_frames_finish()
 	gpu_frames_take(nil)
+	gpu_pass_times_take()
 
 	frame_ms := make([dynamic]f64, context.temp_allocator)
 	cpu_ms := make([dynamic]f64, context.temp_allocator)
@@ -222,6 +226,7 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	}
 	gpu_frames_finish()
 	gpu_frames_take(&gpu_ms)
+	result.pass_ms = gpu_pass_times_take()
 
 	bench_screenshot(client, target, config.name, map_name)
 
@@ -310,6 +315,8 @@ bench_map :: proc(client: ^Client, config: ^shared.Gameplay_Config, map_name: st
 			fmt.printf("[Bench] %-12s %4dx%-4d %-34s avg %7.3f ms (%6.1f FPS)  p95 %7.3f  p99 %7.3f  cpu %6.3f  gpu %6.3f (p95 %6.3f)  one-off %6.3f ms  draws %7.1f  [%d frames]\n",
 				map_name, size[0], size[1], result.config, result.avg_ms, 1000 / max(result.avg_ms, 0.0001), result.p95_ms, result.p99_ms,
 				result.cpu_avg_ms, result.gpu_avg_ms, result.gpu_p95_ms, result.extra_ms, result.draw_calls, result.frames)
+			fmt.printf("[Bench]   GPU per pass: shadows %.3f  world %.3f  viewmodel %.3f  resolve %.3f ms\n",
+				result.pass_ms[.Shadows], result.pass_ms[.World], result.pass_ms[.Viewmodel], result.pass_ms[.Resolve])
 			free_all(context.temp_allocator)
 		}
 	}
@@ -429,9 +436,10 @@ bench_run :: proc(map_list: string, seconds: f32, size_list: string) -> int {
 			r.map_name, r.width, r.height, r.config, r.avg_ms, 1000 / max(r.avg_ms, 0.0001), r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms, r.draw_calls)
 	}
 	csv := strings.builder_make(context.temp_allocator)
-	strings.write_string(&csv, "map,width,height,config,frames,avg_ms,p95_ms,p99_ms,cpu_avg_ms,gpu_avg_ms,gpu_p95_ms,one_off_ms,draw_calls,batches_culled\n")
+	strings.write_string(&csv, "map,width,height,config,frames,avg_ms,p95_ms,p99_ms,cpu_avg_ms,gpu_avg_ms,gpu_p95_ms,one_off_ms,draw_calls,batches_culled,gpu_shadows_ms,gpu_world_ms,gpu_viewmodel_ms,gpu_resolve_ms\n")
 	for r in results {
-		fmt.sbprintf(&csv, "%s,%d,%d,%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%.1f\n", r.map_name, r.width, r.height, r.config, r.frames, r.avg_ms, r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms, r.draw_calls, r.culled)
+		fmt.sbprintf(&csv, "%s,%d,%d,%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%.1f,%.4f,%.4f,%.4f,%.4f\n", r.map_name, r.width, r.height, r.config, r.frames, r.avg_ms, r.p95_ms, r.p99_ms, r.cpu_avg_ms, r.gpu_avg_ms, r.gpu_p95_ms, r.extra_ms, r.draw_calls, r.culled,
+			r.pass_ms[.Shadows], r.pass_ms[.World], r.pass_ms[.Viewmodel], r.pass_ms[.Resolve])
 	}
 	csv_path := fmt.tprintf("bin/bench-results-%s.csv", gpu_backend_name())
 	if os.write_entire_file(csv_path, transmute([]u8)strings.to_string(csv)) == nil {

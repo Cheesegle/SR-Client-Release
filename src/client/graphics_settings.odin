@@ -66,6 +66,7 @@ client_msaa_begin :: proc(client: ^Client, quality: menuui.Quality_Settings) -> 
 // Resolves the MSAA target into render_target and draws there from now on.
 client_msaa_end :: proc(client: ^Client, world_target: Gpu_Render_Target) {
 	if world_target == client.render_target { return }
+	gpu_pass_mark(.Resolve)
 	gpu_resolve(world_target, client.render_target, client.viewport_width, client.viewport_height)
 	gpu_set_target(client.render_target, client.viewport_width, client.viewport_height)
 }

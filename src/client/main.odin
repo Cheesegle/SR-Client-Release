@@ -1516,6 +1516,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	gl_check("render world", per_phase = true)
 
 	// Overlay pass: bars use the world camera for projection only.
+	gpu_pass_mark(.Interface)
 	player_healthbars_update_visibility(client, now)
 	player_healthbars_render(client)
 
@@ -1556,16 +1557,19 @@ client_render_world :: proc(client: ^Client) {
 	// same batches. Its draw calls count towards this frame's stats.
 	// Self shadow: your third-person rig, drawn only into the player shadow map.
 	g_shadow_extra_casters = self_shadow_update(client, quality)
+	gpu_pass_mark(.Shadows)
 	shadow_prepare(client.scene, client.game.map_inst, quality, world_target, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
 	g_shadow_extra_casters = nil
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
+	gpu_pass_mark(.World)
 	scene_render(client.scene, &client.camera, f32(client.viewport_width), f32(client.viewport_height), client.graphics_sampler)
 	// Hitbox/collision wireframes, depth-tested against the world just drawn.
 	when SR_DEV { debug_render_after_world(client) }
 	client.camera.fov = saved_fov
 
 	phase_mark(.RENDER_VIEWMODEL)
+	gpu_pass_mark(.Viewmodel)
 	gpu_clear(color = false, depth = true)
 	weapon_camera := camera_for_viewmodel(&client.camera, client_viewmodel_values(client))
 	// The viewmodel keeps the sun's shadows but not the player map, so your

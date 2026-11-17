@@ -42,6 +42,8 @@ Perf_Stats :: struct {
 	gpu_ms: f32, // GPU time of the newest finished frame
 	gpu_valid: bool,
 	gpu_frames: int, // Finished frames whose GPU time reached the window (tests use it).
+	// GPU ms per frame section (gpu_pass_mark), smoothed; 0 = not run.
+	pass_ms: [Gpu_Pass]f32,
 	// Values shown in the window, refreshed every PERF_TEXT_REFRESH_MS.
 	shown: Perf_Summary,
 	shown_gpu_ms: f32,
@@ -240,10 +242,16 @@ perf_gpu_fini :: proc(stats: ^Perf_Stats) {
 // finished frame's GPU time (the whole frame, debug window included); while it
 // is closed (always, without SR_DEV), the times are discarded.
 client_collect_gpu_times :: proc(client: ^Client) {
+	passes := gpu_pass_times_take()
 	if client.perf_overlay {
 		times := make([dynamic]f64, context.temp_allocator)
 		gpu_frames_take(&times)
 		perf_gpu_record(&client.perf, times[:])
+		for ms, pass in passes {
+			shown := &client.perf.pass_ms[pass]
+			if ms <= 0 { continue }
+			shown^ = shown^ <= 0 ? f32(ms) : shown^ * 0.9 + f32(ms) * 0.1
+		}
 		return
 	}
 	gpu_frames_take(nil)

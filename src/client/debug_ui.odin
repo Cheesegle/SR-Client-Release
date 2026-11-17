@@ -292,6 +292,15 @@ debug_ui_performance :: proc(client: ^Client, dbg: ^Debug_UI) {
 	debug_ui_cell(ctx, "", stats.shown_gpu_valid ? fmt.tprintf("%.2f", stats.shown_gpu_ms) : "--", stats.shown_gpu_valid ? white : muted, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
 	debug_ui_cell(ctx, "", "", white, muted)
+	// Where the GPU time goes (gpu_pass_mark sections, smoothed).
+	pass_labels := [Gpu_Pass]string{.Shadows = "  shadows", .World = "  world", .Viewmodel = "  viewmodel", .Resolve = "  MSAA resolve", .Interface = "  interface", .Present = "  present"}
+	for ms, pass in stats.pass_ms {
+		if ms <= 0 { continue }
+		mu.label(ctx, pass_labels[pass])
+		debug_ui_cell(ctx, "", fmt.tprintf("%.2f", ms), white, muted)
+		debug_ui_cell(ctx, "", "", white, muted)
+		debug_ui_cell(ctx, "", "", white, muted)
+	}
 	// The rest of each frame, outside CPU time: SwapBuffers (driver/compositor
 	// present), event polling (window messages, raw mouse), and the remainder.
 	// The max column is coloured so a spike points at its source.

@@ -80,6 +80,54 @@ GPU_DRAW_STATE_DEFAULT :: Gpu_Draw_State{depth_write = true}
 // Frames in flight: gpu_frame_begin waits for the frame that last used its slot.
 GPU_FRAMES_IN_FLIGHT :: 2
 
+// Sections of a frame timed on the GPU (gpu_pass_mark), in frame order. A
+// section lasts from its mark to the next mark the frame wrote, or the
+// frame's end; sections a frame skips (Resolve without MSAA) are not counted.
+Gpu_Pass :: enum u8 {
+	Shadows,   // shadow maps
+	World,     // the map, players and effects
+	Viewmodel, // your weapon and arms
+	Resolve,   // MSAA resolve
+	Interface, // healthbars, HUD, menus, cursor
+	Present,   // copy to the window (Vulkan) and present
+}
+
+// Per-pass GPU time of finished frames, summed until gpu_pass_times_take.
+g_gpu_pass_times: struct {
+	sum:    [Gpu_Pass]f64,
+	frames: [Gpu_Pass]int,
+}
+
+// Splits one finished frame's timestamps (ns, ordered as Gpu_Pass) into
+// section durations.
+gpu_pass_times_add :: proc(stamps: [Gpu_Pass]u64, marked: bit_set[Gpu_Pass], end_ns: u64) {
+	for pass in Gpu_Pass {
+		if pass not_in marked { continue }
+		next := end_ns
+		for later := int(pass) + 1; later < len(Gpu_Pass); later += 1 {
+			if Gpu_Pass(later) in marked { next = stamps[Gpu_Pass(later)]; break }
+		}
+		if next < stamps[pass] { continue }
+		g_gpu_pass_times.sum[pass] += f64(next - stamps[pass]) / 1e6
+		g_gpu_pass_times.frames[pass] += 1
+	}
+}
+
+// Average ms per section since the last call (0 for sections not run).
+gpu_pass_times_take :: proc() -> (average: [Gpu_Pass]f64) {
+	for pass in Gpu_Pass {
+		if n := g_gpu_pass_times.frames[pass]; n > 0 { average[pass] = g_gpu_pass_times.sum[pass] / f64(n) }
+	}
+	g_gpu_pass_times = {}
+	return
+}
+
+// Marks the start of a timed section in the frame being recorded.
+gpu_pass_mark :: proc(pass: Gpu_Pass) {
+	if g_gpu_backend == .Vulkan { vk_gpu_pass_mark(pass); return }
+	gl_gpu_pass_mark(pass)
+}
+
 // Every vertex format the renderer draws from buffers. Attribute locations
 // are fixed per layout and match the shaders' `layout(location = n)`.
 Gpu_Vertex_Layout :: enum u8 {

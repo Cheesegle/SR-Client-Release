@@ -693,6 +693,11 @@ import shared "../shared"
 		slot:      int,
 		ready:     bool,
 		completed: [dynamic]f64, // GPU ms of finished frames not yet taken
+		// gpu_pass_mark: one GL_TIMESTAMP query per section, plus the frame's
+		// end, per slot.
+		stamps:    [GPU_FRAMES_IN_FLIGHT][len(Gpu_Pass) + 1]u32,
+		marked:    [GPU_FRAMES_IN_FLIGHT]bit_set[Gpu_Pass],
+		recording: bool,
 	}
 
 	@(private = "file")
@@ -708,6 +713,21 @@ import shared "../shared"
 		gl.GetQueryObjectui64v(frames.queries[slot], gl.QUERY_RESULT, &ns)
 		frames.pending[slot] = false
 		append(&frames.completed, f64(ns) / 1e6)
+		if marked := frames.marked[slot]; marked != {} {
+			passes: [Gpu_Pass]u64
+			for pass in marked { gl.GetQueryObjectui64v(frames.stamps[slot][pass], gl.QUERY_RESULT, &passes[pass]) }
+			end: u64
+			gl.GetQueryObjectui64v(frames.stamps[slot][len(Gpu_Pass)], gl.QUERY_RESULT, &end)
+			gpu_pass_times_add(passes, marked, end)
+			frames.marked[slot] = {}
+		}
+	}
+
+	gl_gpu_pass_mark :: proc(pass: Gpu_Pass) {
+		frames := &g_gl_frames
+		if !frames.recording || pass in frames.marked[frames.slot] { return }
+		gl.QueryCounter(frames.stamps[frames.slot][pass], gl.TIMESTAMP)
+		frames.marked[frames.slot] += {pass}
 	}
 
 	// Waits until the frame that last used the next slot is done: at most
@@ -721,16 +741,20 @@ import shared "../shared"
 		frames := &g_gl_frames
 		if !frames.ready {
 			gl.GenQueries(GPU_FRAMES_IN_FLIGHT, &frames.queries[0])
+			for &slot in frames.stamps { gl.GenQueries(i32(len(slot)), &slot[0]) }
 			frames.ready = true
 		}
 		gl_frame_collect(frames.slot)
 		gl.BeginQuery(gl.TIME_ELAPSED, frames.queries[frames.slot])
+		frames.recording = true
 	}
 
 	gl_gpu_frame_end :: proc() {
 		gpu_flush_deferred()
 		frames := &g_gl_frames
 		gl.EndQuery(gl.TIME_ELAPSED)
+		if frames.marked[frames.slot] != {} { gl.QueryCounter(frames.stamps[frames.slot][len(Gpu_Pass)], gl.TIMESTAMP) }
+		frames.recording = false
 		frames.pending[frames.slot] = true
 		frames.fences[frames.slot] = gl.FenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
 		gl.Flush()
@@ -751,7 +775,10 @@ import shared "../shared"
 
 	gl_gpu_frames_fini :: proc() {
 		gl_gpu_frames_finish()
-		if g_gl_frames.ready { gl.DeleteQueries(GPU_FRAMES_IN_FLIGHT, &g_gl_frames.queries[0]) }
+		if g_gl_frames.ready {
+			gl.DeleteQueries(GPU_FRAMES_IN_FLIGHT, &g_gl_frames.queries[0])
+			for &slot in g_gl_frames.stamps { gl.DeleteQueries(i32(len(slot)), &slot[0]) }
+		}
 		delete(g_gl_frames.completed)
 		g_gl_frames = {}
 	}
@@ -772,6 +799,7 @@ import shared "../shared"
 
 	gl_gpu_present :: proc(window: glfw.WindowHandle) {
 		gpu_flush_deferred()
+		gl_gpu_pass_mark(.Present)
 		glfw.SwapBuffers(window)
 	}
 
