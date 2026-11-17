@@ -134,9 +134,6 @@ void main() {
         OBJECT(BATCH_SLOT_TRANSFORM + 1),
         OBJECT(BATCH_SLOT_TRANSFORM + 2),
         OBJECT(BATCH_SLOT_TRANSFORM + 3));
-    precise vec3 p_world = vec3(m_transform * vec4(v_pos, 1.0));
-    world_pos = p_world;
-
     b_color = OBJECT(BATCH_SLOT_COLOR);
     b_emissive = OBJECT(BATCH_SLOT_EMISSIVE);
     b_face_scale = OBJECT(BATCH_SLOT_FACE_SCALE);
@@ -158,6 +155,23 @@ void main() {
         face_idx = VERTEX_ID / 4;
     }
 #endif
+
+    // Map cubes (create_cube_geo: x, z in -0.5..0.5, y in 0..1; faces front,
+    // back, left, right, top, bottom). Where one box's edge runs past a
+    // neighbour's corner (a T-junction), the two surfaces meet only to within
+    // rounding and the background shows through sub-pixel cracks. Each face
+    // grows SEAL_EDGE world units along its own plane, never out of it, so
+    // faces lying on it (planes, decals) still tie in depth as before.
+    vec3 local = v_pos;
+    if ((int(b_params.y + 0.5) & BATCH_FLAG_SEAL_EDGES) != 0) {
+        const float SEAL_EDGE = 0.002;
+        vec3 in_plane = face_idx < 2 ? vec3(1.0, 1.0, 0.0) : (face_idx < 4 ? vec3(0.0, 1.0, 1.0) : vec3(1.0, 0.0, 1.0));
+        vec3 outward = sign(v_pos - vec3(0.0, 0.5, 0.0)) * in_plane;
+        vec3 axis_scale = vec3(length(m_transform[0].xyz), length(m_transform[1].xyz), length(m_transform[2].xyz));
+        local += outward * SEAL_EDGE / max(axis_scale, vec3(1e-6));
+    }
+    precise vec3 p_world = vec3(m_transform * vec4(local, 1.0));
+    world_pos = p_world;
 
     precise vec4 p_clip = camera_projection * camera_world_inverse * vec4(p_world, 1.0);
 #ifdef VULKAN

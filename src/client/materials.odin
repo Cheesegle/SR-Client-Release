@@ -70,7 +70,7 @@ Basic_Pass_Uniforms :: struct {
 // numbers and flag bits (map_batch.odin), plus the variant's own defines.
 basic_shader_defines :: proc(batched, shadow_depth: bool, allocator := context.allocator) -> string {
 	return fmt.aprintf(
-		"%s%s#define BATCH_OBJECT_VEC4S %d\n#define BATCH_SLOT_TRANSFORM %d\n#define BATCH_SLOT_COLOR %d\n#define BATCH_SLOT_EMISSIVE %d\n#define BATCH_SLOT_FACE_SCALE %d\n#define BATCH_SLOT_TEX_ROW0 %d\n#define BATCH_SLOT_TEX_ROW1 %d\n#define BATCH_SLOT_PARAMS %d\n#define BATCH_FLAG_RAMP %d\n#define BATCH_FLAG_LADDER %d\n#define BATCH_FLAG_FACE_TEX_SCALE %d\n#define BATCH_FLAG_UNLIT %d\n#define BATCH_FLAG_NO_FOG %d\n#define BATCH_FLAG_RECEIVE_SHADOW %d\n#define BATCH_FLAG_CAST_SHADOW %d\n",
+		"%s%s#define BATCH_OBJECT_VEC4S %d\n#define BATCH_SLOT_TRANSFORM %d\n#define BATCH_SLOT_COLOR %d\n#define BATCH_SLOT_EMISSIVE %d\n#define BATCH_SLOT_FACE_SCALE %d\n#define BATCH_SLOT_TEX_ROW0 %d\n#define BATCH_SLOT_TEX_ROW1 %d\n#define BATCH_SLOT_PARAMS %d\n#define BATCH_FLAG_RAMP %d\n#define BATCH_FLAG_LADDER %d\n#define BATCH_FLAG_FACE_TEX_SCALE %d\n#define BATCH_FLAG_UNLIT %d\n#define BATCH_FLAG_NO_FOG %d\n#define BATCH_FLAG_RECEIVE_SHADOW %d\n#define BATCH_FLAG_CAST_SHADOW %d\n#define BATCH_FLAG_SEAL_EDGES %d\n",
 		batched ? "#define BATCHED\n" : "",
 		shadow_depth ? "#define SHADOW_DEPTH_PASS\n" : "",
 		BATCH_OBJECT_VEC4S,
@@ -88,6 +88,7 @@ basic_shader_defines :: proc(batched, shadow_depth: bool, allocator := context.a
 		BATCH_FLAG_NO_FOG,
 		BATCH_FLAG_RECEIVE_SHADOW,
 		BATCH_FLAG_CAST_SHADOW,
+		BATCH_FLAG_SEAL_EDGES,
 		allocator = allocator,
 	)
 }

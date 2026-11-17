@@ -67,6 +67,9 @@ Basic_Material :: struct {
 	emissive: shared.Vec4,
 	alpha_test: f32,
 	receive_shadow: bool, // Samples the sun shadow map when Shadows is on.
+	// Map cube: each face grows a hair within its own plane (basic.vert), so
+	// T-junctions between neighbouring boxes leave no sub-pixel cracks.
+	seal_edges: bool,
 	texture_repeat: shared.Vec2,
 	texture_offset: shared.Vec2,
 	base_texture_offset: shared.Vec2,

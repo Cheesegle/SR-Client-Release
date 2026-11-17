@@ -418,6 +418,7 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		// Cubes: shadows = opacity == 1 (cast and receive). Planes and
 		// billboards set shadowsR: receive only.
 		if prefab_id == int(shared.Prefab.CUBE) {
+			material.seal_edges = true
 			material.receive_shadow = opacity == 1.0
 			if opacity == 1.0 { mesh.shadow_caster = .STATIC }
 		} else {

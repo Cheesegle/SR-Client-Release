@@ -10,7 +10,9 @@ import menuui "../menu"
 import shared "../shared"
 
 when ODIN_TEST {
-	SHADING_BASELINE_PATH :: "src/client/testdata/shading_baseline_burg.rgb"
+	// One golden image per backend: GL and Vulkan rasterise a few edge pixels
+	// differently, which this test would otherwise report as a lighting change.
+	SHADING_BASELINE_PATH :: "src/client/testdata/shading_baseline_burg_vk.rgb" when SR_VULKAN else "src/client/testdata/shading_baseline_burg.rgb"
 	SHADING_BASELINE_W :: 256
 	SHADING_BASELINE_H :: 144
 
@@ -51,7 +53,10 @@ when ODIN_TEST {
 	// existed. Build with -define:SHADING_BASELINE_WRITE=true to recapture.
 	@(test)
 	shading_off_matches_pre_shadow_baseline :: proc(t: ^testing.T) {
+		// Keep the runner's logger: testing.expect fails a test by logging.
+		logger := context.logger
 		context = runtime.default_context()
+		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
 		client := Client{}

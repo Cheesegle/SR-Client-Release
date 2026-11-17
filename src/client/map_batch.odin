@@ -41,6 +41,7 @@ BATCH_FLAG_UNLIT          :: 8
 BATCH_FLAG_NO_FOG         :: 16
 BATCH_FLAG_RECEIVE_SHADOW :: 32 // Basic_Material.receive_shadow
 BATCH_FLAG_CAST_SHADOW    :: 64 // Mesh.shadow_caster == .STATIC (shadow depth pass)
+BATCH_FLAG_SEAL_EDGES     :: 128 // Basic_Material.seal_edges (basic.vert)
 
 // One object in the batched shader's storage buffer. basic.vert declares the
 // buffer as a plain `vec4 objects[]` (std430 stride 16 on every driver; no
@@ -152,6 +153,7 @@ batch_object_from_material :: proc(material: ^Basic_Material, transform: shared.
 	if material.no_fog { flags |= BATCH_FLAG_NO_FOG }
 	if material.receive_shadow { flags |= BATCH_FLAG_RECEIVE_SHADOW }
 	if caster == .STATIC { flags |= BATCH_FLAG_CAST_SHADOW }
+	if material.seal_edges { flags |= BATCH_FLAG_SEAL_EDGES }
 	return Batch_Object{
 		transform  = transform,
 		color      = material.color,
