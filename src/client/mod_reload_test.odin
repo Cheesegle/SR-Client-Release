@@ -50,7 +50,10 @@ test_png :: proc(path: string, size: i32) -> []byte {
 // same OpenGL texture id and same geometry, new contents, no restart.
 @(test)
 mods_apply_live_without_restart :: proc(t: ^testing.T) {
+	// Keep the runner's logger: testing.expect fails a test by logging.
+	logger := context.logger
 	context = runtime.default_context()
+	context.logger = logger
 	if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 	defer glfw.Terminate()
 	glfw.WindowHint(glfw.VISIBLE, glfw.FALSE)
@@ -113,7 +116,10 @@ mods_apply_live_without_restart :: proc(t: ^testing.T) {
 // mod is loaded while SR runs.
 @(test)
 mods_replace_sounds :: proc(t: ^testing.T) {
+	// Keep the runner's logger: testing.expect fails a test by logging.
+	logger := context.logger
 	context = runtime.default_context()
+	context.logger = logger
 	audio := audio_create(nil, DEFAULT_AUDIO_SETTINGS, no_device = true)
 	if audio == nil { return } // No audio backend on this machine.
 	defer audio_destroy(audio)

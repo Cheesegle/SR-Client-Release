@@ -11,7 +11,10 @@ import shared "../shared"
 when ODIN_TEST {
 	@(test)
 	scope_image_and_current_undergrowth_render :: proc(t: ^testing.T) {
+		// Keep the runner's logger: testing.expect fails a test by logging.
+		logger := context.logger
 		context = runtime.default_context()
+		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
 		test_gpu := test_gpu_open(1280, 720, "Scope and Undergrowth")

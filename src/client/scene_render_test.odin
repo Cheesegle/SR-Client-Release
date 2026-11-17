@@ -57,7 +57,10 @@ when ODIN_TEST {
 
 	@(test)
 	scene_pass_refreshes_camera_environment_and_state :: proc(t: ^testing.T) {
+		// Keep the runner's logger: testing.expect fails a test by logging.
+		logger := context.logger
 		context = runtime.default_context()
+		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init()), "GLFW initialization failed") do return
 		defer glfw.Terminate()
 		test_gpu := test_gpu_open(64, 64, "Render pass regression")

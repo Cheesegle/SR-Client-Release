@@ -71,7 +71,10 @@ when ODIN_TEST {
 	// floor beside the box on the -x side is in its shadow.
 	@(test)
 	shadows_cast_from_the_sun :: proc(t: ^testing.T) {
+		// Keep the runner's logger: testing.expect fails a test by logging.
+		logger := context.logger
 		context = runtime.default_context()
+		context.logger = logger
 		if !testing.expect(t, bool(glfw.Init())) do return
 		defer glfw.Terminate()
 		test_gpu := test_gpu_open(64, 64, "Shadow regression")
