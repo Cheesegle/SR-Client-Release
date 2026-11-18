@@ -65,40 +65,65 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 			text(view.online && view.ready ? (view.ranked ? "Ranked" : view.presentation == .COMPETITIVE ? "Competitive" : "Connected") : view.local_practice ? "Local practice" : view.auth_pending && !view.connecting ? "Logging in" : view.online || view.connecting ? "Connecting" : "Join a lobby", 16, s)
 		}
 		if clay.UI(clay.ID("Page"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom, childGap = u16(gap*s), childAlignment = {x = .Center}}}) {
-			if view.online && view.ready || view.local_practice {
+			if state.page == .HOST {
+				// Host setup is a page of its own, in place of the lobby (not a
+				// popup over it); the footer stays usable.
+				host_window(state, view)
+			} else if view.online && view.ready || view.local_practice {
 				if view.presentation == .COMPETITIVE { lobby(state, view, width-64*s) }
 				else { standard_lobby(state, view) }
 			}
 			else {
 				spacer()
 				if clay.UI(clay.ID("ConnectionScreen"))({layout = {sizing = {width = clay.SizingFixed(760*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(32*s)), childGap = u16(24*s)}, backgroundColor = PANEL, cornerRadius = clay.CornerRadiusAll(4*s)}) {
-					text(view.auth_pending && !view.connecting ? "Logging in" : view.online || view.connecting ? "Connecting to lobby" : "Join a lobby", 32, s)
-					if state.page == .HOME { session(state, view) }
-					if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
-						button(state, "Local practice", "Practice", {kind = .LOCAL_PRACTICE})
-						// Back to the fresh start screen (F5).
-						if clay.UI()({layout = {sizing = {width = clay.SizingFixed(180*s)}}}) { button(state, "Refresh (F5)", "Refresh", {kind = .REFRESH}) }
+					text(connection_title(view), 32, s)
+					if view.hosting {
+						// Hosting: only its progress and a way out.
+						text(len(view.join_status) > 0 ? view.join_status : "Creating your custom game...", 18, s, MUTED)
+						if state.page == .HOME { if clay.UI()({layout = {sizing = {width = clay.SizingFixed(180*s)}}}) { button(state, "Cancel", "CancelJoin", {kind = .CANCEL_JOIN}) } }
+					} else {
+						if state.page == .HOME { join_form(state, view) }
+						if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
+							// Host a custom game in Krunker's own host setup; SR joins it as the host.
+							// (With a lobby connection the footer has it.)
+							if view.browser_access_supported && !view.online { button(state, "Host game", "HostGame", {kind = .HOST_GAME}, enabled = !view.connecting && !view.auth_pending) }
+							button(state, "Local practice", "Practice", {kind = .LOCAL_PRACTICE})
+							// Back to the fresh start screen (F5).
+							if clay.UI()({layout = {sizing = {width = clay.SizingFixed(180*s)}}}) { button(state, "Refresh (F5)", "Refresh", {kind = .REFRESH}) }
+						}
 					}
 				}
 				spacer()
 			}
 		}
 		if clay.UI(clay.ID("Footer"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(48*s)}, childGap = u16(16*s), childAlignment = {y = .Center}}}) {
-			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(200*s)}}}) { button(state, "Session / Invite", "Session", {index = i32(Page.SESSION)}) }
+			// The session's own actions sit on the menu itself. Joining another
+			// lobby from inside one opens the invite box; before a session the
+			// start screen already shows it.
+			in_session := view.online || view.local_practice
+			if in_session {
+				if clay.UI()({layout = {sizing = {width = clay.SizingFixed(176*s)}}}) { button(state, "Join lobby", "Session", {index = i32(Page.SESSION)}) }
+				if clay.UI()({layout = {sizing = {width = clay.SizingFixed(176*s)}}}) { button(state, "Copy invite", "CopyInvite", {kind = .COPY_INVITE}, enabled = len(view.current_invite) > 0) }
+				if view.browser_access_supported {
+					if clay.UI()({layout = {sizing = {width = clay.SizingFixed(176*s)}}}) { button(state, "Host game", "HostGame", {kind = .HOST_GAME}, enabled = !view.connecting && !view.auth_pending && !view.hosting) }
+				}
+				if clay.UI()({layout = {sizing = {width = clay.SizingFixed(144*s)}}}) { button(state, "Leave", "LeaveSession", {kind = .LEAVE_SESSION}) }
+			}
 			spacer()
-			text("Tab  Navigate     Enter  Select     Esc  Back", 16, s, MUTED)
-			spacer()
+			if view.browser_access_supported {
+				if clay.UI()({layout = {sizing = {width = clay.SizingFixed(192*s)}}}) { button(state, view.auth_pending ? "Logging in..." : view.logged_in ? "Account" : "Login", "Account", {index = i32(Page.ACCOUNT)}) }
+			}
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(144*s)}}}) { button(state, "Settings", "Settings", {index = i32(Page.SETTINGS)}) }
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(112*s)}}}) { button(state, "Quit", "Quit", {kind = .QUIT}) }
 		}
-		if state.page != .HOME {
+		if state.page != .HOME && state.page != .HOST {
 			// Modal controls replace the lobby's interaction list (mouse and Tab).
 			state.control_count = 0
 			if clay.UI(clay.ID("ModalScrim"))({layout = {sizing = {width = clay.SizingFixed(width), height = clay.SizingFixed(height)}, childAlignment = {x = .Center, y = .Center}}, backgroundColor = {0,0,0,160}, floating = {attachTo = .Root, zIndex = 10}}) {
 				if state.page == .SETTINGS || state.page == .CONTROLS {
 					settings_window(state, view)
-				} else if state.page == .HOST {
-					host_window(state, view)
+				} else if state.page == .SESSION || state.page == .ACCOUNT {
+					small_window(state, view)
 				} else if clay.UI(clay.ID("Overlay"))({layout = {sizing = {width = clay.SizingFixed((state.page == .LOADOUT ? 1040 : 880)*s), height = clay.SizingFixed(752*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(32*s)), childGap = u16(16*s)}, backgroundColor = {20,23,28,255}, cornerRadius = clay.CornerRadiusAll(4*s), border = {color = {75,80,88,255}, width = clay.BorderOutside(1)}}) {
 					if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(52*s)}}}) {
 						if clay.UI()({layout = {sizing = {width = clay.SizingFixed(136*s)}}}) { button(state, "Back", "Back", {index = i32(back_page(state))}) }
@@ -107,15 +132,9 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 							if clay.UI()({layout = {sizing = {width = clay.SizingFixed(136*s)}}}) { button(state, "Done", "LoadoutDone", {index = i32(Page.HOME)}, primary = true) }
 						}
 					}
-					switch state.page {
-					case .HOME:
-					case .SETTINGS, .CONTROLS, .HOST:
+					#partial switch state.page {
 					case .CLASSES: class_picker(state, view)
 					case .LOADOUT: class_loadout(state, view)
-					case .SESSION:
-						text("Session / Invite", 32, s)
-						text(view.lobby_name, 20, s, MUTED)
-						session(state, view)
 					}
 				}
 			}
@@ -392,14 +411,47 @@ shorten :: proc(value: string, limit: int) -> string {
 	return fmt.tprintf("%s...", value[:limit-3])
 }
 
-session :: proc(state: ^State, view: View) {
+connection_title :: proc(view: View) -> string {
+	if view.hosting { return "Creating your game" }
+	if view.auth_pending && !view.connecting { return "Logging in" }
+	if view.online || view.connecting { return "Connecting to lobby" }
+	return "Join a lobby"
+}
+
+// The Join lobby and Login popups: one small window, no lobby behind it
+// taking input.
+small_window :: proc(state: ^State, view: View) {
 	s := state.scale
-	if view.browser_access_supported {
-		if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
-			button(state, view.auth_pending ? "Logging in..." : "Login", "Login", {kind = .LOGIN}, enabled = !view.auth_pending && !view.connecting)
-			button(state, state.logout_armed ? "Click again to log out" : "Log out", "ForgetBrowserSession", {kind = .FORGET_BROWSER_SESSION})
+	if clay.UI(clay.ID("Overlay"))({layout = {sizing = {width = clay.SizingFixed(760*s)}, layoutDirection = .TopToBottom, padding = clay.PaddingAll(u16(32*s)), childGap = u16(20*s)}, backgroundColor = {20,23,28,255}, cornerRadius = clay.CornerRadiusAll(4*s), border = {color = {75,80,88,255}, width = clay.BorderOutside(1)}}) {
+		if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s), childAlignment = {y = .Center}}}) {
+			text(state.page == .ACCOUNT ? "Krunker login" : "Join a lobby", 32, s)
+			spacer()
+			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(136*s)}}}) { button(state, "Back", "Back", {index = i32(Page.HOME)}) }
+		}
+		if state.page == .ACCOUNT { account(state, view) }
+		else {
+			if view.online || view.local_practice { text(fmt.tprintf("Now in: %s", shorten(view.lobby_name, 60)), 18, s, MUTED) }
+			join_form(state, view)
 		}
 	}
+}
+
+// Krunker login: its own window, apart from joining and hosting.
+account :: proc(state: ^State, view: View) {
+	s := state.scale
+	text(view.auth_pending ? "Finish signing in in the Krunker window." : view.logged_in ? "Signed in to Krunker." : "Sign in to Krunker to join and host games.", 20, s, view.logged_in ? WHITE : MUTED)
+	text("Login opens Krunker's own sign-in page in a small window; SR never sees your password. Log out forgets the account and the login window's data.", 16, s, MUTED)
+	if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
+		button(state, view.auth_pending ? "Logging in..." : "Login", "Login", {kind = .LOGIN}, primary = !view.logged_in, enabled = !view.auth_pending && !view.connecting)
+		button(state, state.logout_armed ? "Click again to log out" : "Log out", "ForgetBrowserSession", {kind = .FORGET_BROWSER_SESSION})
+	}
+	if view.auth_pending { button(state, "Cancel", "CancelJoin", {kind = .CANCEL_JOIN}) }
+	if len(view.join_status) > 0 { text(view.join_status, 16, s, MUTED) }
+}
+
+// Invite link, Paste and Join (the start screen and the Join lobby popup).
+join_form :: proc(state: ^State, view: View) {
+	s := state.scale
 	text("Invite link", 18, s, MUTED)
 	id := clay.ID("Invite")
 	register(state, {id = id, enabled = true, action = {kind = .EDIT_INVITE}})
@@ -420,19 +472,7 @@ session :: proc(state: ^State, view: View) {
 	if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
 		button(state, "Paste", "Paste", {kind = .PASTE})
 		button(state, view.auth_pending && view.connecting ? "Preparing access..." : view.connecting ? "Connecting..." : "Join", "JoinLink", {kind = .JOIN_LINK}, primary = true, enabled = len(invite(state)) > 0 && !view.connecting && !view.auth_pending)
-		// Host a custom game in Krunker's own host setup; SR joins it as the host.
-		if view.browser_access_supported && !view.online && !view.local_practice {
-			button(state, "Host game", "HostGame", {kind = .HOST_GAME}, enabled = !view.connecting && !view.auth_pending)
-		}
 	}
 	if view.connecting || view.auth_pending { button(state, "Cancel", "CancelJoin", {kind = .CANCEL_JOIN}) }
 	text(len(view.join_status) > 0 ? view.join_status : "Enter an invite to connect to a lobby.", 18, s, MUTED)
-	if view.online || view.local_practice {
-		rule(s)
-		text(shorten(view.current_invite, 80), 16, s, MUTED)
-		if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
-			button(state, "Copy current invite", "CopyInvite", {kind = .COPY_INVITE}, enabled = len(view.current_invite) > 0)
-			button(state, "Leave session", "LeaveSession", {kind = .LEAVE_SESSION})
-		}
-	}
 }

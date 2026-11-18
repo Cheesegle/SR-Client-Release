@@ -270,6 +270,7 @@ menu_view :: proc(client: ^Client) -> menuui.View {
 		spawn_pending = client.spawn_pending, ready = client.krunker.connected ? client.krunker_world.ready && client.krunker.render_map_ready : client.game.ready && (!client.net.connected || client.net.match_state_received),
 		map_name = map_name, mode = mode, lobby_name = online ? (len(client.join_link.game_id) > 0 ? client.join_link.game_id : client.join_link.host) : "Local practice",
 		browser_access_supported = ODIN_OS == .Windows, auth_pending = client.access.status == .PENDING,
+		logged_in = client.access.status == .READY, hosting = host_game_active(),
 		mods_count = len(shared.g_mods.index), mods_problems = shared.g_mods.errors, mods_active = krunker_mod_label(shared.g_mods.active),
 		mods_busy = g_krunker_mods.open || g_krunker_mods.download != nil, mods_supported = ODIN_OS == .Windows,
 		connecting = client.join_queued > 0 || client.access.status == .PENDING && client.access.join_after_access, current_invite = client.join_link.raw, join_status = client.join_status, selection_status = client.selection_status,
@@ -380,7 +381,7 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		audio_play_effect(client.audio, "tick_0", .UI, 0.6)
 	}
 	switch action.kind {
-	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .GRAPHICS_API, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .CROSSHAIR_IMAGE_CLEAR, .HUD_SCALE, .GAME_FPS_LIMIT, .IMPORT_PART, .FPS_UPDATE_RATE, .HOST_TAB, .HOST_MAP, .HOST_VALUE, .HOST_TOGGLE, .HOST_TEAM_SIZE, .HOST_CLASS_LIMIT, .HOST_TEXT, .HOST_CLOSE, .DEFAULT_REGION, .HITMARKER_IMAGE_CLEAR, .MSAA, .VRR_CAP:
+	case .NONE, .EDIT_INVITE, .INSPECT_CLASS, .SETTINGS_TAB, .SETTINGS_CANCEL, .BIND_KEY, .UNBIND_KEY, .HUD_TOGGLE, .VSYNC, .GRAPHICS_API, .MONITOR, .SETTINGS_DROPDOWN, .RESOLUTION_SELECT, .VISUAL_VALUE, .VISUAL_TOGGLE, .VISUAL_RESET, .TEXTURE_FILTER, .ANISOTROPY, .QUALITY_TOGGLE, .LIGHTING, .SHADOW_QUALITY, .MENU_FPS_LIMIT, .SETTINGS_NUMBER, .FOV, .ADVANCED_SENSITIVITY, .INVERT_MOUSE, .VIEWMODEL_VALUE, .VIEWMODEL_TOGGLE, .TRAILS_TOGGLE, .CROSSHAIR_TYPE, .CROSSHAIR_VALUE, .CROSSHAIR_TOGGLE, .CROSSHAIR_COLOR, .SETTINGS_IMPORT_OPEN, .SETTINGS_RESET_OPEN, .SETTINGS_RESET, .SETTINGS_RESET_CLOSE, .SETTINGS_SEARCH, .NIGHT_STRENGTH, .KILL_FEED_LIMIT, .HITMARKER_VALUE, .HITMARKER_TOGGLE, .DAMAGE_VALUE, .DAMAGE_TOGGLE, .CROSSHAIR_IMAGE_CLEAR, .HUD_SCALE, .GAME_FPS_LIMIT, .IMPORT_PART, .FPS_UPDATE_RATE, .HOST_TAB, .HOST_MAP, .HOST_VALUE, .HOST_TOGGLE, .HOST_TEAM_SIZE, .HOST_CLASS_LIMIT, .HOST_TEXT, .HOST_CLOSE, .DEFAULT_REGION, .HITMARKER_IMAGE_CLEAR, .MSAA, .VRR_CAP, .OBJECTIVE_OPACITY:
 	case .HITMARKER_IMAGE_PASTE:
 		link := strings.trim_space(string(glfw.GetClipboardString(client.window)))
 		if len(link) == 0 || len(link) > menuui.CROSSHAIR_IMAGE_URL_MAX {
@@ -429,13 +430,15 @@ menu_apply_action :: proc(client: ^Client, action: menuui.Action, send_class: pr
 		krunker_ws_set_status(client, "Connecting to lobby...")
 		client.menu.page = .HOME
 	case .HOST_GAME:
-		if client.join_queued > 0 || client.access.status == .PENDING || client.krunker.connected || client.net.connected || host_game_active() { return }
+		// Also from inside a lobby: Start Game leaves it for the new game.
+		if client.join_queued > 0 || client.access.status == .PENDING || host_game_active() { return }
 		host_game_open(client)
 	case .HOST_START:
 		host_game_start(client)
 	case .LOGIN:
 		when ODIN_OS == .Windows { client_access_login(client) }
 	case .CANCEL_JOIN:
+		if host_game_active() { host_game_fail(client, "Hosting cancelled."); return }
 		login := client.access.status == .PENDING && !client.access.join_after_access
 		client_access_cancel(client)
 		client.join_queued = 0

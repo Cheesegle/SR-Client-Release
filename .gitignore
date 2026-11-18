@@ -15,6 +15,11 @@ assets/css/fonts/*
 !assets/textures/custom/
 !assets/textures/objective_4.png
 !assets/textures/objective_5.png
+!assets/textures/marker_0.png
+!assets/textures/marker_0_next.png
+!assets/sound/pop_3.mp3
+!assets/sound/woosh_0.mp3
+!assets/sound/reload_3.mp3
 !assets/textures/scopes/
 assets/textures/scopes/*
 !assets/textures/scopes/scope_0.png

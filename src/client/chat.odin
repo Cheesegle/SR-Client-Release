@@ -84,6 +84,14 @@ chat_copy :: proc(dst: []u8, text: string) -> int {
 	return n
 }
 
+// A game notice in every channel, as Krunker's chat shows its own messages
+// (kind 2: #fc03ec unless a colour is given).
+chat_system_add :: proc(text: string, color := CHAT_SERVER_COLOR) {
+	line := Chat_Line{kind = .SYSTEM, channel = -1, life = CHAT_MESSAGE_LIFE, text_color = color}
+	line.text_length = chat_copy(line.text[:], text)
+	chat_push(line)
+}
+
 kill_chat_add :: proc(entry: Kill_Feed_Entry) {
 	chat_push({kind = .KILL, channel = -1, killer = entry.killer, victim = entry.victim, has_killer = entry.has_killer && entry.killer.length > 0, entry = entry, life = CHAT_KILL_LIFE})
 }

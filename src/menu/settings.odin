@@ -133,6 +133,9 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_crosshair_color(state, "Enemy health color", HEALTH_COLOR_FIELD_ENEMY)
 		settings_crosshair_color(state, "Your health (high)", HEALTH_COLOR_FIELD_HUD_HIGH)
 		settings_crosshair_color(state, "Your health (low)", HEALTH_COLOR_FIELD_HUD_LOW)
+		// Krunker's objOpac / adsObjOpac: the hardpoint marker.
+		settings_slider(state, "Objective Info Opacity", "ObjectiveOpacity", objective_opacity(values.hud), 0, 1, {kind = .OBJECTIVE_OPACITY, index = 0}, step = 0.1)
+		settings_slider(state, "Objective Info ADS Opacity", "AdsObjectiveOpacity", ads_objective_opacity(values.hud), 0, 1, {kind = .OBJECTIVE_OPACITY, index = 1}, step = 0.1)
 		// Krunker showKills ("Display Kill feed", on) and feedLimit ("Killfeed Limit", 1-10, default 8).
 		settings_toggle_row(state, "Show killfeed", "HudKillFeed", !values.hud.hide_kill_feed, {kind = .HUD_TOGGLE, index = 6})
 		settings_slider(state, "Killfeed limit", "HudKillFeedLimit", f32(kill_feed_limit(values.hud)), 1, KILL_FEED_MAX_LIMIT, {kind = .KILL_FEED_LIMIT}, step = 1)
@@ -434,6 +437,7 @@ KRUNKER_MATCHING_LABELS :: [?]string{
 	"Bullet trails", "Your trails", "Show killfeed", "Killfeed limit", "Show FPS", "Show Ping", "Field of view (FOV)", "Invert mouse",
 	"Master volume", "Effects volume", "Footsteps volume", "UI volume", "Saturation",
 	"Shadows", "Soft Shadows", "High-Res Shadows", "Dynamic Shadows", "Lighting",
+	"Objective Info Opacity", "Objective Info ADS Opacity",
 }
 
 krunker_label :: proc(label: string) -> bool {

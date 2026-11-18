@@ -292,10 +292,19 @@ test_menu :: proc() -> bool {
 	view.join_status="Connection failed. Please check the invite and try again."
 	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("JoinLink")).kind != .NONE { return false }
-	if clay.GetElementData(clay.ID("Login")).found { return false }
+	if clay.GetElementData(clay.ID("Login")).found || clay.GetElementData(clay.ID("Account", u32(menuui.Page.ACCOUNT))).found { return false }
 	view.browser_access_supported = true
 	menu_test_frame(&state, view, {})
+	// Login lives in its own window, opened from the footer.
+	if clay.GetElementData(clay.ID("Login")).found { fmt.println("Login must not sit on the start screen"); return false }
+	menu_test_click(&state, view, clay.ID("Account", u32(menuui.Page.ACCOUNT)))
+	if state.page != .ACCOUNT { fmt.println("The footer's Login must open the login window"); return false }
+	menu_test_frame(&state, view, {})
 	if menu_test_click(&state, view, clay.ID("Login")).kind != .LOGIN { fmt.println("Login must be available without an invite"); return false }
+	menu_test_frame(&state, view, {escape = true})
+	menu_test_frame(&state, view, {})
+	if state.page != .HOME { fmt.println("Escape must close the login window"); return false }
+	if !clay.GetElementData(clay.ID("HostGame", 0)).found { fmt.println("Host game must be on the start screen"); return false }
 	menu_test_click(&state, view, clay.ID("Invite"))
 	menu_test_frame(&state, view, {text="krunk://localhost:21015"})
 	if menuui.invite(&state) != "krunk://localhost:21015" { return false }
@@ -306,10 +315,25 @@ test_menu :: proc() -> bool {
 	if menu_test_click(&state, view, clay.ID("Login")).kind != .NONE || menu_test_click(&state, view, clay.ID("JoinLink")).kind != .NONE { fmt.println("Pending Login must disable duplicate Login and Join"); return false }
 	if menu_test_click(&state, view, clay.ID("CancelJoin")).kind != .CANCEL_JOIN { return false }
 	view.auth_pending = false
-	// Opening session from the connection screen must not duplicate field IDs.
+	// Opening Join lobby from the connection screen must not duplicate field IDs.
 	state.page=.SESSION
 	menu_test_frame(&state, view, {})
-	if menu_test_click(&state, view, clay.ID("Login")).kind != .LOGIN { fmt.println("Session controls must expose Login"); return false }
+	if menu_test_click(&state, view, clay.ID("JoinLink")).kind != .JOIN_LINK { fmt.println("Join lobby window must expose Join"); return false }
+	state.page=.ACCOUNT
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("Login")).kind != .LOGIN { fmt.println("Login window must expose Login"); return false }
+	// In a lobby, the footer carries Join lobby, Copy invite, Host game and Leave.
+	state.page=.HOME
+	view.online, view.ready, view.current_invite = true, true, "https://krunker.io/?game=NA:abc"
+	menu_test_frame(&state, view, {})
+	if menu_test_click(&state, view, clay.ID("CopyInvite")).kind != .COPY_INVITE { fmt.println("Footer must copy the invite"); return false }
+	if menu_test_click(&state, view, clay.ID("HostGame")).kind != .HOST_GAME { fmt.println("Footer must host a game"); return false }
+	if menu_test_click(&state, view, clay.ID("LeaveSession")).kind != .LEAVE_SESSION { fmt.println("Footer must leave the session"); return false }
+	menu_test_click(&state, view, clay.ID("Session", u32(menuui.Page.SESSION)))
+	menu_test_frame(&state, view, {})
+	if state.page != .SESSION { fmt.println("Footer must open Join lobby"); return false }
+	state.page=.HOME
+	view.online, view.ready, view.current_invite = false, false, ""
 	if state.errors != 0 { return false }
 	fmt.println("Competitive lobby layout, modal, selection, invite, mouse and keyboard tests OK")
 	return test_slider_numbers() && test_crosshair_menu() && test_settings_scrolling() && test_graphics_menu() && test_standard_menu() && test_lobby_packets() && test_live_lobby_records()
@@ -340,12 +364,12 @@ test_slider_numbers :: proc() -> bool {
 			menu_test_frame(&state, view, {text=text})
 			action := menu_test_frame(&state, view, {enter=true})
 			actual := menuui.settings_slider_value(&state, view, control.action)
-			if control.action.kind == .HUD_SCALE { expected = math.round(expected*10)/10 } // UI Scale keeps Krunker's 0.1 steps
+			if control.action.kind == .HUD_SCALE || control.action.kind == .OBJECTIVE_OPACITY { expected = math.round(expected*10)/10 } // UI Scale and objective opacity keep Krunker's 0.1 steps
 			if state.number_edit != .NONE || action.kind != .NONE || abs(actual-expected)>0.0001 { fmt.println("Manual entry must update the matching draft value in its displayed units", tab, control.action, actual, expected); return false }
 			menu_test_frame(&state, view, {})
 		}
 	}
-	if count != 35 { fmt.println("Missing editable slider values", count); return false } // Includes the six hitmarker sliders; master volume is on Sound only.
+	if count != 37 { fmt.println("Missing editable slider values", count); return false } // Includes the six hitmarker and two objective opacity sliders; master volume is on Sound only.
 	menuui.activate(&state, {action={kind=.SETTINGS_TAB, index=i32(menuui.Settings_Tab.VIDEO)}})
 	menu_test_frame(&state, view, {})
 	gap: menuui.Control
@@ -661,6 +685,15 @@ test_standard_menu :: proc() -> bool {
 				state.page = page
 				menu_test_frame(&state, view, {}, size[0], size[1])
 				if state.errors != 0 { fmt.eprintln("Standard menu layout failed"); return false }
+				// Host setup is a page in place of the lobby, inside the window.
+				if page == .HOST {
+					data := clay.GetElementData(clay.ID("HostPage")); box := data.boundingBox
+					footer := clay.GetElementData(clay.ID("Footer")).boundingBox
+					if !data.found || box.width <= 0 || box.x < 0 || box.y < 0 || box.x+box.width > size[0]+1 || box.y+box.height > footer.y+1 {
+						fmt.println("Host page bounds failed", size, box); return false
+					}
+					continue
+				}
 				for id in ([?]string{"StandardPlayPanel","SelectedClass","Play","ChangeClass"}) {
 					data := clay.GetElementData(clay.ID(id, id == "ChangeClass" ? u32(menuui.Page.CLASSES) : 0)); box := data.boundingBox
 					if !data.found || box.width <= 0 || box.height <= 0 || box.x < 0 || box.y < 0 || box.x+box.width > size[0]+1 || box.y+box.height > size[1]+1 {

@@ -127,7 +127,7 @@ KRUNKER_CROSSHAIR_PRECISION :: 5
 KRUNKER_CROSSHAIR_IMAGE :: 4
 // SR Client also reads these Krunker keys, but only when the text contains
 // them: an absent key keeps the current SR value instead of a guessed default.
-KRUNKER_EXTRA_KEYS :: [?]string{"crosshairImage", "crosshairImageW", "crosshairImageH", "gunsVolume", "healthColT", "healthColE", "hudHealthHigh", "hudHealthLow", "fpsRate", "defaultRegion"}
+KRUNKER_EXTRA_KEYS :: [?]string{"crosshairImage", "crosshairImageW", "crosshairImageH", "gunsVolume", "healthColT", "healthColE", "hudHealthHigh", "hudHealthLow", "fpsRate", "defaultRegion", "objOpac", "adsObjOpac"}
 KRUNKER_VIEWMODEL := [Viewmodel_Control]Krunker_Key{
 	.WEAPON_FOV = .WEAPON_FOV, .BOBBING = .WEAPON_BOB, .LEANING = .WEAPON_LEAN, .ROTATION = .WEAPON_ROT,
 	.OFFSET_X = .WEAPON_OFF_X, .OFFSET_Y = .WEAPON_OFF_Y, .OFFSET_Z = .WEAPON_OFF_Z, .ADS_OFFSET_Y = .WEAPON_ADS_OFF_Y,
@@ -424,6 +424,16 @@ krunker_settings_import :: proc(values: ^Settings_Values, text: string, parts :=
 		if is_text { for candidate, i in KRUNKER_REGIONS { if candidate.id == string(region) { draft.hud.default_region, matched = i32(i) + 1, true } } }
 		if matched { result.imported += 1 } else { result.ignored += 1 }
 	}
+	// objOpac / adsObjOpac: 0..1 in 0.1 steps.
+	for name, i in ([2]string{"objOpac", "adsObjOpac"}) {
+		value, found := object[name]
+		if !found { continue }
+		number, ok := krunker_number(value)
+		if !ok { result.ignored += 1; continue }
+		stored := objective_opacity_encode(f32(number))
+		if i == 0 { draft.hud.objective_opacity = stored } else { draft.hud.ads_objective_opacity = stored }
+		result.imported += 1
+	}
 	if value, found := object["fpsRate"]; found {
 		if number, ok := krunker_number(value); ok { draft.hud.fps_update_ms = i32(clamp(math.round(number), FPS_UPDATE_MIN_MS, FPS_UPDATE_MAX_MS)); result.imported += 1 } else { result.ignored += 1 }
 	}
@@ -620,6 +630,14 @@ krunker_settings_export :: proc(values: Settings_Values, allocator := context.al
 		if !first { strings.write_byte(&builder, ',') }
 		first = false
 		fmt.sbprintf(&builder, "\"fpsRate\":%d", fps_update_ms(values.hud))
+	}
+	opacities := [2]i32{values.hud.objective_opacity, values.hud.ads_objective_opacity}
+	for name, i in ([2]string{"objOpac", "adsObjOpac"}) {
+		if opacities[i] <= 0 { continue }
+		if !first { strings.write_byte(&builder, ',') }
+		first = false
+		strings.write_string(&builder, fmt.tprintf("\"%s\":", name))
+		krunker_write_number(&builder, f64(objective_opacity_decode(opacities[i], 0)))
 	}
 	if values.hud.default_region > 0 {
 		if !first { strings.write_byte(&builder, ',') }

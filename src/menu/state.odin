@@ -5,11 +5,11 @@ import "core:math"
 import "base:runtime"
 import clay "../third_party/clay"
 
-Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, HOST }
+Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, HOST, ACCOUNT }
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, OBJECTIVE_OPACITY }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 // Krunker's tabs (General, Controls, Display, Render, Game, Sound) plus SR's
 // own Experimental tab. The enum names predate the Krunker layout.
@@ -55,6 +55,10 @@ HUD_Settings :: struct {
 	// Krunker's defaultRegion (Settings > General > Localization): an index
 	// into KRUNKER_REGIONS plus one; 0 (older files) = Frankfurt. Host uses it.
 	default_region: i32,
+	// Krunker's objOpac / adsObjOpac (Settings > Interface): the hardpoint
+	// marker's opacity, and while aiming down sights near it. Tenths plus
+	// one, so 0 (older files) is Krunker's default (1 and 0.5).
+	objective_opacity, ads_objective_opacity: i32,
 }
 Krunker_Region :: struct { id, name: string }
 // Krunker's Default Region list, in its order (ids as its settings save them).
@@ -66,6 +70,19 @@ KRUNKER_REGION_LABELS := [len(KRUNKER_REGIONS)]string{"Frankfurt", "Silicon Vall
 default_region :: proc(settings: HUD_Settings) -> Krunker_Region {
 	return KRUNKER_REGIONS[clamp(settings.default_region - 1, 0, len(KRUNKER_REGIONS) - 1)]
 }
+OBJECTIVE_OPACITY_DEFAULT :: 1
+ADS_OBJECTIVE_OPACITY_DEFAULT :: 0.5
+// 0..1 in Krunker's 0.1 steps, stored as tenths plus one (0 = default).
+objective_opacity_decode :: proc(stored: i32, fallback: f32) -> f32 {
+	if stored <= 0 { return fallback }
+	return f32(clamp(stored - 1, 0, 10))/10
+}
+objective_opacity_encode :: proc(value: f32) -> i32 {
+	if value != value { return 0 } // NaN
+	return i32(clamp(value, 0, 1)*10 + 0.5) + 1
+}
+objective_opacity :: proc(settings: HUD_Settings) -> f32 { return objective_opacity_decode(settings.objective_opacity, OBJECTIVE_OPACITY_DEFAULT) }
+ads_objective_opacity :: proc(settings: HUD_Settings) -> f32 { return objective_opacity_decode(settings.ads_objective_opacity, ADS_OBJECTIVE_OPACITY_DEFAULT) }
 FPS_UPDATE_DEFAULT_MS :: 250
 FPS_UPDATE_MIN_MS :: 50 // Krunker allows 0 (every frame); SR keeps the HUD cache useful.
 FPS_UPDATE_MAX_MS :: 1000
@@ -158,6 +175,8 @@ View :: struct {
 	mods_busy, mods_supported: bool,
 	ranked, team_selection: bool,
 	browser_access_supported, auth_pending: bool,
+	// Signed in to Krunker (access ready), and a custom game being created.
+	logged_in, hosting: bool,
 	classes: []Class,
 	selected_class: i32,
 	secondaries: []Secondary,
@@ -689,6 +708,13 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			return {}
 		case .HUD_SCALE:
 			if value := control.action.value; value == value { state.settings_draft.hud.ui_scale = clamp(value, UI_SCALE_MIN, UI_SCALE_MAX) }
+			return {}
+		case .OBJECTIVE_OPACITY:
+			// index 0: objOpac, 1: adsObjOpac.
+			if value := control.action.value; value == value {
+				if control.action.index == 0 { state.settings_draft.hud.objective_opacity = objective_opacity_encode(value) }
+				else { state.settings_draft.hud.ads_objective_opacity = objective_opacity_encode(value) }
+			}
 			return {}
 		case .FPS_UPDATE_RATE:
 			if value := control.action.value; value == value { state.settings_draft.hud.fps_update_ms = i32(clamp(value + 0.5, FPS_UPDATE_MIN_MS, FPS_UPDATE_MAX_MS)) } // Skips NaN.

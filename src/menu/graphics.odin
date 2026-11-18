@@ -235,6 +235,9 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .KILL_FEED_LIMIT: return f32(kill_feed_limit(state.settings_active ? values.hud : view.hud))
 	case .HUD_SCALE: return ui_scale(state.settings_active ? values.hud : view.hud)
 	case .FPS_UPDATE_RATE: return f32(fps_update_ms(state.settings_active ? values.hud : view.hud))
+	case .OBJECTIVE_OPACITY:
+		hud := state.settings_active ? values.hud : view.hud
+		return action.index == 0 ? objective_opacity(hud) : ads_objective_opacity(hud)
 	}
 	return values.sensitivity
 }

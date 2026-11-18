@@ -203,3 +203,28 @@ krunker_import_parts_and_new_keys :: proc(t: ^testing.T) {
 	testing.expect(t, defaults == menuui.Health_Colors{team = 0x9eeb56, enemy = 0xff4444, hud_high = 0x009b00, hud_low = 0x009b00}, "unset colours keep the 0.17 look")
 	testing.expect_value(t, menuui.fps_update_ms(plain.hud), 250)
 }
+
+// Krunker's objOpac / adsObjOpac (the hardpoint marker): defaults 1 and 0.5,
+// 0 is a real value, and they import and export as Krunker writes them.
+@(test)
+krunker_objective_opacity_settings :: proc(t: ^testing.T) {
+	plain := client_settings_default_values()
+	testing.expect_value(t, menuui.objective_opacity(plain.hud), f32(1))
+	testing.expect_value(t, menuui.ads_objective_opacity(plain.hud), f32(0.5))
+	export := menuui.krunker_settings_export(plain)
+	testing.expect(t, !strings.contains(export, "objOpac"), "unchanged opacities are left out of the export")
+	delete(export)
+
+	values := client_settings_default_values()
+	result, error := menuui.krunker_settings_import(&values, `{"objOpac":0,"adsObjOpac":0.3}`)
+	testing.expect_value(t, error, "")
+	testing.expect_value(t, result.imported, 2)
+	testing.expect_value(t, result.ignored, 0)
+	testing.expect_value(t, menuui.objective_opacity(values.hud), f32(0))
+	testing.expect(t, abs(menuui.ads_objective_opacity(values.hud) - 0.3) < 0.0001, "ADS opacity imports")
+	export = menuui.krunker_settings_export(values)
+	defer delete(export)
+	testing.expect(t, strings.contains(export, `"objOpac":0`) && strings.contains(export, `"adsObjOpac":0.3`), "both export in Krunker's form")
+	testing.expect_value(t, menuui.objective_opacity_encode(2), i32(11)) // clamped to 1
+	testing.expect_value(t, menuui.objective_opacity_decode(menuui.objective_opacity_encode(0.7), 0), f32(0.7))
+}

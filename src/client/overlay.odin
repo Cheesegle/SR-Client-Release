@@ -100,6 +100,9 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 		return
 	}
 
+	// Hardpoint marker and preview: Krunker's canvas, under its HUD.
+	objective_hud_render(client)
+
 	// Krunker's HUD (timer and match info, team scores, rounds, leaderboard
 	// and counters, player panel, weapons, ammo, chat, FPS).
 	hud_draw(client)
@@ -147,6 +150,7 @@ hud_draw :: proc(client: ^Client) {
 
 overlay_fini :: proc() {
 	kill_feed_fini()
+	objective_hud_fini()
 	for _, icon in weapon_icons {
 		texture_release(icon)
 	}

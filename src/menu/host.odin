@@ -183,8 +183,9 @@ host_slider_value :: proc(state: ^State, action: Action) -> (f32, bool) {
 
 host_window :: proc(state: ^State, view: View) {
 	s := state.scale
-	if clay.UI(clay.ID("Overlay"))({
-		layout = {sizing = {width = clay.SizingFixed(1360*s), height = clay.SizingFixed(780*s)}, layoutDirection = .TopToBottom},
+	// A page of the menu (between its header and footer), not a popup.
+	if clay.UI(clay.ID("HostPage"))({
+		layout = {sizing = {width = clay.SizingGrow({0, 1360*s}), height = clay.SizingGrow()}, layoutDirection = .TopToBottom},
 		backgroundColor = SETTINGS_BG, cornerRadius = clay.CornerRadiusAll(12*s),
 		border = {color = {131, 127, 140, 255}, width = clay.BorderOutside(1)},
 	}) {

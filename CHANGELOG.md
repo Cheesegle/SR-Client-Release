@@ -27,6 +27,22 @@ Everything from 0.24 stays.
   your custom game..." (SR waits for the Krunker login before hosting and
   shows a message if it fails).
 - **Alt+F4** closes the game, also in fullscreen and while loading.
+- **Hardpoint like Krunker:** the active point has Krunker's yellow marker
+  with "Capture" and the point's clock; in the last 15 seconds the next
+  point shows a white "Next" marker; "CONTESTED" when someone else is on
+  the point with you (FFA). Krunker's **Objective Info Opacity** and
+  **Objective Info ADS Opacity** (Settings > Video > Interface, default 1
+  and 0.5) set how see-through the markers are, also imported from and
+  exported to Krunker; a Krunker mod's objective icons replace the markers
+  as in the browser.
+- **Round messages like Krunker:** the countdown numbers and the mode title
+  animate as in the browser; a round ending shows "Switching Sides" and who
+  is in the lead, with Krunker's sounds; "Overtime" pops up when Krunker
+  adds time. Spawning plays Krunker's spawn sound.
+- **Menu:** Join lobby, Copy invite, Host game and Leave are at the bottom
+  of the menu; Login has its own window. Host game opens as a page (not a
+  popup), works from inside a lobby, and shows its progress with a Cancel
+  button.
 
 ## SR Client 0.24.0
 Everything from 0.23 stays.

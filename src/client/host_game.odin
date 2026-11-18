@@ -264,7 +264,7 @@ host_game_on_instance :: proc(client: ^Client, packet: []kproto.Krunker_Msgpack_
 	menuui.set_invite(&client.menu, client.join_link.raw)
 	g_host.phase = .HOSTED
 	kproto.network_log("host", fmt.tprintf("custom game %s created; SR Client is its host", game))
-	krunker_ws_set_status(client, fmt.tprintf("Your custom game %s is ready. Share the invite: %s", game, client.join_link.raw))
+	krunker_ws_set_status(client, fmt.tprintf("Your custom game %s is ready. Copy invite (bottom left) shares it.", game))
 }
 
 // "cust" [text, game, ...]: Krunker's answer; without a game it is an error.

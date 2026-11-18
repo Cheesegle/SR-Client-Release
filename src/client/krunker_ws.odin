@@ -566,7 +566,14 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				state.input_sequence = max(state.input_sequence, 13)
 				state.input_wire = {} // game start: the browser's compressor starts over
 				if !state.spawned { krunker_ws_set_status(client, "Server confirmed entry; waiting for local player position...") }
+				round_hud_spawned(client) // Krunker's spawn sound
+			case "tx":
+				round_hud_server_popup(client, packet)
 			case "rds", "obj", "gsc", "lkt", "ulm":
+				// RDS without "game over": an intermission starts (packet[3] leads).
+				if opcode == "rds" && applied && len(packet) > 2 && !kproto.krunker_world_bool(packet[2]) {
+					round_hud_intermission(client, len(packet) > 3 ? kproto.krunker_world_i32(packet[3], 0) : 0)
+				}
 				world := &client.krunker_world
 				kproto.network_log("match-state", fmt.tprintf("opcode=%s applied=%v round=%d wins=%v phase=%v locked=%v countdown=%v objective_seconds=%.3f", opcode, applied, world.match.round_current, world.match.round_wins, world.match.phase, world.move_lock, world.countdown, world.match.objective.rotation_remaining))
 			case "l":
