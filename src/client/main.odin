@@ -1527,7 +1527,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			if player.active {
 				player.idle_anim += shared.GAME_CONSTANTS.idle_anim_speed * delta
 				shared.player_update_visual_animations(player, delta)
-				shared.player_update_recoil(player, delta)
+				// The Krunker-predicted local player advances recoil per input
+				// command in player_proc_input, as Krunker's server does.
+				if !(player == client.me && client.krunker.connected) { shared.player_update_recoil(player, delta) }
 				if player != client.me {
 					shared.player_interpolate(player, delta)
 				}

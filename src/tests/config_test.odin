@@ -512,7 +512,9 @@ test_shot_feedback :: proc() -> bool {
 		ammo_before > 0 &&
 		player.ammo[player.loadout_index] == ammo_before - 1 &&
 		player.shot_seq == shot_seq_before + 1
-	recoil_ok := player.recoil_force > 0 && player.recoil_anim > 0 && player.recoil_anim_y > 0
+	// Krunker advances recoil at the start of each input tick, before the
+	// shot: the firing tick only adds force; the next tick turns it into kick.
+	recoil_ok := player.recoil_force > 0 && player.recoil_anim == 0 && player.recoil_anim_y == 0
 	impact_ok :=
 		len(game.impacts) == 1 &&
 		game.impacts[0].hit &&
@@ -520,6 +522,17 @@ test_shot_feedback :: proc() -> bool {
 		game.impacts[0].weapon_id == player.loadout[player.loadout_index] && game.impacts[0].shooter_uid == player.uid &&
 		game.impacts[0].origin.x == player.position.x &&
 		game.impacts[0].normal == shared.Vec3{-1, 0, 0}
+	next_tick := input
+	next_tick.shoot = false
+	shared.player_proc_input(player, &next_tick, false, false)
+	recoil_ok = recoil_ok && player.recoil_anim > 0 && player.recoil_anim_y > 0
+	// A reconciliation replay must not advance recoil again; the first, live
+	// prediction of a command (Krunker lobbies) must.
+	kick := player.recoil_anim_y
+	shared.player_proc_input(player, &next_tick, true, false)
+	recoil_ok = recoil_ok && player.recoil_anim_y == kick
+	shared.player_proc_input(player, &next_tick, true, false, false, true)
+	recoil_ok = recoil_ok && player.recoil_anim_y != kick
 	if !shot_ok || !recoil_ok || !impact_ok {
 		fmt.printf(
 			"Shot feedback test failed: shot=%v recoil=%v impact=%v ammo=%d->%d seq=%d->%d force=%f anim=%f anim_y=%f impacts=%d active=%v model=%v melee=%v no_auto=%v swap=%f reload=%f did_shoot=%v\n",

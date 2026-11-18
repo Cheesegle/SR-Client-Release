@@ -849,6 +849,16 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		}
 	}
 
+	// Krunker advances recoil here, once per input command and before aiming
+	// and shooting, so this command's shot already uses the recoil built up so
+	// far. Its flag is the one swapWeapon gets: a reconciliation replay never
+	// runs it again, while the first, live prediction of a command does. Recoil
+	// is integrated in steps (anim += force * dt), so stepping by display frame
+	// instead gave a curve that changed with FPS and missed the server's.
+	if !recon || predict_combat {
+		player_update_recoil(player, delta)
+	}
+
 	player.last_position = player.position
 
 	if player.weapon.no_aim && player.aim_val > 0.0 {
@@ -1146,11 +1156,6 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 	} else if recon && !move_lock && input.predicted_weapon_impulse != (Vec3{}) {
 		player.velocity += input.predicted_weapon_impulse
 		player.on_ground = false
-	}
-
-	// Advance recoil after firing so a new shot is visible in this frame.
-	if !recon {
-		player_update_recoil(player, delta)
 	}
 
 	// Krunker resets the wall-jump count on landing (resetStep) and allows a
