@@ -208,7 +208,7 @@ host_send_custom :: proc(state: ^Krunker_WS_State, settings: ^menuui.Host_Settin
 	packet := krunker_ws_finish_packet(host_custom_payload(settings), "custom", &next_counter)
 	defer delete(packet)
 	sent: c.size_t
-	code := krunker_ws_raw_send(state, packet[:], &sent)
+	code := krunker_ws_raw_send(state, packet[:], &sent, "custom")
 	if code != .E_OK || int(sent) != len(packet) {
 		kproto.network_log("host", fmt.tprintf("custom send failed curl=%v sent=%d expected=%d", code, sent, len(packet)))
 		return false

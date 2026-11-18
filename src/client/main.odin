@@ -1324,7 +1324,6 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		net_client_poll(client, glfw.GetTime())
 	}
 	if client.krunker.connected {
-		if client.hud_settings.network_thread && client.krunker.handle != nil { krunker_net_thread_start(&client.krunker) }
 		if g_net_thread.running { krunker_ws_poll_threaded(client) } else { krunker_ws_poll(client) }
 		krunker_client_sync_match(client, f64(now))
 	}

@@ -29,8 +29,9 @@ HUD_Settings :: struct {
 	hide_enemy_counter: bool, // enemies-on-point counter
 	hide_leaderboard: bool,   // Krunker's leaderboard, top right
 	hide_chat: bool,          // chat and kill lines, bottom left
-	// Settings > Experimental (kept here so it saves with the HUD flags).
-	network_thread: bool,     // read the network on its own thread
+	// The former Settings > Experimental > Network thread switch. The network
+	// thread is always on now; the field stays so older settings files load.
+	network_thread: bool,
 	hud_scale: f32,           // pre-0.13 HUD size; replaced by ui_scale, kept so old files load
 	// Krunker's UI Scale (scaleUI, 0.1..1, default 0.7); 0 (older files) = default.
 	ui_scale: f32,
@@ -744,7 +745,6 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 8: state.settings_draft.hud.hide_enemy_counter = !state.settings_draft.hud.hide_enemy_counter
 			case 9: state.settings_draft.hud.hide_leaderboard = !state.settings_draft.hud.hide_leaderboard
 			case 10: state.settings_draft.hud.hide_chat = !state.settings_draft.hud.hide_chat
-			case 11: state.settings_draft.hud.network_thread = !state.settings_draft.hud.network_thread
 			case 12: state.settings_draft.hud.classic_font = !state.settings_draft.hud.classic_font
 			case 13: state.settings_draft.hud.hide_hud = !state.settings_draft.hud.hide_hud
 			case 14: state.settings_draft.hud.hide_bullet_holes = !state.settings_draft.hud.hide_bullet_holes

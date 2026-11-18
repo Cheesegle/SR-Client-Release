@@ -158,9 +158,6 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		for label, i in labels { settings_slider(state, label, ids[i], values.audio_volumes[i], 0, 1, {kind = .AUDIO_VOLUME, index = i32(i)}) }
 		settings_note(state, "Master volume affects every channel. Set a channel to 0% to mute it.")
 	case .EXPERIMENTAL:
-		settings_section(state, "Network")
-		settings_toggle_row(state, "Network thread", "NetworkThread", values.hud.network_thread, {kind = .HUD_TOGGLE, index = 11})
-		settings_note(state, "Reads the game connection on its own thread. It does not raise average FPS; it keeps frames smooth when the network spikes and times snapshots by their real arrival. Takes effect right away; switching it off applies from the next match. Turn it off if anything feels wrong.")
 		settings_night(state)
 	}
 }
@@ -268,7 +265,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.vulkan = defaults.vulkan
 		hud := defaults.hud
 		hud.hide_ping, hud.manual_respawn, hud.hide_enemy_counter = draft.hud.hide_ping, draft.hud.manual_respawn, draft.hud.hide_enemy_counter
-		hud.hide_leaderboard, hud.hide_chat, hud.network_thread = draft.hud.hide_leaderboard, draft.hud.hide_chat, draft.hud.network_thread
+		hud.hide_leaderboard, hud.hide_chat = draft.hud.hide_leaderboard, draft.hud.hide_chat
 		hud.hide_bullet_holes = draft.hud.hide_bullet_holes
 		hud.vrr_cap = defaults.hud.vrr_cap
 		hud.hide_kill_counter, hud.hide_death_counter = draft.hud.hide_kill_counter, draft.hud.hide_death_counter
@@ -287,7 +284,6 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes
 	case .EXPERIMENTAL:
-		draft.hud.network_thread = defaults.hud.network_thread
 		draft.visuals.night_mode, draft.visuals.night_strength = defaults.visuals.night_mode, defaults.visuals.night_strength
 	}
 }
