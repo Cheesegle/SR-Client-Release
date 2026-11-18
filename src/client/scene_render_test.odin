@@ -122,7 +122,8 @@ when ODIN_TEST {
 		scene_render(scene, &camera, 64, 64)
 		polygon_modes: [2]i32
 		when !SR_VULKAN { gl.GetIntegerv(gl.POLYGON_MODE, &polygon_modes[0]) } // GL state
-		when !SR_VULKAN { testing.expect(t, polygon_modes == [2]i32{gl.FILL, gl.FILL}, "wireframe must not leak into HUD drawing") } // GL state
+		// Core profiles report one mode (front and back are always the same).
+		when !SR_VULKAN { testing.expectf(t, polygon_modes[0] == gl.FILL, "wireframe must not leak into HUD drawing (%v)", polygon_modes[0]) } // GL state
 		material.wireframe = false
 		ui_update(ui, 64, 64)
 		ui_fill_rect(ui, {0, 1, 0, 1}, 0, 0, 64, 64)

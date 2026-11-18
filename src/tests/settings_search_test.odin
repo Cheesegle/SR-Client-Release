@@ -233,6 +233,8 @@ test_menu_fps_limit_setting :: proc() -> bool {
 	field := clay.ID("MenuFpsLimit")
 	if !search_test_shown(&state, field) || state.settings_draft.menu_fps_limit != menuui.MENU_FPS_LIMIT_MONITOR { fmt.println("The Video tab must show the Menu FPS limit at Monitor refresh"); return false }
 	if len(menuui.MENU_FPS_LIMITS) != 7 || menuui.MENU_FPS_LIMIT_LABELS[0] != "Monitor refresh" || menuui.MENU_FPS_LIMIT_LABELS[6] != "Unlimited" { fmt.println("Unexpected menu FPS limit options"); return false }
+	// The VRR cap row and notes push the field below the fold at 720p.
+	menu_test_reveal(&state, view, field)
 	menu_test_click(&state, view, field)
 	if state.settings_dropdown != .MENU_FPS_LIMIT || state.focus != clay.ID("SettingsOption", 0).id { fmt.println("Opening the dropdown must focus the current limit"); return false }
 	menu_test_frame(&state, view, {})

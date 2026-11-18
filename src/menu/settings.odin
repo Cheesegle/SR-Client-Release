@@ -23,6 +23,9 @@ settings_window :: proc(state: ^State, view: View) {
 			if clay.UI(clay.ID("SettingsSidebar"))({
 				layout = {sizing = {width = clay.SizingFixed(232*s), height = clay.SizingGrow()}, layoutDirection = .TopToBottom},
 				backgroundColor = SETTINGS_DARK, border = {color = SETTINGS_LINE, width = {right = 1}},
+				// Display's crosshair preview makes the sidebar taller than the
+				// panel at some sizes: clip it rather than push the footer off-screen.
+				clip = {vertical = true},
 			}) {
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(80*s)}, padding = {left = u16(24*s)}, childAlignment = {y = .Center}}}) {
 					text("SETTINGS", 28, s, SETTINGS_MUTED)
