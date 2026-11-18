@@ -154,6 +154,11 @@ Client :: struct {
 	join_link:         shared.Join_Link,
 	join_status:       string,
 	net_input_seq:     i32,
+	// This frame's start time, at full precision (client_tick's `now` is an
+	// f32, which loses a millisecond within hours of uptime). Remote players are
+	// drawn at it and shots are stamped with it, so the shot's snapshot progress
+	// describes exactly the poses on screen. 0 outside the game loop (tests).
+	frame_time:        f64,
 	snapshot_send_rate: f32,
 	predicted_inputs:  [dynamic]shared.Input,
 
@@ -1304,6 +1309,10 @@ client_enter_game :: proc(client: ^Client) {
 	}
 }
 
+client_frame_time :: proc(client: ^Client, now: f32) -> f64 {
+	return client.frame_time > 0 ? client.frame_time : f64(now)
+}
+
 client_tick :: proc(client: ^Client, now, delta: f32) {
 	when ODIN_OS == .Windows {
 		if client.krunker.auth_rejected {
@@ -1490,7 +1499,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		input.seq = client.net_input_seq
 		client.net_input_seq += 1
 		if client.krunker.connected {
-			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll)
+			scroll_pending = krunker_client_predict_frame(client, &input, after_scroll, client_frame_time(client, now))
 			krunker_ws_send_input(client)
 		} else if client.net.connected {
 			append(&client.predicted_inputs, input)
@@ -1522,7 +1531,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	} else {
 		// The local player is predicted above. Remote players remain one snapshot
 		// behind and interpolate between authoritative samples.
-		if client.krunker.connected { krunker_client_interpolate_remotes(client, f64(now), delta); when HITREG_AUDIT { hitreg_audit_tick(client, f64(now)) } }
+		if client.krunker.connected { krunker_client_interpolate_remotes(client, client_frame_time(client, now), delta); when HITREG_AUDIT { hitreg_audit_tick(client, client_frame_time(client, now)) } }
 		for player in client.game.players {
 			if player.active {
 				player.idle_anim += shared.GAME_CONSTANTS.idle_anim_speed * delta
@@ -1916,16 +1925,17 @@ main :: proc() {
 	free_all(context.temp_allocator)
 
 	client_vrr_update(client, force = true)
-	last_tick := f32(glfw.GetTime())
+	last_tick := glfw.GetTime()
 	last_frame_start := glfw.GetTime()
 	prev_cpu_ms, prev_swap_ms, prev_events_ms: f32
 
 	for !bool(glfw.WindowShouldClose(client.window)) {
 		frame_start := glfw.GetTime()
+		client.frame_time = frame_start
 		now := f32(frame_start)
-		delta := now - last_tick
+		delta := f32(frame_start - last_tick) // in f64: f32 times lose precision with uptime
 
-		last_tick = now
+		last_tick = frame_start
 		g_draw_calls = 0
 		phase_frame_begin()
 		gpu_frame_begin()
