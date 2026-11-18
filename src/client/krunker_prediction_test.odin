@@ -345,4 +345,34 @@ when ODIN_TEST {
 		client_cap_predicted_inputs(&client, MAX_PREDICTED_INPUTS)
 		testing.expect(t, len(client.predicted_inputs) == MAX_PREDICTED_INPUTS && client.predicted_inputs[0].seq == 3, "an overfull history must keep the newest commands")
 	}
+	@(test)
+	merged_inputs_send_one_command_per_step :: proc(t: ^testing.T) {
+		client: Client
+		defer delete(client.predicted_inputs)
+		defer delete(client.krunker.input_commands)
+		state := &client.krunker
+		// 14 commands of 3 ms, the 5th shooting and the 2nd swapping: 33 ms fits
+		// the first 11, the other 3 stay queued and renumbered behind it.
+		for i in 0 ..< 14 {
+			command := shared.Input{seq = i32(40+i), delta = 0.003, move_dir = i32(i % 8), y_dir = f32(i)/10, shoot = i == 4, swap = i == 1 ? 2 : 0}
+			if i == 4 { command.krunker_shot_timed, command.krunker_shot_time = true, 12.5 }
+			append(&state.input_commands, command)
+			append(&client.predicted_inputs, command)
+		}
+		state.input_sequence = 54
+		testing.expect(t, krunker_client_unmerged_ms(state) == 42)
+		testing.expect(t, krunker_client_merge_inputs(&client, 33))
+		merged := state.input_commands[0]
+		testing.expect(t, state.input_merged == 1 && len(state.input_commands) == 4 && len(client.predicted_inputs) == 4, "eleven commands must become one in the queue and the history")
+		testing.expect(t, merged.seq == 40 && krunker_command_ms(merged) == 33 && merged.move_dir == 10 % 8 && abs(merged.y_dir-1.0) < 0.0001,
+			"the merged command keeps the first sequence, the summed duration and the latest held state")
+		testing.expect(t, merged.shoot && merged.swap == 2 && merged.krunker_shot_timed && merged.krunker_shot_time == 12.5, "momentary actions inside the step must survive the merge")
+		testing.expect(t, client.predicted_inputs[0] == merged && state.input_commands[1].seq == 41 && client.predicted_inputs[3].seq == 43 && state.input_sequence == 44,
+			"later sequence numbers must close up behind the merged command")
+		testing.expect(t, krunker_client_unmerged_ms(state) == 9)
+		packet, ok := krunker_ws_encode_input(state, nil, state.input_merged)
+		defer delete(packet)
+		decoded := krunker_test_decode_commands(t, packet)
+		testing.expect(t, ok && len(decoded) == 1, "q must carry exactly the merged command")
+	}
 }

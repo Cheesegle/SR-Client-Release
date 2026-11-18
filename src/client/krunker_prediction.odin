@@ -7,7 +7,7 @@ import kproto "../krunker"
 import glfw "vendor:glfw"
 
 // Sample independently of rendering and sending; wire durations use whole ms.
-KRUNKER_INPUT_RATE :: 30
+KRUNKER_INPUT_RATE :: 360
 KRUNKER_INPUT_SECONDS :: 1.0 / KRUNKER_INPUT_RATE
 KRUNKER_SEND_SECONDS :: 1.0 / 30.0
 KRUNKER_MAX_PREDICTED_INPUTS :: 2 * KRUNKER_INPUT_RATE
@@ -16,7 +16,7 @@ KRUNKER_MAX_PREDICTED_INPUTS :: 2 * KRUNKER_INPUT_RATE
 // angle deltas are zero and only the absolute [pitch, yaw] anchor goes out.
 // Prediction simulates the held aim too, so local and server physics match.
 // 1: one anchor per packet (send rate aim). 0: every command (input rate aim).
-KRUNKER_AIM_PER_PACKET :: 1
+KRUNKER_AIM_PER_PACKET :: 0
 
 // The local player's state that advances once per physics command and that
 // rendering reads: camera position and height, ADS, recoil, and the view
