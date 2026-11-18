@@ -4,12 +4,14 @@ import "core:fmt"
 import "core:strings"
 
 // CPU pinning (cpu_affinity_windows.odin applies it). The game thread (the
-// main thread: simulation, rendering and network polling) gets one physical
-// core of its own. That core is never core 0, which holds logical processor 0
-// of group 0 and, with it, most of Windows' interrupt and DPC work. Every other
-// thread (HTTP jobs, curl's resolver, audio, raw mouse input, the crash
-// watchdog, driver threads) is kept off the game core. Selection is pure and
-// platform independent so it can be tested with made-up topologies.
+// main thread: simulation and render recording) gets one physical core of its
+// own. That core is never core 0, which holds logical processor 0 of group 0
+// and, with it, most of Windows' interrupt and DPC work. The Krunker network
+// thread and the raw mouse thread each get the next best core (cpu_plan_cores).
+// Every other thread (HTTP jobs, curl's resolver, audio, the Vulkan present
+// thread, the crash watchdog, driver threads) is kept off those cores.
+// Selection is pure and platform independent so it can be tested with made-up
+// topologies.
 
 CPU_MAX_SMT :: 8 // Logical processors per physical core this code tracks.
 
@@ -66,16 +68,70 @@ cpu_cores_from_logical :: proc(logical: []Cpu_Logical, allocator := context.allo
 cpu_pick_game_core :: proc(cores: []Cpu_Core) -> (index: int, ok: bool) {
 	index = -1
 	for core, i in cores {
-		if core.is_core0 || core.realtime || core.mask == 0 { continue }
-		if index < 0 { index = i; continue }
-		best := cores[index]
-		if core.efficiency != best.efficiency {
-			if core.efficiency > best.efficiency { index = i }
-			continue
-		}
-		if core.group < best.group || core.group == best.group && core.core < best.core { index = i }
+		if !cpu_core_eligible(core) { continue }
+		if index < 0 || cpu_core_better(core, cores[index]) { index = i }
 	}
 	return index, index >= 0 && len(cores) >= 2
+}
+
+// A core a latency-critical thread may own: not core 0 (interrupts and DPCs),
+// not reserved for real-time work.
+cpu_core_eligible :: proc(core: Cpu_Core) -> bool {
+	return !core.is_core0 && !core.realtime && core.mask != 0
+}
+
+// Faster efficiency class first, then the lowest group and index.
+cpu_core_better :: proc(a, b: Cpu_Core) -> bool {
+	if a.efficiency != b.efficiency { return a.efficiency > b.efficiency }
+	return a.group < b.group || a.group == b.group && a.core < b.core
+}
+
+// Threads with a core of their own, besides the game thread.
+Cpu_Role :: enum u8 {
+	Helper,  // HTTP jobs, mods, crash watchdog, Vulkan workers: anywhere but the dedicated cores
+	Network, // the Krunker WebSocket thread
+	Input,   // the raw mouse input thread
+}
+
+// Which core each thread gets (indices into the core list; -1: none of its
+// own, the thread runs on the helper cores).
+//
+// The game thread takes the best eligible core, the network thread the next,
+// the mouse thread the one after that. With fewer eligible cores the network
+// and mouse threads share one, or fall back to the helper cores. Helpers stay
+// off the network and mouse cores only while at least two cores remain for
+// them: the GPU driver's own threads follow the helper set, and squeezing them
+// onto core 0 alone would cost more frame time than the sharing saves (the
+// network and mouse threads sleep until data arrives and run at a higher
+// priority, so they preempt a helper at once).
+Cpu_Plan :: struct {
+	game:              int,
+	network:           int,
+	input:             int,
+	helpers_exclusive: bool, // helpers are kept off the network and mouse cores too
+}
+
+cpu_plan_cores :: proc(cores: []Cpu_Core) -> (plan: Cpu_Plan, ok: bool) {
+	plan = {game = -1, network = -1, input = -1}
+	game, game_ok := cpu_pick_game_core(cores)
+	if !game_ok { return plan, false }
+	plan.game = game
+	// The remaining eligible cores, best first.
+	ranked := make([dynamic]int, context.temp_allocator)
+	for core, i in cores {
+		if i == game || !cpu_core_eligible(core) { continue }
+		at := len(ranked)
+		for at > 0 && cpu_core_better(core, cores[ranked[at - 1]]) { at -= 1 }
+		inject_at(&ranked, at, i)
+	}
+	if len(ranked) >= 1 { plan.network = ranked[0] }
+	plan.input = len(ranked) >= 2 ? ranked[1] : plan.network
+	helpers := 0
+	for _, i in cores {
+		if i != plan.game && i != plan.network && i != plan.input { helpers += 1 }
+	}
+	plan.helpers_exclusive = plan.network >= 0 && helpers >= 2
+	return plan, true
 }
 
 cpu_core_describe :: proc(core: Cpu_Core, hybrid: bool) -> string {

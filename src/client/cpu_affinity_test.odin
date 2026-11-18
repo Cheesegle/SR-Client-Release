@@ -52,4 +52,40 @@ when ODIN_TEST {
 		_, ok = cpu_pick_game_core(cores[:])
 		testing.expect(t, !ok, "a single core cannot be split")
 	}
+
+	@(test)
+	cpu_plan_gives_network_and_input_their_own_cores :: proc(t: ^testing.T) {
+		// 8 uniform cores: game 1, network 2, mouse 3; helpers on 0 and 4-7.
+		cores := cpu_cores_from_logical(topology({{0, 2, false}, {0, 2, false}, {0, 2, false}, {0, 2, false}, {0, 2, false}, {0, 2, false}, {0, 2, false}, {0, 2, false}})[:], context.temp_allocator)
+		plan, ok := cpu_plan_cores(cores[:])
+		testing.expect(t, ok && plan.game == 1 && plan.network == 2 && plan.input == 3, "uniform: the three cores after core 0")
+		testing.expect(t, plan.helpers_exclusive, "five cores left: helpers stay off the network and mouse cores")
+
+		// Hybrid, E-cores listed first: game, network and mouse on P-cores.
+		cores = cpu_cores_from_logical(topology({{0, 1, false}, {0, 1, false}, {0, 1, false}, {0, 1, false}, {1, 2, false}, {1, 2, false}, {1, 2, false}, {1, 2, false}})[:], context.temp_allocator)
+		plan, ok = cpu_plan_cores(cores[:])
+		testing.expect(t, ok && plan.game == 4 && plan.network == 5 && plan.input == 6, "hybrid: P-cores for all three")
+		testing.expect(t, cores[plan.network].efficiency == 1 && cores[plan.input].efficiency == 1)
+
+		// 4 cores: each gets one, but only core 0 would be left for helpers,
+		// so helpers may also use the network and mouse cores.
+		cores = cpu_cores_from_logical(topology({{0, 2, false}, {0, 2, false}, {0, 2, false}, {0, 2, false}})[:], context.temp_allocator)
+		plan, ok = cpu_plan_cores(cores[:])
+		testing.expect(t, ok && plan.game == 1 && plan.network == 2 && plan.input == 3 && !plan.helpers_exclusive, "4 cores: dedicated but shared with helpers")
+
+		// 3 cores: network and mouse share the one core left after the game's.
+		cores = cpu_cores_from_logical(topology({{0, 2, false}, {0, 2, false}, {0, 2, false}})[:], context.temp_allocator)
+		plan, ok = cpu_plan_cores(cores[:])
+		testing.expect(t, ok && plan.game == 1 && plan.network == 2 && plan.input == 2, "3 cores: network and mouse share")
+
+		// 2 cores: only core 0 is left; both run on the helper cores.
+		cores = cpu_cores_from_logical(topology({{0, 2, false}, {0, 2, false}})[:], context.temp_allocator)
+		plan, ok = cpu_plan_cores(cores[:])
+		testing.expect(t, ok && plan.game == 1 && plan.network == -1 && plan.input == -1 && !plan.helpers_exclusive, "2 cores: nothing dedicated")
+
+		// Real-time cores are never handed out.
+		cores = cpu_cores_from_logical(topology({{0, 2, false}, {0, 2, false}, {0, 2, true}, {0, 2, false}, {0, 2, false}})[:], context.temp_allocator)
+		plan, ok = cpu_plan_cores(cores[:])
+		testing.expect(t, ok && plan.game == 1 && plan.network == 3 && plan.input == 4, "real-time core skipped")
+	}
 }
