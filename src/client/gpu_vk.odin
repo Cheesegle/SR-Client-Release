@@ -268,6 +268,7 @@ Vk_Frame :: struct {
 	acquired:  vk.Semaphore, // signalled by vkAcquireNextImageKHR for this frame
 	serial:    u64,          // which recording this slot holds
 	submitted: bool,
+	presenting: bool,        // handed to the present thread, which submits it
 	timed:     bool,
 	marked:    bit_set[Gpu_Pass], // gpu_pass_mark timestamps written (queries 2 + pass)
 }
@@ -426,6 +427,229 @@ GPU_DEBUG_LOG_PATH :: "logs/gpu-debug.log"
 g_vk_device_lost: bool
 
 vk_gpu_device_lost :: proc() -> bool { return sync.atomic_load(&g_vk_device_lost) }
+
+// Every vkQueueSubmit, vkQueuePresentKHR and vkDeviceWaitIdle holds this: the
+// queue is used by the game thread and the present thread.
+@(private = "file")
+g_vk_queue_lock: sync.Mutex
+
+// ---------------------------------------------------------------------------
+// Present thread.
+//
+// A window frame ends on the game thread with its command buffer closed; the
+// rest of the frame's Vulkan work runs here: vkAcquireNextImageKHR (which
+// blocks when every swapchain image is still queued), recording the blit to
+// the acquired image, vkQueueSubmit, vkQueuePresentKHR and, with vsync, the
+// vkWaitForPresentKHR pacing wait. The game thread meanwhile samples input and
+// simulates the next frame. At most one frame waits for the thread while it
+// works on another, so the game thread never runs further ahead than before
+// (the frame fences still bound it at GPU_FRAMES_IN_FLIGHT).
+//
+// Ownership: while the thread runs, only it touches the swapchain. The game
+// thread drains it (vk_present_thread_drain) before rebuilding the swapchain,
+// waiting for the device, or reusing a frame slot it handed over.
+// SR_VK_PRESENT_THREAD=0 presents on the game thread instead.
+@(private = "file")
+Vk_Present_Job :: struct {
+	slot:          int,
+	serial:        u64,              // the frame's recording serial
+	cmd:           vk.CommandBuffer, // the frame, ended; window target already in TRANSFER_SRC
+	fence:         vk.Fence,
+	acquired:      vk.Semaphore,
+	queries:       vk.QueryPool,
+	timed:         bool,             // write the frame's end timestamp after the blit
+	source:        vk.Image,
+	width, height: i32,
+	present_id:    u64,              // VK_KHR_present_id value; 0 without present wait
+	first_id:      u64,              // first id on the current swapchain
+	pace:          bool,             // vsync with present wait
+}
+
+@(private = "file")
+Vk_Present_Thread :: struct {
+	thread:  ^thread.Thread,
+	running: bool, // owner: game thread
+	lock:    sync.Mutex,
+	cond:    sync.Cond, // every change below is broadcast
+	job:     Vk_Present_Job,
+	has_job: bool,
+	busy:    bool,
+	stop:    bool,
+	paced:   u64, // the newest present_id handled, pacing wait included
+	submitted: u64, // the newest frame serial submitted to the queue
+	// Present thread only.
+	pool:           vk.CommandPool,
+	blit:           [GPU_FRAMES_IN_FLIGHT]vk.CommandBuffer,
+	last_presented: u64,
+}
+
+@(private = "file")
+g_vk_present_thread: Vk_Present_Thread
+
+@(private = "file")
+vk_present_thread_start :: proc() {
+	pt := &g_vk_present_thread
+	if pt.running || os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "0" { return }
+	pool_info := vk.CommandPoolCreateInfo{sType = .COMMAND_POOL_CREATE_INFO, flags = {.RESET_COMMAND_BUFFER}, queueFamilyIndex = g_vk.queue_family}
+	if !vk_ok(vk.CreateCommandPool(g_vk.device, &pool_info, nil, &pt.pool), "vkCreateCommandPool (present thread)") { return }
+	alloc := vk.CommandBufferAllocateInfo{sType = .COMMAND_BUFFER_ALLOCATE_INFO, commandPool = pt.pool, level = .PRIMARY, commandBufferCount = GPU_FRAMES_IN_FLIGHT}
+	if !vk_ok(vk.AllocateCommandBuffers(g_vk.device, &alloc, &pt.blit[0]), "vkAllocateCommandBuffers (present thread)") {
+		vk.DestroyCommandPool(g_vk.device, pt.pool, nil)
+		pt.pool = 0
+		return
+	}
+	pt.thread = thread.create_and_start(vk_present_thread_main, priority = .High)
+	if pt.thread == nil {
+		vk.DestroyCommandPool(g_vk.device, pt.pool, nil)
+		pt.pool = 0
+		fmt.eprintln("[Vulkan] Present thread unavailable; presenting on the game thread")
+		return
+	}
+	pt.running = true
+}
+
+@(private = "file")
+vk_present_thread_stop :: proc() {
+	pt := &g_vk_present_thread
+	if !pt.running { return }
+	sync.mutex_lock(&pt.lock)
+	pt.stop = true
+	sync.cond_broadcast(&pt.cond)
+	sync.mutex_unlock(&pt.lock)
+	thread.join(pt.thread)
+	thread.destroy(pt.thread)
+	vk.DestroyCommandPool(g_vk.device, pt.pool, nil)
+	pt^ = {}
+}
+
+// Game thread: waits until the thread has nothing queued and is idle.
+@(private = "file")
+vk_present_thread_drain :: proc() {
+	pt := &g_vk_present_thread
+	if !pt.running { return }
+	sync.mutex_lock(&pt.lock)
+	for pt.has_job || pt.busy { sync.cond_wait(&pt.cond, &pt.lock) }
+	sync.mutex_unlock(&pt.lock)
+}
+
+// Game thread: waits until the frame with this serial is on the queue (its
+// fence will signal), not for later frames or the presents.
+@(private = "file")
+vk_present_thread_wait_submitted :: proc(serial: u64) {
+	pt := &g_vk_present_thread
+	if !pt.running { return }
+	sync.mutex_lock(&pt.lock)
+	for pt.submitted < serial && (pt.has_job || pt.busy) { sync.cond_wait(&pt.cond, &pt.lock) }
+	sync.mutex_unlock(&pt.lock)
+}
+
+// Game thread: queues a frame. Waits only while the previous one has not
+// been picked up yet.
+@(private = "file")
+vk_present_thread_hand_off :: proc(job: Vk_Present_Job) {
+	pt := &g_vk_present_thread
+	sync.mutex_lock(&pt.lock)
+	for pt.has_job { sync.cond_wait(&pt.cond, &pt.lock) }
+	pt.job, pt.has_job = job, true
+	sync.cond_broadcast(&pt.cond)
+	sync.mutex_unlock(&pt.lock)
+}
+
+@(private = "file")
+vk_present_thread_main :: proc() {
+	cpu_pin_current_thread(.Helper) // off the game, network and mouse cores
+	cpu_raise_current_thread_priority()
+	pt := &g_vk_present_thread
+	sync.mutex_lock(&pt.lock)
+	for {
+		for !pt.has_job && !pt.stop { sync.cond_wait(&pt.cond, &pt.lock) }
+		if !pt.has_job { break } // stopping, nothing left
+		job := pt.job
+		pt.has_job, pt.busy = false, true
+		sync.cond_broadcast(&pt.cond)
+		sync.mutex_unlock(&pt.lock)
+		vk_present_thread_run(pt, &job)
+		sync.mutex_lock(&pt.lock)
+		pt.busy = false
+		pt.paced = max(pt.paced, job.present_id)
+		sync.cond_broadcast(&pt.cond)
+	}
+	sync.mutex_unlock(&pt.lock)
+}
+
+// Acquires, blits, submits (always: the frame's fence must signal even when
+// nothing can be shown), presents, then paces.
+@(private = "file")
+vk_present_thread_run :: proc(pt: ^Vk_Present_Thread, job: ^Vk_Present_Job) {
+	sc := &g_vk.present
+	index: u32
+	acquired := vk.AcquireNextImageKHR(g_vk.device, sc.swapchain, max(u64), job.acquired, 0, &index)
+	presentable := false
+	#partial switch acquired {
+	case .SUCCESS: presentable = true
+	case .SUBOPTIMAL_KHR: presentable = true; sync.atomic_store(&sc.dirty, true) // still usable for this frame
+	case .ERROR_OUT_OF_DATE_KHR: sync.atomic_store(&sc.dirty, true)
+	case: vk_ok(acquired, "vkAcquireNextImageKHR")
+	}
+	cmd := pt.blit[job.slot] // its last use finished: the game thread waited for this slot's fence
+	vk.ResetCommandBuffer(cmd, {})
+	begin := vk.CommandBufferBeginInfo{sType = .COMMAND_BUFFER_BEGIN_INFO, flags = {.ONE_TIME_SUBMIT}}
+	vk.BeginCommandBuffer(cmd, &begin)
+	if presentable { vk_record_present_blit(cmd, job.source, job.width, job.height, sc.images[index], sc.extent) }
+	if job.timed { vk.CmdWriteTimestamp2(cmd, {.BOTTOM_OF_PIPE}, job.queries, 1) }
+	vk.EndCommandBuffer(cmd)
+
+	cmds := [2]vk.CommandBuffer{job.cmd, cmd}
+	wait := job.acquired
+	rendered: vk.Semaphore
+	if presentable { rendered = sc.rendered[index] }
+	wait_stage := vk.PipelineStageFlags{.TRANSFER}
+	submit := vk.SubmitInfo{
+		sType = .SUBMIT_INFO, commandBufferCount = 2, pCommandBuffers = &cmds[0],
+		waitSemaphoreCount = presentable ? 1 : 0, pWaitSemaphores = &wait, pWaitDstStageMask = &wait_stage,
+		signalSemaphoreCount = presentable ? 1 : 0, pSignalSemaphores = &rendered,
+	}
+	presented := false
+	sync.mutex_lock(&g_vk_queue_lock)
+	vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, job.fence), "vkQueueSubmit (present)")
+	if presentable {
+		present := vk.PresentInfoKHR{
+			sType = .PRESENT_INFO_KHR, waitSemaphoreCount = 1, pWaitSemaphores = &rendered,
+			swapchainCount = 1, pSwapchains = &sc.swapchain, pImageIndices = &index,
+		}
+		present_id: vk.PresentIdKHR
+		id := job.present_id
+		if id != 0 {
+			present_id = {sType = .PRESENT_ID_KHR, swapchainCount = 1, pPresentIds = &id}
+			present.pNext = &present_id
+		}
+		result := vk.QueuePresentKHR(g_vk.queue, &present)
+		#partial switch result {
+		case .SUCCESS: presented = true
+		case .SUBOPTIMAL_KHR: presented = true; sync.atomic_store(&sc.dirty, true)
+		case .ERROR_OUT_OF_DATE_KHR: sync.atomic_store(&sc.dirty, true)
+		case: vk_ok(result, "vkQueuePresentKHR")
+		}
+	}
+	sync.mutex_unlock(&g_vk_queue_lock)
+	sync.mutex_lock(&pt.lock)
+	pt.submitted = max(pt.submitted, job.serial)
+	sync.cond_broadcast(&pt.cond)
+	sync.mutex_unlock(&pt.lock)
+	if !presented || job.present_id == 0 { return }
+	// vsync: wait until the frame before this one is on screen, so the game
+	// starts its next frame (and reads input) as late as the display allows
+	// while one frame stays queued. A timeout (minimised, occluded) lets it go.
+	if job.pace && pt.last_presented != 0 && pt.last_presented >= job.first_id {
+		result := vk.WaitForPresentKHR(g_vk.device, sc.swapchain, pt.last_presented, 100 * 1_000_000)
+		#partial switch result {
+		case .SUCCESS, .TIMEOUT, .SUBOPTIMAL_KHR:
+		case .ERROR_OUT_OF_DATE_KHR: sync.atomic_store(&sc.dirty, true)
+		case: vk_ok(result, "vkWaitForPresentKHR")
+		}
+	}
+	pt.last_presented = job.present_id
+}
 
 @(private = "file")
 vk_ok :: proc(result: vk.Result, what: string, loc := #caller_location) -> bool {
@@ -693,6 +917,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		g_vk.default_target = g_vk.present.target
 		// Built by the first frame, after the caller's gpu_set_vsync.
 		g_vk.present.dirty = true
+		vk_present_thread_start()
 	}
 	fmt.printfln("[Vulkan] Using %s (%s), Vulkan %s%s", g_vk.device_name, g_vk.vendor_name, g_vk.version_text,
 		validation ? ", validation on" : "")
@@ -702,6 +927,8 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 gpu_vk_fini :: proc() {
 	if !g_vk.ready { return }
 	if g_vk.recording { vk_submit() }
+	vk_present_thread_stop() // finishes its frame first
+	for &frame in g_vk.frames { frame.presenting = false }
 	vk.DeviceWaitIdle(g_vk.device)
 	device := g_vk.device
 	vk_gpu_texture_destroy(&g_vk.placeholder_array)
@@ -952,7 +1179,10 @@ vk_release_retired :: proc(all := false) {
 @(private = "file")
 vk_idle :: proc() {
 	if g_vk.recording { vk_submit() }
+	vk_present_thread_drain()
+	sync.mutex_lock(&g_vk_queue_lock)
 	vk.DeviceWaitIdle(g_vk.device)
+	sync.mutex_unlock(&g_vk_queue_lock)
 	g_vk_stats.idle_waits += 1
 	g_vk.completed_serial = g_vk.serial
 	vk_release_retired()
@@ -1004,7 +1234,9 @@ vk_upload_end :: proc(up: ^Vk_Upload) {
 		vk.EndCommandBuffer(up.cmd)
 		submit := vk.SubmitInfo{sType = .SUBMIT_INFO, commandBufferCount = 1, pCommandBuffers = &up.cmd}
 		vk.ResetFences(g_vk.device, 1, &g_vk.upload_fence)
+		sync.mutex_lock(&g_vk_queue_lock)
 		vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, g_vk.upload_fence), "vkQueueSubmit (upload)")
+		sync.mutex_unlock(&g_vk_queue_lock)
 		vk_ok(vk.WaitForFences(g_vk.device, 1, &g_vk.upload_fence, true, max(u64)), "vkWaitForFences (upload)")
 		vk_buffer_free(&up.staging)
 		g_vk_stats.sync_uploads += 1
@@ -1560,6 +1792,10 @@ vk_gpu_render_target_destroy :: proc(target: ^Gpu_Render_Target) {
 vk_collect :: proc(slot: int) {
 	frame := &g_vk.frames[slot]
 	if !frame.submitted { return }
+	if frame.presenting {
+		vk_present_thread_wait_submitted(frame.serial) // submitted by the present thread
+		frame.presenting = false
+	}
 	vk_ok(vk.WaitForFences(g_vk.device, 1, &frame.fence, true, max(u64)), "vkWaitForFences")
 	frame.submitted = false
 	g_vk.completed_serial = max(g_vk.completed_serial, frame.serial)
@@ -1637,7 +1873,9 @@ vk_submit :: proc(wait: vk.Semaphore = 0, signal: vk.Semaphore = 0) {
 		waitSemaphoreCount = wait != 0 ? 1 : 0, pWaitSemaphores = &wait, pWaitDstStageMask = &wait_stage,
 		signalSemaphoreCount = signal != 0 ? 1 : 0, pSignalSemaphores = &signal,
 	}
+	sync.mutex_lock(&g_vk_queue_lock)
 	vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, frame.fence), "vkQueueSubmit")
+	sync.mutex_unlock(&g_vk_queue_lock)
 	frame.submitted = true
 	g_vk.recording = false
 	g_vk.in_pass = false
@@ -1685,7 +1923,10 @@ vk_gpu_frames_fini :: proc() {
 
 vk_gpu_wait_idle :: proc() {
 	vk_gpu_frames_finish()
+	vk_present_thread_drain()
+	sync.mutex_lock(&g_vk_queue_lock)
 	vk.DeviceWaitIdle(g_vk.device)
+	sync.mutex_unlock(&g_vk_queue_lock)
 }
 
 // ---------------------------------------------------------------------------
@@ -2270,7 +2511,7 @@ vk_gpu_window_target :: proc() -> Gpu_Render_Target {
 vk_gpu_set_vsync :: proc(on: bool) {
 	if g_vk.present.vsync == on { return }
 	g_vk.present.vsync = on
-	g_vk.present.dirty = true
+	sync.atomic_store(&g_vk.present.dirty, true)
 }
 
 @(private = "file")
@@ -2363,7 +2604,7 @@ vk_swapchain_build :: proc() -> bool {
 		vk.CreateSemaphore(g_vk.device, &semaphore_info, nil, &semaphore)
 		append(&sc.rendered, semaphore)
 	}
-	sc.dirty = false
+	sync.atomic_store(&sc.dirty, false) // the present thread is drained (vk_idle)
 	sc.first_id = sc.present_id + 1
 	fmt.printfln("[Vulkan] Swapchain %dx%d, %d images, %v, %v%s", extent.width, extent.height, count, surface_format.format, mode, sc.present_wait ? ", present wait" : "")
 	return true
@@ -2402,14 +2643,28 @@ vk_present_wait_supported :: proc(physical: vk.PhysicalDevice) -> bool {
 vk_present_wait_pace :: proc() {
 	sc := &g_vk.present
 	sc.last_wait_ms = 0
-	if !sc.present_wait || !sc.vsync || sc.swapchain == 0 || sc.dirty || sc.present_id < 2 { return }
+	if !sc.present_wait || !sc.vsync || sc.swapchain == 0 || sync.atomic_load(&sc.dirty) || sc.present_id < 2 { return }
+	if pt := &g_vk_present_thread; pt.running {
+		// The present thread waits for the display after each present; this
+		// waits for it to have done so for the newest frame handed over.
+		start := time.tick_now()
+		sync.mutex_lock(&pt.lock)
+		for pt.paced < sc.present_id {
+			if !sync.cond_wait_with_timeout(&pt.cond, &pt.lock, 200 * time.Millisecond) { break }
+		}
+		sync.mutex_unlock(&pt.lock)
+		sc.last_wait_ms = time.duration_milliseconds(time.tick_since(start))
+		g_vk_stats.present_waits += 1
+		g_vk_stats.present_wait_ms += sc.last_wait_ms
+		return
+	}
 	target := sc.present_id - 1
 	if target < sc.first_id { return } // presented on an earlier swapchain
 	start := time.tick_now()
 	result := vk.WaitForPresentKHR(g_vk.device, sc.swapchain, target, 100 * 1_000_000)
 	#partial switch result {
 	case .SUCCESS, .TIMEOUT, .SUBOPTIMAL_KHR:
-	case .ERROR_OUT_OF_DATE_KHR: sc.dirty = true
+	case .ERROR_OUT_OF_DATE_KHR: sync.atomic_store(&sc.dirty, true)
 	case: vk_ok(result, "vkWaitForPresentKHR")
 	}
 	sc.last_wait_ms = time.duration_milliseconds(time.tick_since(start))
@@ -2426,7 +2681,7 @@ vk_window_sync :: proc() {
 	if width <= 0 || height <= 0 { return } // minimised: nothing is presented
 	t := vk_table_get(&g_vk.targets, u32(sc.target))
 	resized := t != nil && (t.width != u32(width) || t.height != u32(height))
-	if !resized && !sc.dirty && sc.swapchain != 0 && sc.extent.width == u32(width) && sc.extent.height == u32(height) { return }
+	if !resized && !sync.atomic_load(&sc.dirty) && sc.swapchain != 0 && sc.extent.width == u32(width) && sc.extent.height == u32(height) { return }
 	vk_idle()
 	if resized {
 		vk_image_free(&t.color)
@@ -2445,53 +2700,46 @@ vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 	gpu_flush_deferred()
 	vk_gpu_pass_mark(.Present)
 	sc := &g_vk.present
-	if sc.window == nil || sc.swapchain == 0 || sc.dirty { return }
+	if sc.window == nil || sc.swapchain == 0 || sync.atomic_load(&sc.dirty) { return }
 	t := vk_table_get(&g_vk.targets, u32(sc.target))
 	if t == nil { return }
 	cmd := vk_cmd()
 	frame := &g_vk.frames[g_vk.slot]
+	if g_vk_present_thread.running {
+		// Close the frame here; the present thread acquires, blits, submits
+		// and presents it (and writes its end timestamp after the blit).
+		vk_pass_end()
+		vk_flush_pending_clear()
+		vk_transition(cmd, &t.color, 0, 1, .TRANSFER_SRC_OPTIMAL)
+		vk.EndCommandBuffer(frame.cmd)
+		job := Vk_Present_Job{
+			slot = g_vk.slot, serial = frame.serial, cmd = frame.cmd, fence = frame.fence, acquired = frame.acquired,
+			queries = frame.queries, timed = frame.timed,
+			source = t.color.image, width = i32(t.width), height = i32(t.height),
+			first_id = sc.first_id, pace = sc.vsync && sc.present_wait,
+		}
+		if sc.present_wait {
+			sc.present_id += 1
+			job.present_id = sc.present_id
+		}
+		frame.submitted, frame.presenting = true, true
+		g_vk.recording, g_vk.in_pass = false, false
+		g_vk.slot = (g_vk.slot + 1) % GPU_FRAMES_IN_FLIGHT
+		vk_present_thread_hand_off(job)
+		return
+	}
 	index: u32
 	acquired := vk.AcquireNextImageKHR(g_vk.device, sc.swapchain, max(u64), frame.acquired, 0, &index)
 	#partial switch acquired {
 	case .SUCCESS:
-	case .SUBOPTIMAL_KHR: sc.dirty = true // still usable for this frame
-	case .ERROR_OUT_OF_DATE_KHR: sc.dirty = true; return
+	case .SUBOPTIMAL_KHR: sync.atomic_store(&sc.dirty, true) // still usable for this frame
+	case .ERROR_OUT_OF_DATE_KHR: sync.atomic_store(&sc.dirty, true); return
 	case: vk_ok(acquired, "vkAcquireNextImageKHR"); return
 	}
 	vk_pass_end()
 	vk_flush_pending_clear()
 	vk_transition(cmd, &t.color, 0, 1, .TRANSFER_SRC_OPTIMAL)
-	image := sc.images[index]
-	range := vk.ImageSubresourceRange{aspectMask = {.COLOR}, levelCount = 1, layerCount = 1}
-	// Chained to the acquire semaphore's wait (transfer stage).
-	to_transfer := vk.ImageMemoryBarrier2{
-		sType = .IMAGE_MEMORY_BARRIER_2,
-		srcStageMask = {.ALL_TRANSFER}, dstStageMask = {.ALL_TRANSFER}, dstAccessMask = {.TRANSFER_WRITE},
-		oldLayout = .UNDEFINED, newLayout = .TRANSFER_DST_OPTIMAL,
-		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED, dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-		image = image, subresourceRange = range,
-	}
-	dep := vk.DependencyInfo{sType = .DEPENDENCY_INFO, imageMemoryBarrierCount = 1, pImageMemoryBarriers = &to_transfer}
-	vk.CmdPipelineBarrier2(cmd, &dep)
-	w, h := i32(t.width), i32(t.height)
-	ew, eh := i32(sc.extent.width), i32(sc.extent.height)
-	blit := vk.ImageBlit{
-		srcSubresource = {aspectMask = {.COLOR}, layerCount = 1},
-		srcOffsets = {{0, 0, 0}, {w, h, 1}},
-		dstSubresource = {aspectMask = {.COLOR}, layerCount = 1},
-		dstOffsets = {{0, eh, 0}, {ew, 0, 1}}, // row 0 is GL's bottom row
-	}
-	filter: vk.Filter = w == ew && h == eh ? .NEAREST : .LINEAR
-	vk.CmdBlitImage(cmd, t.color.image, .TRANSFER_SRC_OPTIMAL, image, .TRANSFER_DST_OPTIMAL, 1, &blit, filter)
-	to_present := vk.ImageMemoryBarrier2{
-		sType = .IMAGE_MEMORY_BARRIER_2,
-		srcStageMask = {.ALL_TRANSFER}, srcAccessMask = {.TRANSFER_WRITE},
-		oldLayout = .TRANSFER_DST_OPTIMAL, newLayout = .PRESENT_SRC_KHR,
-		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED, dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-		image = image, subresourceRange = range,
-	}
-	dep.pImageMemoryBarriers = &to_present
-	vk.CmdPipelineBarrier2(cmd, &dep)
+	vk_record_present_blit(cmd, t.color.image, i32(t.width), i32(t.height), sc.images[index], sc.extent)
 	rendered := sc.rendered[index]
 	vk_submit(frame.acquired, rendered)
 	present := vk.PresentInfoKHR{
@@ -2506,12 +2754,49 @@ vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 		present_id = {sType = .PRESENT_ID_KHR, swapchainCount = 1, pPresentIds = &id}
 		present.pNext = &present_id
 	}
+	sync.mutex_lock(&g_vk_queue_lock)
 	presented := vk.QueuePresentKHR(g_vk.queue, &present)
+	sync.mutex_unlock(&g_vk_queue_lock)
 	#partial switch presented {
 	case .SUCCESS:
-	case .SUBOPTIMAL_KHR, .ERROR_OUT_OF_DATE_KHR: sc.dirty = true
+	case .SUBOPTIMAL_KHR, .ERROR_OUT_OF_DATE_KHR: sync.atomic_store(&sc.dirty, true)
 	case: vk_ok(presented, "vkQueuePresentKHR")
 	}
+}
+
+// Copies the window target (in TRANSFER_SRC), flipped to top-down, to a
+// swapchain image and leaves that image ready to present. The copy waits for
+// the acquire semaphore at the transfer stage.
+@(private = "file")
+vk_record_present_blit :: proc(cmd: vk.CommandBuffer, source: vk.Image, w, h: i32, image: vk.Image, extent: vk.Extent2D) {
+	range := vk.ImageSubresourceRange{aspectMask = {.COLOR}, levelCount = 1, layerCount = 1}
+	to_transfer := vk.ImageMemoryBarrier2{
+		sType = .IMAGE_MEMORY_BARRIER_2,
+		srcStageMask = {.ALL_TRANSFER}, dstStageMask = {.ALL_TRANSFER}, dstAccessMask = {.TRANSFER_WRITE},
+		oldLayout = .UNDEFINED, newLayout = .TRANSFER_DST_OPTIMAL,
+		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED, dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+		image = image, subresourceRange = range,
+	}
+	dep := vk.DependencyInfo{sType = .DEPENDENCY_INFO, imageMemoryBarrierCount = 1, pImageMemoryBarriers = &to_transfer}
+	vk.CmdPipelineBarrier2(cmd, &dep)
+	ew, eh := i32(extent.width), i32(extent.height)
+	blit := vk.ImageBlit{
+		srcSubresource = {aspectMask = {.COLOR}, layerCount = 1},
+		srcOffsets = {{0, 0, 0}, {w, h, 1}},
+		dstSubresource = {aspectMask = {.COLOR}, layerCount = 1},
+		dstOffsets = {{0, eh, 0}, {ew, 0, 1}}, // row 0 is GL's bottom row
+	}
+	filter: vk.Filter = w == ew && h == eh ? .NEAREST : .LINEAR
+	vk.CmdBlitImage(cmd, source, .TRANSFER_SRC_OPTIMAL, image, .TRANSFER_DST_OPTIMAL, 1, &blit, filter)
+	to_present := vk.ImageMemoryBarrier2{
+		sType = .IMAGE_MEMORY_BARRIER_2,
+		srcStageMask = {.ALL_TRANSFER}, srcAccessMask = {.TRANSFER_WRITE},
+		oldLayout = .TRANSFER_DST_OPTIMAL, newLayout = .PRESENT_SRC_KHR,
+		srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED, dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
+		image = image, subresourceRange = range,
+	}
+	dep.pImageMemoryBarriers = &to_present
+	vk.CmdPipelineBarrier2(cmd, &dep)
 }
 
 // ---------------------------------------------------------------------------
