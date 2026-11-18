@@ -30,6 +30,7 @@ import "core:os"
 import "core:strconv"
 import "core:strings"
 import "core:sync"
+import "core:thread"
 import "core:time"
 import glfw "vendor:glfw"
 import vk "vendor:vulkan"
@@ -1491,14 +1492,16 @@ vk_gpu_render_target_create_msaa :: proc(width, height, samples: i32) -> Gpu_Ren
 		// Compile the world pipelines for this sample count now, not at the
 		// first draw that needs each.
 		g_vk.msaa_samples = i32(samples)
+		keys := make([dynamic]Vk_Pipeline_Key, context.temp_allocator)
 		for live, i in g_vk.programs.live {
 			if !live { continue }
 			p := &g_vk.programs.items[i]
 			if p.shadow || p.layout == .UI { continue }
 			handle := Gpu_Program(i + 1)
-			vk_pipeline_get({program = handle, samples = u8(samples)})
-			if p.layout != .Debug_Line { vk_pipeline_get({program = handle, blend = true, samples = u8(samples)}) }
+			append(&keys, Vk_Pipeline_Key{program = handle, samples = u8(samples)})
+			if p.layout != .Debug_Line { append(&keys, Vk_Pipeline_Key{program = handle, blend = true, samples = u8(samples)}) }
 		}
+		vk_pipelines_precompile(keys[:])
 	}
 	return Gpu_Render_Target(vk_table_add(&g_vk.targets, target))
 }
@@ -1751,16 +1754,17 @@ vk_program_add :: proc(program: Vk_Program) -> Gpu_Program {
 		// view, built on use).
 		append(&keys, Vk_Pipeline_Key{program = handle}, Vk_Pipeline_Key{program = handle, blend = true})
 	}
-	for &key in keys {
-		key.samples = 1
-		vk_pipeline_get(key)
+	count := len(keys)
+	for i in 0 ..< count {
+		keys[i].samples = 1
 		// World programs also draw into the MSAA target, when there is one.
 		if g_vk.msaa_samples > 1 && !program.shadow && program.layout != .UI {
-			msaa := key
+			msaa := keys[i]
 			msaa.samples = u8(g_vk.msaa_samples)
-			vk_pipeline_get(msaa)
+			append(&keys, msaa)
 		}
 	}
+	vk_pipelines_precompile(keys[:])
 	return handle
 }
 
@@ -1811,6 +1815,56 @@ vk_gpu_draw_state_reset :: proc() {
 @(private = "file")
 vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 	if pipeline, ok := g_vk.pipelines[key]; ok { return pipeline }
+	pipeline := vk_pipeline_build(key)
+	if pipeline == 0 { return 0 }
+	g_vk.pipelines[key] = pipeline
+	if g_vk.recording && g_vk.in_pass { g_vk_stats.draw_time_pipelines += 1 }
+	return pipeline
+}
+
+// Compiles the pipelines that do not exist yet, each on its own worker thread
+// (off the game core), and waits for all of them. Driver compilation is the
+// slow part and vkCreateGraphicsPipelines may run concurrently (the pipeline
+// cache is internally synchronized); only the map insert stays on this thread.
+@(private = "file")
+vk_pipelines_precompile :: proc(keys: []Vk_Pipeline_Key) {
+	Job :: struct { key: Vk_Pipeline_Key, pipeline: vk.Pipeline }
+	jobs := make([dynamic]Job, context.temp_allocator)
+	for key in keys {
+		if key in g_vk.pipelines { continue }
+		duplicate := false
+		for job in jobs { if job.key == key { duplicate = true; break } }
+		if !duplicate { append(&jobs, Job{key = key}) }
+	}
+	if len(jobs) == 0 { return }
+	if len(jobs) == 1 {
+		vk_pipeline_get(jobs[0].key)
+		return
+	}
+	workers := make([]^thread.Thread, len(jobs), context.temp_allocator)
+	for &job, i in jobs {
+		workers[i] = thread.create_and_start_with_poly_data(&job, proc(job: ^Job) {
+			cpu_pin_current_thread(.Helper)
+			job.pipeline = vk_pipeline_build(job.key)
+		}, name = "vulkan pipeline")
+	}
+	for worker, i in workers {
+		if worker == nil {
+			jobs[i].pipeline = vk_pipeline_build(jobs[i].key) // thread creation failed
+			continue
+		}
+		thread.join(worker)
+		thread.destroy(worker)
+	}
+	for job in jobs {
+		if job.pipeline != 0 { g_vk.pipelines[job.key] = job.pipeline }
+	}
+}
+
+// Creates one pipeline. Reads only state that is fixed while it runs, so
+// several may run at once (vk_pipelines_precompile).
+@(private = "file")
+vk_pipeline_build :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 	p := vk_table_get(&g_vk.programs, u32(key.program))
 	if p == nil { return 0 }
 	stages := [2]vk.PipelineShaderStageCreateInfo{
@@ -1884,8 +1938,6 @@ vk_pipeline_get :: proc(key: Vk_Pipeline_Key) -> vk.Pipeline {
 	}
 	pipeline: vk.Pipeline
 	if !vk_ok(vk.CreateGraphicsPipelines(g_vk.device, g_vk.pipeline_cache, 1, &info, nil, &pipeline), "vkCreateGraphicsPipelines") { return 0 }
-	g_vk.pipelines[key] = pipeline
-	if g_vk.recording && g_vk.in_pass { g_vk_stats.draw_time_pipelines += 1 }
 	return pipeline
 }
 
