@@ -82,8 +82,10 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 		rounded_ms := math.round(duration_ms)
 		state.input_duration_remainder_ms = duration_ms - rounded_ms
 		command.delta = f32(rounded_ms) / 1000
-		command.x_dir = math.round(look.x * 1000) / 1000
-		command.y_dir = math.round(shared.normalize_angle(look.y) * 1000) / 1000
+		// As the browser: pitch.round(3), and yaw as its unbounded mouse
+		// rotation % 2PI (JavaScript remainder, -2PI..2PI), then .round(3).
+		command.x_dir = f32(kproto.krunker_js_round_to(f64(look.x), 3))
+		command.y_dir = f32(kproto.krunker_js_round_to(kproto.krunker_js_mod(f64(look.y), kproto.KRUNKER_PI2), 3))
 		command.swap = state.input_swap
 		state.input_swap = 0
 		if client.krunker_world.move_lock { command.move_dir = -1; command.jump = false }

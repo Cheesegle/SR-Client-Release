@@ -1,5 +1,6 @@
 package krunker
 
+import "core:math"
 import "core:mem"
 
 // Minimal MessagePack framing for Krunker's game socket.
@@ -120,6 +121,11 @@ krunker_msgpack_write_value :: proc(out: ^[dynamic]byte, value: Krunker_Msgpack_
 			krunker_msgpack_write_u64(out, u64(typed))
 		}
 	case f64:
+		// @msgpack/msgpack (Krunker's encoder) writes every safe integer as an
+		// integer, -0 included, and only other numbers as float64.
+		if typed == math.trunc(typed) && abs(typed) <= 9007199254740991 {
+			return krunker_msgpack_write_value(out, i64(typed))
+		}
 		append(out, 0xcb)
 		krunker_msgpack_write_u64(out, transmute(u64)typed)
 	case string:

@@ -108,14 +108,80 @@ test_krunker_live_input :: proc() -> bool {
 		values, counter, err := krunker.krunker_msgpack_decode_packet(packet)
 		if len(err) > 0 || counter != 39 || len(values) != 1 { delete(packet); return false }
 		root := values[0].([]krunker.Krunker_Msgpack_Value)
-		durations := root[3].([]krunker.Krunker_Msgpack_Value)
+		// The browser sends same-width durations as one digit string.
+		durations, is_text := root[3].(string)
 		angles := root[5].([]krunker.Krunker_Msgpack_Value)
 		controls := root[6].([]krunker.Krunker_Msgpack_Map_Entry)
-		valid := len(root) == 7 && root[0].(string) == "q" && root[2].(i64) == 21 && durations[0].(i64) == 33 && angles[0].(i64) == 250 && angles[1].(i64) == -4712 && len(controls) == 11
+		valid := len(root) == 7 && root[0].(string) == "q" && root[2].(i64) == 21 && is_text && durations == "33" && root[4].(i64) == 2 && angles[0].(i64) == 250 && angles[1].(i64) == -4712 && len(controls) == 11
 		valid = valid && controls[0].value.(i64) == (locked ? -1 : 7) && controls[3].value.(i64) == (locked ? 0 : 1) && controls[7].value.(i64) == 2
 		delete(packet)
 		if !valid { fmt.eprintln("Live q batch shape/angles/controls do not match browser compressor"); return false }
 	}
+	if !test_krunker_input_compressor() { return false }
 	fmt.println("Krunker live input batch and movement-lock tests OK")
+	return true
+}
+
+// The browser's input compressor, packet by packet (its code, decoded from
+// the live client, is described at krunker_input_encode_batch).
+test_krunker_input_compressor :: proc() -> bool {
+	decode :: proc(packet: []byte) -> []krunker.Krunker_Msgpack_Value {
+		values, _, err := krunker.krunker_msgpack_decode_packet(packet)
+		if len(err) > 0 || len(values) != 1 { return nil }
+		return values[0].([]krunker.Krunker_Msgpack_Value)
+	}
+	fail :: proc(text: string) -> bool { fmt.eprintln("Input compressor:", text); return false }
+	wire, next: krunker.Krunker_Input_Wire
+	held := shared.Input{seq = 1, delta = 0.003, move_dir = 0, x_dir = 0.1, y_dir = 1.2, shoot = true}
+	batch := [3]shared.Input{held, held, held}
+	batch[1].seq, batch[2].seq = 2, 3
+	batch[2].delta = 0.002
+	first, ok := krunker.krunker_input_encode_batch(batch[:], 0, false, false, &wire, &next)
+	if !ok { return fail("encode failed") }
+	defer delete(first)
+	root := decode(first)
+	// Durations "332" (width 1); angles cut to the absolute pair (no motion);
+	// controls: every field of command 0 (nothing known yet), none after.
+	if root == nil || len(root) != 7 || root[3].(string) != "332" || root[4].(i64) != 1 { return fail("first packet shape/durations") }
+	if a := root[5].([]krunker.Krunker_Msgpack_Value); len(a) != 2 || a[0].(i64) != 100 || a[1].(i64) != 1200 { return fail("angles must be cut to the absolute pair") }
+	if c := root[6].([]krunker.Krunker_Msgpack_Map_Entry); len(c) != 11 || c[0].key.(string) != "0-4" || c[10].key.(string) != "0-14" { return fail("first controls") }
+	wire = next
+
+	// Same keys and angles again: nothing changed, so only the header goes.
+	for &b in batch { b.seq += 3 }
+	second, _ := krunker.krunker_input_encode_batch(batch[:], 0, false, false, &wire, &next)
+	defer delete(second)
+	if root = decode(second); root == nil || len(root) != 5 { return fail("an unchanged packet carries only reset, seq, durations and width") }
+	wire = next
+
+	// Release shoot on command 1 and turn: one control, angles with deltas.
+	for &b in batch { b.seq += 3 }
+	batch[1].shoot, batch[2].shoot = false, false
+	batch[2].y_dir = 1.25
+	third, _ := krunker.krunker_input_encode_batch(batch[:], 0, false, false, &wire, &next)
+	defer delete(third)
+	root = decode(third)
+	if root == nil || len(root) != 7 { return fail("a change sends angles and controls") }
+	if c := root[6].([]krunker.Krunker_Msgpack_Map_Entry); len(c) != 1 || c[0].key.(string) != "1-5" || c[0].value.(i64) != 0 { return fail("only the changed control, keyed by its command") }
+	if a := root[5].([]krunker.Krunker_Msgpack_Value); len(a) != 6 || a[5].(i64) != 50 { return fail("angle deltas") }
+	wire = next
+
+	// Two timed shots: timing goes last, in JavaScript key order, with an
+	// integral server time as an integer and progress as the exact double.
+	for &b in batch { b.seq += 3 }
+	batch[1].y_dir = 1.25
+	batch[0].shoot = true
+	batch[0].krunker_shot_timed, batch[0].krunker_shot_time, batch[0].krunker_shot_progress = true, 1100, 0.37
+	batch[2].krunker_shot_timed, batch[2].krunker_shot_time, batch[2].krunker_shot_progress = true, 1100, 0.5
+	fourth, _ := krunker.krunker_input_encode_batch(batch[:], 0, false, false, &wire, &next)
+	defer delete(fourth)
+	root = decode(fourth)
+	if root == nil || len(root) != 8 { return fail("timing goes last") }
+	timing := root[7].([]krunker.Krunker_Msgpack_Map_Entry)
+	// JavaScript object order: integer keys first, ascending, then the rest.
+	if len(timing) != 4 || timing[0].key.(string) != "0" || timing[1].key.(string) != "2" || timing[2].key.(string) != "0p" || timing[3].key.(string) != "2p" { return fail("timing key order") }
+	if _, integral := timing[0].value.(i64); !integral { return fail("an integral server time is a msgpack integer, as the browser encodes it") }
+	if timing[2].value.(f64) != 0.37 { return fail("progress must be the double nearest 0.37") }
+	fmt.println("Krunker input compressor tests OK")
 	return true
 }

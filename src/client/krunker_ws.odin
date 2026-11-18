@@ -54,6 +54,10 @@ Krunker_WS_State :: struct {
 	send_seconds: f64, // 1 / the lobby's tickFrequency (browser input send interval)
 	input_commands: [dynamic]shared.Input,
 	input_reset: bool,
+	// The browser input compressor's memory between q packets (last controls
+	// and angles sent); reset where the browser resets it: game start and
+	// INPUT_FAILED.
+	input_wire: kproto.Krunker_Input_Wire,
 	input_swap: u8,
 	command_direction: shared.Vec2,
 	render_previous, render_current: Krunker_Render_Sample,
@@ -549,6 +553,7 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 			case "start":
 				kproto.network_log("spawn", fmt.tprintf("server start received; local_sid=%d players=%d; waiting for renderer handoff", client.krunker_world.local_sid, len(client.krunker_world.players)))
 				state.input_sequence = max(state.input_sequence, 13)
+				state.input_wire = {} // game start: the browser's compressor starts over
 				if !state.spawned { krunker_ws_set_status(client, "Server confirmed entry; waiting for local player position...") }
 			case "rds", "obj", "gsc", "lkt", "ulm":
 				world := &client.krunker_world
@@ -618,6 +623,7 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				kproto.network_log("input", fmt.tprintf("server reported input synchronization failure args=%v next_seq=%d unsent=%d predicted=%d; next q will reset input synchronization", packet[1:], state.input_sequence, len(state.input_commands), len(client.predicted_inputs)))
 				krunker_client_reset_prediction(client)
 				state.input_reset = true
+				state.input_wire = {} // the browser forgets the controls and angles it sent
 			}
 		}
 		if applied { krunker_client_sync_world(client) }
@@ -626,14 +632,15 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 
 // Encoding is side-effect free: E_AGAIN and pending control messages must keep
 // the reset flag, commands, and packet counter for the eventual successful send.
-krunker_ws_encode_input :: proc(state: ^Krunker_WS_State) -> ([]byte, bool) {
+krunker_ws_encode_input :: proc(state: ^Krunker_WS_State, next_wire: ^kproto.Krunker_Input_Wire = nil) -> ([]byte, bool) {
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
-	return kproto.krunker_input_encode_batch(state.input_commands[:count], counter, false, state.input_reset)
+	return kproto.krunker_input_encode_batch(state.input_commands[:count], counter, false, state.input_reset, &state.input_wire, next_wire)
 }
 
-krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8) {
+krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8, next_wire: ^kproto.Krunker_Input_Wire = nil) {
 	state.ah_num = counter
+	if next_wire != nil { state.input_wire = next_wire^ }
 	state.input_reset = false
 	copy(state.input_commands[:], state.input_commands[count:])
 	resize(&state.input_commands, len(state.input_commands)-count)
@@ -650,7 +657,8 @@ krunker_ws_send_input :: proc(client: ^Client) {
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
 	reset := state.input_reset
-	packet, ok := krunker_ws_encode_input(state)
+	next_wire: kproto.Krunker_Input_Wire
+	packet, ok := krunker_ws_encode_input(state, &next_wire)
 	if !ok { krunker_ws_set_status(client, "Could not encode live movement input."); state.connected = false; return }
 	defer delete(packet)
 	sent: c.size_t
@@ -667,7 +675,7 @@ krunker_ws_send_input :: proc(client: ^Client) {
 		return
 	}
 	// Keep commands intact on E_AGAIN; only successful sends consume the queue.
-	krunker_ws_input_sent(state, count, counter)
+	krunker_ws_input_sent(state, count, counter, &next_wire)
 	// SR Client: log the resume once, but sample a sustained backlog instead of logging every send.
 	if state.input_blocked || (len(state.input_commands) > kproto.KRUNKER_MAX_INPUT_BATCH && state.input_logged % 120 == 0) {
 		kproto.network_log("input", fmt.tprintf("q send resumed/backlog: seq=%d remaining=%d", first_sequence, len(state.input_commands)))

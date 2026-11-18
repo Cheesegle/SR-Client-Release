@@ -10,32 +10,69 @@ import kproto "../krunker"
 when ODIN_TEST {
 	// Decode q using the browser's layout and direction registry, independently
 	// of the encoder. Feed these commands to the simulated authoritative peer.
-	krunker_test_decode_commands :: proc(t: ^testing.T, packet: []byte) -> []shared.Input {
+	// What a receiver of the browser's compressed q keeps between packets.
+	Krunker_Test_Peer :: struct {
+		controls: [kproto.KRUNKER_INPUT_CONTROLS]i64, // fields 4..14, last value received
+		angles:   [kproto.KRUNKER_MAX_INPUT_BATCH * 2]i64,
+		angle_count: int,
+	}
+
+	krunker_test_decode_commands :: proc(t: ^testing.T, packet: []byte, peer: ^Krunker_Test_Peer = nil) -> []shared.Input {
+		local: Krunker_Test_Peer
+		state := peer != nil ? peer : &local
 		messages, _, error_text := kproto.krunker_msgpack_decode_packet(packet)
 		if !testing.expect(t, len(error_text) == 0 && len(messages) == 1, "q packet must decode") { return nil }
 		root := messages[0].([]kproto.Krunker_Msgpack_Value)
-		durations := root[3].([]kproto.Krunker_Msgpack_Value)
-		angles := root[5].([]kproto.Krunker_Msgpack_Value)
-		controls := root[6].([]kproto.Krunker_Msgpack_Map_Entry)
+		// Durations: one digit string of fixed width, or an array (width 0).
+		durations := make([dynamic]i64, context.temp_allocator)
+		width := int(root[4].(i64))
+		if text, is_text := root[3].(string); is_text {
+			if !testing.expect(t, width > 0 && len(text) % width == 0, "duration string must split by its width") { return nil }
+			for i := 0; i < len(text); i += width {
+				value: i64
+				for c in text[i:i+width] { value = value*10 + i64(c - '0') }
+				append(&durations, value)
+			}
+		} else {
+			for v in root[3].([]kproto.Krunker_Msgpack_Value) { append(&durations, v.(i64)) }
+		}
+		// Angles: an array (deltas after the first pair; missing ones are 0),
+		// or 0 / absent for the previous packet's array.
+		if len(root) > 5 {
+			if array, is_array := root[5].([]kproto.Krunker_Msgpack_Value); is_array {
+				state.angle_count = len(array)
+				for v, i in array { state.angles[i] = v.(i64) }
+			}
+		}
+		// Controls: only changes, keyed "command-field"; each lasts until changed.
+		changes := make(map[string]i64, context.temp_allocator)
+		if len(root) > 6 {
+			if entries, is_map := root[6].([]kproto.Krunker_Msgpack_Map_Entry); is_map {
+				for entry in entries { changes[entry.key.(string)] = entry.value.(i64) }
+			}
+		}
 		commands := make([]shared.Input, len(durations), context.temp_allocator)
-		fields := make(map[string]i64, context.temp_allocator)
-		for entry in controls { fields[entry.key.(string)] = entry.value.(i64) }
 		pitch, yaw: i64
 		for &command, i in commands {
-			pitch += angles[i*2].(i64)
-			yaw += angles[i*2+1].(i64)
+			if i*2+1 < state.angle_count {
+				pitch += state.angles[i*2]
+				yaw += state.angles[i*2+1]
+			}
+			for field in 0 ..< kproto.KRUNKER_INPUT_CONTROLS {
+				if value, changed := changes[fmt.tprintf("%d-%d", i, field+4)]; changed { state.controls[field] = value }
+			}
 			command.seq = i32(root[2].(i64)) + i32(i)
-			command.delta = f32(durations[i].(i64)) / 1000
+			command.delta = f32(durations[i]) / 1000
 			command.x_dir, command.y_dir = f32(pitch)/1000, f32(yaw)/1000
-			wire_move := i32(fields[fmt.tprintf("%d-4", i)])
+			wire_move := i32(state.controls[0])
 			// Browser direction i is -PI + (i+1)*PI/4. Native 0 is -PI/2.
 			command.move_dir = wire_move < 0 ? -1 : (wire_move + 7) % 8
-			command.shoot = fields[fmt.tprintf("%d-5", i)] != 0
-			command.scope = fields[fmt.tprintf("%d-6", i)] != 0
-			command.jump = fields[fmt.tprintf("%d-7", i)] != 0
-			command.reload = fields[fmt.tprintf("%d-8", i)] != 0
-			command.crouch = fields[fmt.tprintf("%d-9", i)] != 0
-			command.swap = u8(fields[fmt.tprintf("%d-11", i)])
+			command.shoot = state.controls[1] != 0
+			command.scope = state.controls[2] != 0
+			command.jump = state.controls[3] != 0
+			command.reload = state.controls[4] != 0
+			command.crouch = state.controls[5] != 0
+			command.swap = u8(state.controls[7])
 		}
 		return commands
 	}
