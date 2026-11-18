@@ -123,10 +123,12 @@ client_binding_used :: proc(client: ^Client, code: i32) -> bool {
 // paths (practice, native networking and live networking) consume this command.
 client_bound_input :: proc(held: [menuui.Binding_Action]bool, last_swap: ^u8) -> shared.Input {
 	input := shared.Input{move_dir = -1, jump = held[.JUMP], crouch = held[.CROUCH], reload = held[.RELOAD], shoot = held[.FIRE], scope = held[.AIM]}
+	// Krunker's wSwap: swap 1, melee 2, primary 3 (equipment, 4, has no bind here).
 	if held[.SECONDARY] { input.swap = 1 }
 	else if held[.MELEE] { input.swap = 2 }
+	else if held[.PRIMARY] { input.swap = 3 }
 	if input.swap == last_swap^ { input.swap = 0 }
-	last_swap^ = held[.SECONDARY] ? 1 : held[.MELEE] ? 2 : 0
+	last_swap^ = held[.SECONDARY] ? 1 : held[.MELEE] ? 2 : held[.PRIMARY] ? 3 : 0
 	forward, back, left, right := held[.FORWARD], held[.BACKWARD], held[.LEFT], held[.RIGHT]
 	if forward != back {
 		input.move_dir += forward ? 1 : 5

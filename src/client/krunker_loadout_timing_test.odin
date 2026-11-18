@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "core:testing"
 import shared "../shared"
 import kproto "../krunker"
@@ -124,6 +125,9 @@ when ODIN_TEST {
 		kproto.krunker_input_stamp_shot(&world, &command, 10)
 		testing.expect(t, command.krunker_shot_progress < 0 && clamp(command.krunker_shot_progress, 0, 1.2) == 0,
 			"negative browser progress must reset the server's previous fraction to the renderer's held latest pose")
+		// Display older than the previous snapshot: the browser sends above 1, uncapped.
+		kproto.krunker_input_stamp_shot(&world, &command, 1.03) // send rate 20: display 0.98
+		testing.expect(t, abs(command.krunker_shot_progress - 1.4) < 1e-9, "progress above 1 must be sent uncapped, like the browser")
 		packet[1], packet[3], world.received_at = kproto.Krunker_Msgpack_Nil{}, i64(600), 1.1
 		testing.expect(t, kproto.krunker_world_apply_packet(&world, packet) && world.server_time == 600, "k without visible players still advances the server clock")
 		gameplay_packet(&world, "init", i64(2), i64(4))
@@ -136,9 +140,10 @@ when ODIN_TEST {
 	krunker_shot_timing_survives_batch_boundaries :: proc(t: ^testing.T) {
 		state: Krunker_WS_State
 		defer krunker_ws_disconnect(&state)
-		for i in 0..<35 {
+		B :: kproto.KRUNKER_MAX_INPUT_BATCH
+		for i in 0..<B + 3 {
 			append(&state.input_commands, shared.Input{seq=i32(100+i), delta=0.007, move_dir=-1,
-				krunker_shot_timed=i == 31 || i == 34, krunker_shot_time=1100, krunker_shot_progress=0.25})
+				krunker_shot_timed=i == B - 1 || i == B + 2, krunker_shot_time=1100, krunker_shot_progress=0.25})
 		}
 		for batch in 0..<2 {
 			encoded, ok := krunker_ws_encode_input(&state)
@@ -149,10 +154,11 @@ when ODIN_TEST {
 			root := messages[0].([]kproto.Krunker_Msgpack_Value)
 			if !testing.expect(t, len(root) == 8) { return }
 			timing := root[7].([]kproto.Krunker_Msgpack_Map_Entry)
-			testing.expect(t, len(timing) == 2 && timing[0].key.(string) == (batch == 0 ? "31" : "2") &&
-				timing[1].key.(string) == (batch == 0 ? "31p" : "2p"), "shot keys must index their transmitted batch, including after queue consumption")
-			testing.expect(t, root[2].(i64) == (batch == 0 ? 100 : 132) && kproto.krunker_world_f32(timing[0].value) == 1100)
-			krunker_ws_input_sent(&state, min(len(state.input_commands), 32), counter)
+			first := fmt.tprintf("%d", B - 1)
+			testing.expect(t, len(timing) == 2 && timing[0].key.(string) == (batch == 0 ? first : "2") &&
+				timing[1].key.(string) == (batch == 0 ? fmt.tprintf("%sp", first) : "2p"), "shot keys must index their transmitted batch, including after queue consumption")
+			testing.expect(t, root[2].(i64) == (batch == 0 ? 100 : 100 + B) && kproto.krunker_world_f32(timing[0].value) == 1100)
+			krunker_ws_input_sent(&state, min(len(state.input_commands), B), counter)
 		}
 	}
 

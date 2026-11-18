@@ -4,7 +4,11 @@ import "core:math"
 import "core:fmt"
 import shared "../shared"
 
-KRUNKER_MAX_INPUT_BATCH :: 32
+// Inputs per q packet. At about 30 packets a second, 1000 inputs a second is
+// about 33 per packet (and 720 goes past 32 whenever a packet is late); a
+// smaller cap left a backlog that grew every packet. Leftovers still go in the
+// next packet.
+KRUNKER_MAX_INPUT_BATCH :: 64
 
 krunker_display_time :: proc(now: f64, send_rate: f32) -> f64 {
 	return now - 1/f64(send_rate > 0 ? send_rate : 10)
@@ -19,15 +23,13 @@ krunker_input_stamp_shot :: proc(state: ^Krunker_World_State, input: ^shared.Inp
 	if state.has_previous_sync && state.sync_received_at > state.previous_sync_received_at {
 		display_time := krunker_display_time(now, state.send_rate)
 		progress := (display_time-state.sync_received_at) / (state.previous_sync_received_at-state.sync_received_at)
-		// Keep the browser's negative progress after a late snapshot: the server
-		// clamps it to zero. Sending/omitting zero would retain its OLD progress
-		// because that receiver only applies truthy values. Cap the older end to
-		// match our renderer's held pose. Timing keys use two decimal places.
-		input.krunker_shot_progress = krunker_js_round_to(min(progress, 1), 2) // .round(2), JavaScript halves
-		// A zero is not applied by Krunker's receiver, which then keeps the
-		// PREVIOUS shot's progress (up to a whole snapshot off). 0.01 is the
-		// nearest value it does apply (about a millisecond).
-		if input.krunker_shot_progress == 0 { input.krunker_shot_progress = 0.01 }
+		// Exactly the browser's value: (now - 1000/sendRate - newSync) /
+		// (lastSync - newSync), .round(2), never capped. It goes negative after a
+		// late snapshot and above 1 when a snapshot is late to arrive (a recorded
+		// browser session sent up to 3; about 5% of its shots were above 1); the
+		// server clamps it itself. A zero is omitted by the encoder, as the
+		// browser does.
+		input.krunker_shot_progress = krunker_js_round_to(progress, 2) // .round(2), JavaScript halves
 	}
 }
 

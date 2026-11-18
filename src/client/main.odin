@@ -519,6 +519,7 @@ Client_Options :: struct {
 	no_cpu_pinning: bool, // Leave thread placement to the OS (cpu_affinity.odin).
 	backend: Gpu_Backend, // --vulkan / --opengl, over the saved Graphics API setting
 	backend_set: bool,
+	host_link: string, // srclient://game?action=host-comp&... (host_link.odin)
 }
 
 print_client_help :: proc() {
@@ -670,6 +671,8 @@ parse_client_options :: proc() -> (options: Client_Options, ok: bool) {
 				options.map_name = normalize_map_name(arg[len("--map="):])
 			} else if strings.has_prefix(arg, "--class=") {
 				options.class_name = arg[len("--class="):]
+			} else if host_link_is(arg) {
+				options.host_link = arg
 			} else {
 				fmt.eprintf("Unknown option: %s\n\n", arg)
 				return options, false
@@ -1342,6 +1345,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client_mods_tick(client)
 	round_sounds_tick(client)
 	host_game_tick(client)
+	host_link_tick(client)
 	game_files_update_tick(client)
 	if client.join_queued > 0 {
 		client.join_queued -= 1
@@ -1351,6 +1355,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		net_client_poll(client, glfw.GetTime())
 	}
 	if client.krunker.connected {
+		if client.hud_settings.network_thread && client.krunker.handle != nil { krunker_net_thread_start(&client.krunker) }
 		if g_net_thread.running { krunker_ws_poll_threaded(client) } else { krunker_ws_poll(client) }
 		krunker_client_sync_match(client, f64(now))
 	}
@@ -1554,9 +1559,11 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			if player.active {
 				player.idle_anim += shared.GAME_CONSTANTS.idle_anim_speed * delta
 				shared.player_update_visual_animations(player, delta)
-				// The Krunker-predicted local player advances recoil per input
-				// command in player_proc_input, as Krunker's server does.
-				if !(player == client.me && client.krunker.connected) { shared.player_update_recoil(player, delta) }
+				// In Krunker games the local player's recoil advances per input
+				// inside the prediction (like Krunker's server), not per frame.
+				if !(client.krunker.connected && player == client.me) {
+					shared.player_update_recoil(player, delta)
+				}
 				if player != client.me {
 					shared.player_interpolate(player, delta)
 				}
@@ -1573,14 +1580,11 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	// Camera and view-model transforms must use the state produced by this
 	// frame's input, otherwise fast mouse movement makes the gun trail and jump.
 	if client.me != nil && client.me.active && !client.freecam_enabled {
-		// Krunker physics runs at KRUNKER_INPUT_RATE: render the pose blended between the
-		// last two commands (position, crouch height, ADS, recoil, view-model
-		// bob/lean/step), then put the simulated state back.
-		blended := client.krunker.connected
-		simulated := krunker_render_capture(client.me)
-		if blended { krunker_render_apply(client.me, krunker_client_render_sample(client)) }
-		defer if blended { krunker_render_apply(client.me, simulated) }
 		view_position, view_aim := client.me.position, client.me.aim_val
+		if client.krunker.connected {
+			sample := krunker_client_render_sample(client)
+			view_position, view_aim = sample.position, sample.aim
+		}
 		third_person := player_uses_third_person_camera(client.me)
 		if third_person {
 			// Full-body meshes use the map's camera offset. Keeping the camera at
@@ -1592,7 +1596,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 			client.camera.position.y += client.me.height - shared.GAME_CONSTANTS.camera_height
 		}
 
-		client.camera.rotation.x = client.me.direction.x + client.me.recoil_anim_y * shared.GAME_CONSTANTS.recoil_mlt
+		// Krunker's camera: aim + recoil kick + 0.1 * landBobY (the landing dip).
+		// The bullet does not follow the landing dip, only the camera does.
+		client.camera.rotation.x = client.me.direction.x + client.me.recoil_anim_y * shared.GAME_CONSTANTS.recoil_mlt + 0.1 * client.me.land_bob_y
 		client.camera.rotation.y = client.me.direction.y
 		client.camera.zoom = viewmodel_zoom(client.me.weapon.zoom, view_aim, client_viewmodel_values(client))
 
@@ -1722,10 +1728,19 @@ main :: proc() {
 		print_client_help()
 		return
 	}
+	// A tournament link while SR Client already runs: that window hosts it.
+	if len(options.host_link) > 0 {
+		if host_link_forward(options.host_link) { return }
+	} else {
+		_ = host_link_other_instance_running() // hold the running marker for later links
+	}
 	// Before any thread starts, so every thread is placed from the beginning.
 	// The benchmark runs pinned too, measuring what the game does.
-	if options.no_cpu_pinning {
-		fmt.println("[CPU] pinning off (--no-cpu-pinning)")
+	// Classic (Vulkan Renderer off, or --opengl) is 0.24's setup: OpenGL and
+	// threads placed by Windows. Only Vulkan pins the game thread.
+	classic := client_pick_backend(options, client_settings_load().opengl) == .OpenGL
+	if options.no_cpu_pinning || classic {
+		fmt.println(classic ? "[CPU] pinning off (Classic renderer)" : "[CPU] pinning off (--no-cpu-pinning)")
 	} else {
 		fmt.printfln("[CPU] %s", cpu_pinning_apply())
 	}
@@ -1943,6 +1958,7 @@ main :: proc() {
 	}
 
 	print_startup_info(client)
+	if len(options.host_link) > 0 { host_link_queue(client, options.host_link) }
 	free_all(context.temp_allocator)
 
 	client_vrr_update(client, force = true)

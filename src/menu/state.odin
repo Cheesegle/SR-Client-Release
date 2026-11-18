@@ -9,12 +9,12 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, HOST, ACCOUN
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, OBJECTIVE_OPACITY }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, INPUT_RATE, OBJECTIVE_OPACITY }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 // Krunker's tabs (General, Controls, Display, Render, Game, Sound) plus SR's
 // own Experimental tab. The enum names predate the Krunker layout.
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, EXPERIMENTAL }
-Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, GAME_FPS_LIMIT, DEFAULT_REGION, MSAA, VRR_CAP }
+Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, GAME_FPS_LIMIT, DEFAULT_REGION, MSAA, VRR_CAP, INPUT_RATE }
 // Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
 // hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
@@ -29,9 +29,9 @@ HUD_Settings :: struct {
 	hide_enemy_counter: bool, // enemies-on-point counter
 	hide_leaderboard: bool,   // Krunker's leaderboard, top right
 	hide_chat: bool,          // chat and kill lines, bottom left
-	// The former Settings > Experimental > Network thread switch. The network
-	// thread is always on now; the field stays so older settings files load.
-	network_thread: bool,
+	// Settings > Experimental (kept here so it saves with the HUD flags).
+	network_thread: bool,     // read the network on its own thread
+	input_rate: i32,          // Krunker inputs per second, one of INPUT_RATES; 0 (older files) = 360
 	hud_scale: f32,           // pre-0.13 HUD size; replaced by ui_scale, kept so old files load
 	// Krunker's UI Scale (scaleUI, 0.1..1, default 0.7); 0 (older files) = default.
 	ui_scale: f32,
@@ -594,6 +594,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .GAME_FPS_LIMIT: index = game_fps_limit_index(state.settings_draft.hud.fps_limit)
 		case .MSAA: index = msaa_index(state.settings_draft.quality.msaa)
 		case .VRR_CAP: index = clamp(state.settings_draft.hud.vrr_cap, 0, len(VRR_CAP_LABELS) - 1)
+		case .INPUT_RATE: index = input_rate_index(state.settings_draft.hud.input_rate)
 		case .DEFAULT_REGION: index = clamp(state.settings_draft.hud.default_region - 1, 0, len(KRUNKER_REGIONS) - 1)
 		}
 		state.focus = clay.ID("SettingsOption", u32(index)).id
@@ -732,6 +733,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .ANISOTROPY: state.settings_draft.quality.anisotropy = ANISOTROPY_LEVELS[clamp(control.action.index, 0, 4)]; return {}
 		case .MSAA: state.settings_draft.quality.msaa = MSAA_LEVELS[clamp(control.action.index, 0, len(MSAA_LEVELS)-1)]; return {}
 		case .VRR_CAP: state.settings_draft.hud.vrr_cap = clamp(control.action.index, 0, len(VRR_CAP_LABELS) - 1); return {}
+		case .INPUT_RATE: state.settings_draft.hud.input_rate = INPUT_RATES[clamp(control.action.index, 0, len(INPUT_RATES) - 1)]; return {}
 		case .LIGHTING: state.settings_draft.quality.lighting = clamp(control.action.index, 0, 3); return {}
 		case .SHADOW_QUALITY: state.settings_draft.quality.shadow_quality = clamp(control.action.index, 0, 1); return {}
 		case .QUALITY_TOGGLE:
@@ -771,6 +773,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 8: state.settings_draft.hud.hide_enemy_counter = !state.settings_draft.hud.hide_enemy_counter
 			case 9: state.settings_draft.hud.hide_leaderboard = !state.settings_draft.hud.hide_leaderboard
 			case 10: state.settings_draft.hud.hide_chat = !state.settings_draft.hud.hide_chat
+			case 11: state.settings_draft.hud.network_thread = !state.settings_draft.hud.network_thread
 			case 12: state.settings_draft.hud.classic_font = !state.settings_draft.hud.classic_font
 			case 13: state.settings_draft.hud.hide_hud = !state.settings_draft.hud.hide_hud
 			case 14: state.settings_draft.hud.hide_bullet_holes = !state.settings_draft.hud.hide_bullet_holes
@@ -888,7 +891,7 @@ focus_visible :: proc(control: Control, page: Page) {
 	}
 	if page == .HOST { container = "SettingsPanel" }
 	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .UNBIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .MODS_BROWSE || control.action.kind == .MODS_REMOVE || control.action.kind == .MODS_PASTE || control.action.kind == .CROSSHAIR_IMAGE_PASTE || control.action.kind == .CROSSHAIR_IMAGE_CLEAR || control.action.kind == .HITMARKER_IMAGE_PASTE || control.action.kind == .HITMARKER_IMAGE_CLEAR || control.action.kind == .GRAPHICS_API) { container = "SettingsPanel" }
-	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MSAA || control.action.kind == .VRR_CAP || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .GAME_FPS_LIMIT || control.action.kind == .DEFAULT_REGION || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
+	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MSAA || control.action.kind == .VRR_CAP || control.action.kind == .INPUT_RATE || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .GAME_FPS_LIMIT || control.action.kind == .DEFAULT_REGION || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
 	data := clay.GetScrollContainerData(clay.ID(container))
@@ -913,3 +916,18 @@ set_invite :: proc(state: ^State, value: string) {
 	state.invite_length = min(len(value), len(state.invite_buffer))
 	copy(state.invite_buffer[:state.invite_length], transmute([]u8)value[:state.invite_length])
 }
+
+// Settings > Experimental > Inputs per second (real inputs, not the browser's
+// Network Rate number: the browser sends once half its interval has passed, so
+// its Network Rate 360 is up to 720 inputs a second at high FPS). 1000 is the
+// protocol's limit: input durations are whole milliseconds, at least 1.
+INPUT_RATES := [6]i32{240, 360, 480, 720, 900, 1000}
+INPUT_RATE_LABELS := [6]string{"240", "360 (default)", "480", "720", "900", "1000"}
+INPUT_RATE_DEFAULT :: 360
+
+input_rate_index :: proc(rate: i32) -> i32 {
+	for value, i in INPUT_RATES { if value == rate { return i32(i) } }
+	return 1 // 0 (older files) or anything unknown: 360
+}
+
+input_rate_value :: proc(rate: i32) -> i32 { return INPUT_RATES[input_rate_index(rate)] }

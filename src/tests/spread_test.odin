@@ -50,15 +50,68 @@ test_weapon_spread :: proc() -> bool {
 	shared.player_spawn(player, 0)
 	if player.spread_plus != 0 || player.spread != weapon.spread { return false }
 
-	// Reconciliation still updates accuracy from replayed movement, without firing.
+	// Krunker updates spreadPlus only on fresh inputs (inside Bum0tq's !recon
+	// block). A reconciliation replay must neither fire nor touch spread.
 	player.noclip = true
 	input := shared.Input{delta = 0.01, move_dir = 0, shoot = true}
 	shared.player_proc_input(player, &input, true, false)
-	if player.spread_plus <= 0 || player.shot_seq != 0 {
-		fmt.eprintln("Movement replay must update spread without duplicating a shot")
+	if player.spread_plus != 0 || player.shot_seq != 0 {
+		fmt.eprintln("Movement replay must not update spread or duplicate a shot")
+		return false
+	}
+	// Fresh Krunker prediction does update it.
+	input = shared.Input{delta = 0.01, move_dir = 0}
+	shared.player_proc_input(player, &input, true, false, true, true)
+	if player.spread_plus <= 0 {
+		fmt.eprintln("Fresh prediction must update movement spread")
 		return false
 	}
 	player.noclip = false
+	player.spread_plus = 0
+
+	// Weapon timers must reach exactly 0 when the inputs add up to the rate, as
+	// on Krunker's server (whole ms). f32 seconds left ~2e-7 and fired a whole
+	// input late. 450 ms (Revolver) and 95 ms (SMG) with SR's 3/3/2 ms inputs.
+	for rate_ms in ([]int{450, 95, 125, 115, 900, 1000}) {
+		t := f32(rate_ms) / 1000
+		steps := [3]int{3, 3, 2}
+		elapsed, i := 0, 0
+		for elapsed < rate_ms {
+			d := min(steps[i % 3], rate_ms - elapsed)
+			t = shared.krunker_timer_step(t, f32(d) / 1000)
+			elapsed += d; i += 1
+			if elapsed < rate_ms && t <= 0 {
+				fmt.eprintln("Weapon timer ended early at", elapsed, "of", rate_ms)
+				return false
+			}
+		}
+		if t != 0 {
+			fmt.eprintln("Weapon timer must be exactly 0 after", rate_ms, "ms, got", t)
+			return false
+		}
+	}
+
+	// Recoil in Krunker games: stepped once per fresh input (before the shot),
+	// never on replays, using the same formula as Krunker's server.
+	{
+		shared.player_spawn(player, 0)
+		w := player.weapon
+		player.recoil_force, player.recoil_anim, player.recoil_anim_y = 4, 0, 0 // SR stores force x1000 (steps in seconds)
+		step := shared.Input{delta = 0.003}
+		shared.player_proc_input(player, &step, true, false, true, true)
+		ry := w.recoil_y != 0 ? w.recoil_y : 1
+		want_y := f32(0.004) * ry * 3 * math.pow(w.recover_y != 0 ? w.recover_y : w.recover, f32(3))
+		if abs(player.recoil_anim_y - want_y) > 1e-6 || player.recoil_force >= 4 {
+			fmt.eprintln("Fresh Krunker prediction must step recoil once per input:", player.recoil_anim_y, want_y)
+			return false
+		}
+		before := player.recoil_anim_y
+		shared.player_proc_input(player, &step, true, false)
+		if player.recoil_anim_y != before {
+			fmt.eprintln("Reconciliation replays must not step recoil")
+			return false
+		}
+	}
 
 	// Browser's seeded lookup makes spread independent of recoil/global RNG.
 	if abs(shared.spread_random(0, 0, 1) - 0.9632385264) > 1e-6 ||

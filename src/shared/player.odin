@@ -762,6 +762,16 @@ player_update_recoil :: proc(player: ^Player, delta: f32) {
 
 // Fresh client prediction may play movement effects. Reconciliation replays
 // leave predict_effects false so snapshots cannot restart the same animation.
+// Krunker's server counts weapon timers in whole milliseconds (rate 450,
+// inputs of 2 or 3 ms), so they land exactly on 0. SR keeps seconds in f32,
+// which leaves a sub-microsecond remainder (e.g. 0.45 - 150 steps = 2e-7) and
+// made SR fire one input after the server. Anything under half a millisecond
+// is that rounding remainder, never real time left.
+krunker_timer_step :: proc(timer, delta: f32) -> f32 {
+	t := timer - delta
+	return t < 0.0005 ? 0 : t
+}
+
 player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool, predict_effects: bool = false, predict_combat: bool = false) {
 	// Capture fresh actions once. Reconciliation replays only restore motion.
 	was_grounded, was_wall_jump := player.on_ground, player.did_wall_jump
@@ -810,10 +820,15 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		return
 	}
 
-	if input.swap != 0 && player.loadout_size > 1 {
+	// Krunker's swap codes (wSwap): 1 swapSecondary, 2 swapMelee, 3 the Primary
+	// key: swapWeapon to loadout slot 0 (nothing when already there), 4
+	// swapEquipment.
+	if input.swap == 3 && player.loadout_size > 1 {
+		if player.loadout_index != 0 { player_swap_weapon(player, 0, false, false, recon && !predict_combat) }
+	} else if input.swap != 0 && player.loadout_size > 1 {
 		swap_secondary := input.swap == 1
 		swap_melee := input.swap == 2
-		swap_equipment := input.swap == 3
+		swap_equipment := input.swap == 4
 
 		swap_to: i32 = -1
 		// Resolve swap targets from the active data-driven registry. Custom
@@ -1082,7 +1097,13 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 
 	delta_pos2D := math.sqrt((player.position.x - player.last_position.x) * (player.position.x - player.last_position.x) + (player.position.z - player.last_position.z) * (player.position.z - player.last_position.z))
 	player.covered_distance += delta_pos2D
-	player_update_spread(player, delta_pos2D, player.position.y - player.last_position.y, delta)
+	// Krunker updates spreadPlus/spread only on fresh inputs (inside its
+	// !recon block). Replaying pending inputs after an ACK must not add their
+	// movement spread again or decay it again: that made SR's spread settle
+	// faster than the server's after a strafe stop.
+	if !recon || predict_effects || predict_combat {
+		player_update_spread(player, delta_pos2D, player.position.y - player.last_position.y, delta)
+	}
 	if (!recon || predict_effects) && player.game.map_inst.config.model != .SPRITE {
 		// Cadence follows actual displacement, including slopes and ladders.
 		delta_y := player.position.y - player.last_position.y
@@ -1110,7 +1131,7 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		}
 
 		if player.reload_timer > 0.0 {
-			player.reload_timer = max(0.0, player.reload_timer - delta)
+			player.reload_timer = krunker_timer_step(player.reload_timer, delta)
 
 			if player.reload_timer == 0 {
 				player.did_shoot = false
@@ -1118,10 +1139,10 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 			}
 		}
 
-		player.swap_timer = max(0.0, player.swap_timer - delta)
+		player.swap_timer = krunker_timer_step(player.swap_timer, delta)
 
 		for i in 0 ..< player.loadout_size {
-			player.reloads[i] = max(0.0, player.reloads[i] - delta)
+			player.reloads[i] = krunker_timer_step(player.reloads[i], delta)
 		}
 
 		if player.weapon != nil && !move_lock {

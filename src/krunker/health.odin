@@ -1,5 +1,6 @@
 package krunker
 
+import "core:fmt"
 import "core:math"
 import shared "../shared"
 
@@ -54,6 +55,10 @@ krunker_world_apply_player_gone :: proc(state: ^Krunker_World_State, packet: []K
 		if (opcode == "3" || numeric == 3) && len(packet) > 2 {
 			if deaths, ok := krunker_world_bounded_number(packet[2], 0, 2147483647); ok { player.deaths = u32(deaths) }
 			krunker_world_record_kill(state, sid, packet)
+			if sid == state.local_sid {
+				state.local_death_dump_len = len(fmt.bprintf(state.local_death_dump[:], "%v", packet[1:]))
+				state.local_death_revision += 1
+			}
 		}
 		player.pose_count = 0
 		player.revision += 1

@@ -23,9 +23,6 @@ settings_window :: proc(state: ^State, view: View) {
 			if clay.UI(clay.ID("SettingsSidebar"))({
 				layout = {sizing = {width = clay.SizingFixed(232*s), height = clay.SizingGrow()}, layoutDirection = .TopToBottom},
 				backgroundColor = SETTINGS_DARK, border = {color = SETTINGS_LINE, width = {right = 1}},
-				// Display's crosshair preview makes the sidebar taller than the
-				// panel at some sizes: clip it rather than push the footer off-screen.
-				clip = {vertical = true},
 			}) {
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(80*s)}, padding = {left = u16(24*s)}, childAlignment = {y = .Center}}}) {
 					text("SETTINGS", 28, s, SETTINGS_MUTED)
@@ -111,13 +108,12 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_display_rows(state, view)
 		settings_toggle_row(state, "V-Sync", "VSync", values.vsync, {kind = .VSYNC})
 		settings_vrr_cap_row(state, view)
-		settings_toggle_row(state, "Vulkan Renderer", "Vulkan", values.vulkan, {kind = .GRAPHICS_API})
+		settings_toggle_row(state, "Vulkan Renderer (off = Classic)", "Vulkan", values.vulkan, {kind = .GRAPHICS_API})
 		settings_game_fps_limit_row(state)
 		if values.show_fps { settings_slider(state, "FPS update rate (ms)", "FpsUpdateRate", f32(fps_update_ms(values.hud)), FPS_UPDATE_MIN_MS, FPS_UPDATE_MAX_MS, {kind = .FPS_UPDATE_RATE}, step = 10) }
 		settings_menu_fps_limit_row(state)
-		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution. FPS limit caps the game (Unlimited by default); Menu FPS limit caps menus only.")
+		settings_note(state, "Windowed sets the window size and Fullscreen switches the monitor to the chosen resolution. Borderless always uses the monitor's resolution. FPS limit caps the game (Unlimited by default); Menu FPS limit caps menus only. Vulkan Renderer applies on the next start; off is Classic (OpenGL, threads left to Windows, like 0.24).")
 		settings_note(state, "VRR cap: with V-Sync on a G-SYNC / FreeSync display, frames are held 3-5 FPS under the refresh rate so V-Sync never adds latency. Auto does this only where VRR is detected; Always does it on any display.")
-		settings_note(state, "Vulkan Renderer draws with Vulkan instead of OpenGL; the change applies the next time SR Client starts. A GPU or driver without Vulkan 1.3 uses OpenGL.")
 		settings_section(state, "Interface")
 		// Krunker's UI Scale: same values as Krunker (and Krunker settings imports).
 		settings_toggle_row(state, "UI Scaling", "UiScaling", !values.hud.ui_scaling_off, {kind = .HUD_TOGGLE, index = 16})
@@ -164,6 +160,17 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		for label, i in labels { settings_slider(state, label, ids[i], values.audio_volumes[i], 0, 1, {kind = .AUDIO_VOLUME, index = i32(i)}) }
 		settings_note(state, "Master volume affects every channel. Set a channel to 0% to mute it.")
 	case .EXPERIMENTAL:
+		settings_section(state, "Network")
+		if settings_search_show(state, "Inputs per second") {
+			if clay.UI(clay.ID("InputRateRow"))(settings_row(state)) {
+				settings_label("Inputs per second", state.scale)
+				spacer()
+				settings_dropdown_field(state, INPUT_RATE_LABELS[input_rate_index(values.hud.input_rate)], "InputRate", .INPUT_RATE)
+			}
+		}
+		settings_note(state, "How often your movement, aim and shots go to the server. These are real inputs per second: the browser's Network Rate 360 sends up to 720 at high FPS, and 1000 is the most Krunker's protocol allows (1 ms per input). Takes effect right away, no restart.")
+		settings_toggle_row(state, "Network thread", "NetworkThread", values.hud.network_thread, {kind = .HUD_TOGGLE, index = 11})
+		settings_note(state, "Reads the game connection on its own thread. It does not raise average FPS; it keeps frames smooth when the network spikes and times snapshots by their real arrival. Takes effect right away; switching it off applies from the next match. Turn it off if anything feels wrong.")
 		settings_night(state)
 	}
 }
@@ -267,11 +274,11 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .VIDEO:
 		draft.display_mode, draft.monitor_index = defaults.display_mode, defaults.monitor_index
 		draft.resolution_index, draft.fullscreen_index = defaults.resolution_index, defaults.fullscreen_index
-		draft.vsync, draft.menu_fps_limit = defaults.vsync, defaults.menu_fps_limit
-		draft.vulkan = defaults.vulkan
+		draft.vsync, draft.vulkan, draft.menu_fps_limit = defaults.vsync, defaults.vulkan, defaults.menu_fps_limit
 		hud := defaults.hud
 		hud.hide_ping, hud.manual_respawn, hud.hide_enemy_counter = draft.hud.hide_ping, draft.hud.manual_respawn, draft.hud.hide_enemy_counter
-		hud.hide_leaderboard, hud.hide_chat = draft.hud.hide_leaderboard, draft.hud.hide_chat
+		hud.hide_leaderboard, hud.hide_chat, hud.network_thread = draft.hud.hide_leaderboard, draft.hud.hide_chat, draft.hud.network_thread
+		hud.input_rate = draft.hud.input_rate
 		hud.hide_bullet_holes = draft.hud.hide_bullet_holes
 		hud.vrr_cap = defaults.hud.vrr_cap
 		hud.hide_kill_counter, hud.hide_death_counter = draft.hud.hide_kill_counter, draft.hud.hide_death_counter
@@ -290,6 +297,8 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .AUDIO:
 		draft.audio_volumes = defaults.audio_volumes
 	case .EXPERIMENTAL:
+		draft.hud.network_thread = defaults.hud.network_thread
+		draft.hud.input_rate = defaults.hud.input_rate
 		draft.visuals.night_mode, draft.visuals.night_strength = defaults.visuals.night_mode, defaults.visuals.night_strength
 	}
 }

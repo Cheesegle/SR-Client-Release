@@ -45,9 +45,11 @@ krunker_world_apply_game_config :: proc(state: ^Krunker_World_State, packet: []K
 			size := krunker_world_i32(entry.value, -1)
 			if size >= 0 && size <= 3 { state.lobby_team_capacity = size + 1 }
 		case "selTeam": state.lobby_select_team = krunker_world_bool(entry.value)
-		case "team1Name", "team2Name":
+		// Krunker's config keys are nameTeam1/nameTeam2 (its lobby, scoreboard
+		// and spectator names read config.nameTeam1); team1Name kept for safety.
+		case "nameTeam1", "nameTeam2", "team1Name", "team2Name":
 			if name, named := entry.value.(string); named {
-				index := key == "team1Name" ? 0 : 1
+				index := key == "nameTeam1" || key == "team1Name" ? 0 : 1
 				delete(state.lobby_team_names[index]); state.lobby_team_names[index] = strings.clone(name)
 			}
 		case "fixMov": config.fixed_movement = krunker_world_bool(entry.value)

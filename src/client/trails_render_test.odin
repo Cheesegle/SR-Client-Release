@@ -9,8 +9,7 @@ import shared "../shared"
 import menuui "../menu"
 
 when ODIN_TEST {
-	// Disabled: failing on OpenGL and Vulkan since at least 2026-11-17 (the tracer streak no longer shows in the world render).
-	// Restore @(test) once fixed.
+	@(test)
 	bullet_trails_render :: proc(t: ^testing.T) {
 		// Keep the runner's logger: testing.expect fails a test by logging.
 		logger := context.logger

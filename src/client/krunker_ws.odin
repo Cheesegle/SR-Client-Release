@@ -59,14 +59,7 @@ Krunker_WS_State :: struct {
 	// INPUT_FAILED.
 	input_wire: kproto.Krunker_Input_Wire,
 	input_swap: u8,
-	// Presses seen on display frames since the last physics tick, so a tap
-	// shorter than a physics tick still reaches the next command.
-	latched_jump, latched_shoot, latched_reload, latched_crouch, latched_scope: bool,
-	latched_move: bool, latched_move_dir: i32, // last pressed direction this tick
 	command_direction: shared.Vec2,
-	// Aim the queued commands carry (wire-rounded pitch, yaw); see
-	// KRUNKER_AIM_PER_PACKET.
-	aim_anchor: shared.Vec2,
 	render_previous, render_current: Krunker_Render_Sample,
 	render_sample_ready: bool,
 	prediction_corrections: int,
@@ -81,9 +74,6 @@ Krunker_WS_State :: struct {
 	snapshots_received: int,
 	server_error: string,
 	auth_rejected: bool,
-	// The network thread answers pi and l itself, on arrival
-	// (krunker_net_thread.odin); the game thread then must not answer again.
-	net_auto_replies: bool,
 }
 
 krunker_ws_set_status :: proc(client: ^Client, text: string) {
@@ -394,7 +384,7 @@ krunker_ws_send_internal :: proc(state: ^Krunker_WS_State, opcode: string, queue
 	packet := krunker_ws_message(opcode, &next_counter, state.q_index, state.team, state.class_index, state.secondary_index)
 	defer delete(packet)
 	sent: c.size_t
-	code := krunker_ws_raw_send(state, packet[:], &sent, opcode)
+	code := krunker_ws_raw_send(state, packet[:], &sent)
 	if code == .E_AGAIN && sent == 0 {
 		state.send_blocked = true
 		if queue_on_again { append(&state.pending, strings.clone(opcode)); kproto.network_log("ws-send", fmt.tprintf("would block; queued opcode=%s pending=%d", opcode, len(state.pending))) }
@@ -428,7 +418,7 @@ krunker_ws_send_chat :: proc(state: ^Krunker_WS_State, channel: i32, text: strin
 	packet := krunker_ws_chat_packet(state, channel, text, &next_counter)
 	defer delete(packet)
 	sent: c.size_t
-	code := krunker_ws_raw_send(state, packet[:], &sent, "ct")
+	code := krunker_ws_raw_send(state, packet[:], &sent)
 	if code != .E_OK || int(sent) != len(packet) {
 		kproto.network_log("chat", fmt.tprintf("send failed curl=%v sent=%d expected=%d", code, sent, len(packet)))
 		return false
@@ -532,9 +522,8 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				}
 			case "pi":
 				// SOCKET_PING is answered with the application PING (po), even
-				// while the player is choosing a team/class in the lobby. The
-				// network thread already answered it on arrival.
-				if !state.net_auto_replies && !send_control(state, "po") { state.connected = false; return }
+				// while the player is choosing a team/class in the lobby.
+				if !send_control(state, "po") { state.connected = false; return }
 			case "init":
 				state.spawned = false
 				kproto.network_log("world", fmt.tprintf("init map=%d mode=%d comp=%v ranked=%v", client.krunker_world.map_index, client.krunker_world.mode_index, client.krunker_world.is_comp, client.krunker_world.is_ranked))
@@ -581,9 +570,8 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 				if state.snapshots_received <= 3 || state.snapshots_received % 120 == 0 {
 					kproto.network_log("server-sync", fmt.tprintf("local snapshot=%d live_inputs_sent=%d; responding with v", state.snapshots_received, state.input_logged))
 				}
-				// Browser answers each local snapshot, including l(0), with PONG
-				// (the network thread already did, on arrival).
-				if !state.net_auto_replies && !send_control(state, "v") { state.connected = false; return }
+				// Browser answers each local snapshot, including l(0), with PONG.
+				if !send_control(state, "v") { state.connected = false; return }
 			case "dc", "error":
 				kproto.network_log("server-error", fmt.tprintf("opcode=%s args=%v", opcode, packet[1:]))
 				reason := "Server did not supply a text reason"
@@ -670,12 +658,8 @@ krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8,
 krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected || !state.spawned || !state.bootstrapped do return
-	// Fixed send rate (KRUNKER_SEND_SECONDS), regardless of the lobby's
-	// tickFrequency. At the input rate, each tick's command goes out the frame
-	// it is built: the tolerance matches the input loop's, so equal rates never
-	// slip a frame on f32 rounding.
-	state.send_seconds = KRUNKER_SEND_SECONDS
-	if state.send_elapsed + 1e-7 < krunker_send_seconds(state) || len(state.pending) > 0 || len(state.input_commands) == 0 do return
+	state.send_seconds = client.krunker_world.tick_frequency > 0 ? 1 / f64(client.krunker_world.tick_frequency) : KRUNKER_SEND_SECONDS
+	if state.send_elapsed < krunker_send_seconds(state) || len(state.pending) > 0 || len(state.input_commands) == 0 do return
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
@@ -685,7 +669,7 @@ krunker_ws_send_input :: proc(client: ^Client) {
 	if !ok { krunker_ws_set_status(client, "Could not encode live movement input."); state.connected = false; return }
 	defer delete(packet)
 	sent: c.size_t
-	code := krunker_ws_raw_send(state, packet[:], &sent, "q")
+	code := krunker_ws_raw_send(state, packet[:], &sent)
 	if code == .E_AGAIN && sent == 0 {
 		if !state.input_blocked { kproto.network_log("input", fmt.tprintf("q send would block: next_seq=%d unsent=%d", state.input_sequence, len(state.input_commands))) }
 		state.input_blocked = true
@@ -894,8 +878,6 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 	// Turn it off once connected so per-frame ws_send/ws_recv never route through the debug logger.
 	curl.easy_setopt(handle, .VERBOSE, c.long(0))
 	state.connected = true
-	// From here on the network thread owns the socket (krunker_net_thread.odin).
-	krunker_net_thread_start(state)
 	client_clear_players(client)
 	client.game.is_local = false
 	state.team = 0

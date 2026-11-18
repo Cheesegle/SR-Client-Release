@@ -9,8 +9,7 @@ import glfw "vendor:glfw"
 import shared "../shared"
 
 when ODIN_TEST {
-	// Disabled: failing on OpenGL and Vulkan since at least 2026-11-17 (not all 16 Undergrowth custom models get textures).
-	// Restore @(test) once fixed.
+	@(test)
 	scope_image_and_current_undergrowth_render :: proc(t: ^testing.T) {
 		// Keep the runner's logger: testing.expect fails a test by logging.
 		logger := context.logger

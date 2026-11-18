@@ -537,6 +537,13 @@ gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, width
 	gl_gpu_texture_update(texture, format, x, y, width, height, pixels)
 }
 
+// Rebuilds a mipmapped texture's smaller levels from level 0 after
+// gpu_texture_update replaced it whole (mod swaps). No-op without mips.
+gpu_texture_rebuild_mips :: proc(texture: Gpu_Texture) {
+	if g_gpu_backend == .Vulkan { vk_gpu_texture_rebuild_mips(texture); return }
+	gl_gpu_texture_rebuild_mips(texture)
+}
+
 gpu_transient_bind :: proc(layout: Gpu_Vertex_Layout, vertices: []u8, indices: []u32) -> bool {
 	if g_gpu_backend == .Vulkan { return vk_gpu_transient_bind(layout, vertices, indices) }
 	return gl_gpu_transient_bind(layout, vertices, indices)

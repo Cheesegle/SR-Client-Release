@@ -251,12 +251,11 @@ player_healthbars_render :: proc(client: ^Client) {
 		friendly := client.me.team != 0 && player.team == client.me.team
 		alpha := player_nameplate_display_alpha(player.nameplate_alpha)
 		if show_bars {
-			border := max(1, 2*unit)
 			progress := clamp(player.health/f32(player.max_health), 0, 1)
 			color := shared.hex_to_vec(i32(friendly ? colors.team : colors.enemy))
 			color.a *= alpha
-			ui_fill_rect(ui, {0, 0, 0, 0.85*alpha}, layout.bar_left-border, layout.bar_top-border, layout.bar_width+2*border, layout.bar_height+2*border)
-			ui_fill_rect(ui, {0.15, 0.15, 0.15, alpha}, layout.bar_left, layout.bar_top, layout.bar_width, layout.bar_height)
+			// Krunker: a rgba(0,0,0,0.4) backing the size of the bar, no border.
+			ui_fill_rect(ui, {0, 0, 0, 0.4*alpha}, layout.bar_left, layout.bar_top, layout.bar_width, layout.bar_height)
 			ui_fill_rect(ui, color, layout.bar_left, layout.bar_top, layout.bar_width*progress, layout.bar_height)
 		}
 		if show_names {

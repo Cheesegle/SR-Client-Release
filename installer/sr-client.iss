@@ -37,6 +37,14 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 Name: "{userprograms}\SR Client"; Filename: "{app}\sr_client.exe"; WorkingDir: "{app}"
 Name: "{userdesktop}\SR Client"; Filename: "{app}\sr_client.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
+[Registry]
+; srclient://game?action=host-comp&... tournament host links (src/client/host_link.odin),
+; for this user only, like the install itself. Removed on uninstall.
+Root: HKCU; Subkey: "Software\Classes\srclient"; ValueType: string; ValueName: ""; ValueData: "URL:SR Client"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\srclient"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\srclient\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\sr_client.exe"",0"
+Root: HKCU; Subkey: "Software\Classes\srclient\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\sr_client.exe"" ""%1"""
+
 [Run]
 Filename: "{app}\sr_client.exe"; WorkingDir: "{app}"; Description: "Start SR Client"; Flags: nowait postinstall skipifsilent
 

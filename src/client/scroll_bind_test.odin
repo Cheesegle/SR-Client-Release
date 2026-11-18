@@ -182,10 +182,10 @@ when ODIN_TEST {
 		for _ in 0..<60 { frame(&client, 1.0/60) }
 		if !testing.expect(t, client.me.on_ground, "the player settles on the floor") do return
 
-		// Several 360 Hz commands in one frame: only the first carries the jump.
+		// Several commands in one frame: only the first carries the jump.
 		client_scroll_event(&client, 0, -1, 5)
 		commands := frame(&client, 1.0/60)
-		testing.expect(t, len(commands) >= 5 && commands[0].jump && count_jumps(commands) == 1, "a 60 FPS frame's six commands hold Scroll for exactly one")
+		testing.expect(t, len(commands) >= 2 && commands[0].jump && count_jumps(commands) == 1, "a 60 FPS frame's commands hold Scroll for exactly one")
 		testing.expect(t, client.me.velocity.y > 0, "the predicted player jumps")
 		for _ in 0..<120 { if count_jumps(frame(&client, 1.0/60)) != 0 { testing.expect(t, false, "no auto-repeat") }; if client.me.on_ground { break } }
 		for _ in 0..<5 { frame(&client, 1.0/60) }

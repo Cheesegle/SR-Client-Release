@@ -116,6 +116,13 @@ import shared "../shared"
 		gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
 	}
 
+	gl_gpu_texture_rebuild_mips :: proc(texture: Gpu_Texture) {
+		if texture == 0 { return }
+		levels: i32
+		gl.GetTextureParameteriv(u32(texture), gl.TEXTURE_IMMUTABLE_LEVELS, &levels)
+		if levels > 1 { gl.GenerateTextureMipmap(u32(texture)) }
+	}
+
 	// Changes how the texture filters (wrap, comparison and mip selection are
 	// unchanged).
 	gl_gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {

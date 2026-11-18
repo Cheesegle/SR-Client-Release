@@ -22,6 +22,9 @@ Client_Settings :: struct {
 	menu_fps_limit: i32, // menuui.MENU_FPS_LIMITS; 0 (the default) is the monitor's refresh rate.
 	perf_overlay: bool, // The debug performance window (F3).
 	bindings: menuui.Bindings,
+	// False in files from before Krunker's Primary key (0.39): they get its
+	// defaults once (client_settings_load).
+	primary_key_default: bool,
 	hud: menuui.HUD_Settings,
 	visuals: menuui.Visual_Settings,
 	quality: menuui.Quality_Settings,
@@ -36,7 +39,7 @@ Client_Settings :: struct {
 }
 
 client_settings_defaults :: proc() -> Client_Settings {
-	return {version = 1, map_details_hidden_default = true, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hitmarker = menuui.DEFAULT_HITMARKER_SETTINGS, damage = menuui.DEFAULT_DAMAGE_SETTINGS}
+	return {version = 1, map_details_hidden_default = true, primary_key_default = true, fov = menuui.DEFAULT_FOV, sensitivity = 1, ads_sensitivity = 1, mouse_dpi = menuui.DEFAULT_MOUSE_DPI, bindings = menuui.default_bindings(), visuals = menuui.DEFAULT_VISUAL_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS, viewmodel = menuui.DEFAULT_VIEWMODEL_SETTINGS, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, hitmarker = menuui.DEFAULT_HITMARKER_SETTINGS, damage = menuui.DEFAULT_DAMAGE_SETTINGS}
 }
 
 // The menu draft for a missing settings file, which Settings > Reset restores:
@@ -87,9 +90,21 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 	if err != nil { return settings }
 	defer delete(data)
 	settings.map_details_hidden_default = false
+	settings.primary_key_default = false
 	if json.unmarshal(data, &settings) != nil || settings.version != 1 {
 		fmt.eprintln("[Settings] Invalid client preferences; using defaults.")
 		return client_settings_defaults()
+	}
+	// Before 0.39 SR had no Primary key and chat defaulted to Enter and T.
+	// Krunker's defaults are chatKey Enter and primKey T: a chat bind still at
+	// SR's old default moves T to Primary, and an unbound Primary takes T when
+	// no other action uses it. Done once; later changes are the player's.
+	if !settings.primary_key_default {
+		settings.primary_key_default = true
+		if settings.bindings[.CHAT] == {257, 'T'} { settings.bindings[.CHAT] = {257, 0} }
+		t_used := false
+		for pair in settings.bindings { if pair[0] == 'T' || pair[1] == 'T' { t_used = true } }
+		if settings.bindings[.PRIMARY] == {0, 0} && !t_used { settings.bindings[.PRIMARY] = {'T', 0} }
 	}
 	// Before 0.26 anti-aliasing was on/off (4x, next start).
 	if settings.hud.anti_alias {
@@ -104,7 +119,7 @@ client_settings_load :: proc(path: string = CLIENT_SETTINGS_PATH) -> Client_Sett
 }
 
 client_settings_snapshot :: proc(client: ^Client) -> Client_Settings {
-	return {version = 1, map_details_hidden_default = true, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
+	return {version = 1, map_details_hidden_default = true, primary_key_default = true, display_mode = i32(client.display_mode), resolution_index = client.resolution_index, monitor_index = client.monitor_index,
 		fullscreen_width = client.fullscreen_resolution.width, fullscreen_height = client.fullscreen_resolution.height,
 		fov = client.camera.fov * 180 / math.PI, sensitivity = client.sensitivity, mouse_dpi = client.mouse_dpi, show_fps = client.show_fps, perf_overlay = client.perf_overlay, vsync = client.vsync, opengl = client.opengl, menu_fps_limit = client.menu_fps_limit, bindings = client.bindings, hud = client.hud_settings,
 		ads_sensitivity = client.ads_sensitivity, advanced_sensitivity = client.advanced_sensitivity, invert_mouse = client.invert_mouse,

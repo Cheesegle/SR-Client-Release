@@ -1,5 +1,56 @@
 # Changelog
 
+## SR Client 0.40.0
+Everything since 0.25.0.
+
+**Hit registration**, each part checked against Krunker's own game code:
+- **Inputs sent byte-for-byte like the browser:** the same packet compression
+  and JavaScript rounding of look angles.
+- **Shot timing exactly like the browser:** the value that tells the server how
+  far back to rewind enemies is sent uncapped (the server clamps it), and a
+  zero is left out, as the browser does.
+- **Shots fire on the same input as the server:** weapon cooldowns end exactly
+  like Krunker's whole-millisecond server timers. Before, many shots fired one
+  input late, and on full auto SR showed less recoil kick than the server had.
+- **Recoil per input, before the shot,** like Krunker's server (it advanced per
+  screen frame, about 3% less during long sprays).
+- **Spread after strafing** like Krunker: server corrections no longer re-count
+  your movement spread.
+- **64-bit frame clock:** frame timing, enemy movement and shot timestamps no
+  longer get steppy after long sessions.
+- **Landing dip on the camera,** like Krunker.
+
+**Inputs per second** (Settings > Experimental): 240, 360 (default), 480, 720,
+900, 1000. These are real inputs per second: the browser's Network Rate 360
+sends up to 720 at high FPS, and 1000 is the most Krunker's protocol allows
+(1 ms per input). Applies right away, no restart. Up to 64 inputs go in one
+packet, so high rates never build a backlog.
+
+**Tournament auto-host links:** `srclient://game?action=host-comp&...` with the
+same parameters as Glorp's host link (mapId, teamSize, team1Name, team2Name,
+webhook, compRosterT1/T2 or team1Players/team2Players, spectators). The
+installer registers it; a link opened while SR Client runs is hosted by that
+window. The Host page has Krunker's Team Rosters, and custom team names now
+show in the lobby and scoreboard.
+
+**Primary key** (Krunker's primKey, default T): straight to your primary
+weapon. Chat is Enter only, as in Krunker. If your chat key was still SR's old
+default (Enter + T), T moves to Primary once; your own binds are kept.
+
+**Hardpoint:** Krunker's Capture marker with its clock, the Next marker in the
+last 15 s of a rotation, CONTESTED; Krunker's round countdown and messages and
+the spawn sound. Host game is a page and works from inside a lobby.
+
+**Renderer:** a reworked Vulkan renderer (about 4-8% more FPS and smoother
+worst-case frames on an RTX 5080), low-latency frame start, MSAA (Off to 8x),
+VRR cap for G-SYNC/FreeSync with V-Sync. Turning Vulkan Renderer off runs
+Classic (OpenGL, threads left to Windows, like 0.24).
+
+**Also:** health bars like Krunker's; switching mods replaces every texture.
+
+The reworked renderer, browser-exact input packets, recoil per input, frame
+clock and Hardpoint markers are by ho (Cheesegle).
+
 ## SR Client 0.25.0
 Everything from 0.24 stays.
 - **Vulkan renderer, on by default:** the game draws with Vulkan 1.3, with

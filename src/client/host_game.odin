@@ -196,6 +196,25 @@ host_custom_payload :: proc(settings: ^menuui.Host_Settings) -> [dynamic]byte {
 	num(&out, &count, "minimaps", 0)
 	flag(&out, &count, "limitClasses", on(settings, .LIMIT_CLASSES))
 	for limit, index in settings.class_limit { num(&out, &count, fmt.tprintf("classLim%d", index), f64(limit)) }
+	// Krunker's comp Team Rosters, after the settings: "teams" when either team
+	// has names, "specs" when there are spectators.
+	team1_names := menuui.host_roster_names(settings, .ROSTER1)
+	team2_names := menuui.host_roster_names(settings, .ROSTER2)
+	spec_names := menuui.host_roster_names(settings, .SPECTATORS)
+	pack_names :: proc(out: ^[dynamic]byte, names: []string) {
+		krunker_ws_pack_array(out, len(names))
+		for name in names { krunker_ws_pack_string(out, name) }
+	}
+	if len(team1_names) > 0 || len(team2_names) > 0 {
+		key(&out, &count, "teams")
+		krunker_ws_pack_array(&out, 2)
+		pack_names(&out, team1_names[:])
+		pack_names(&out, team2_names[:])
+	}
+	if len(spec_names) > 0 {
+		key(&out, &count, "specs")
+		pack_names(&out, spec_names[:])
+	}
 	out[9], out[10] = byte(count >> 8), byte(count) // after 0x94, "custom" (7 bytes), 0xDE
 	krunker_ws_pack_nil(&out)
 	host_pack_bool(&out, false)
@@ -208,7 +227,7 @@ host_send_custom :: proc(state: ^Krunker_WS_State, settings: ^menuui.Host_Settin
 	packet := krunker_ws_finish_packet(host_custom_payload(settings), "custom", &next_counter)
 	defer delete(packet)
 	sent: c.size_t
-	code := krunker_ws_raw_send(state, packet[:], &sent, "custom")
+	code := krunker_ws_raw_send(state, packet[:], &sent)
 	if code != .E_OK || int(sent) != len(packet) {
 		kproto.network_log("host", fmt.tprintf("custom send failed curl=%v sent=%d expected=%d", code, sent, len(packet)))
 		return false

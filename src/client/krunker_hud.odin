@@ -355,9 +355,8 @@ kh_weapons_render :: proc(client: ^Client) {
 	x := right - w
 	top := ui.height - 15*s - h
 	kh_box(ui, x, top, w, h, 6)
-	reload_timer := client.krunker.connected ? krunker_client_render_sample(client).reload_timer : me.reload_timer
-	if weapon.reload_time > 0 && client.game.config.reload_speed > 0 && reload_timer > 0 {
-		progress := clamp(1 - reload_timer/(weapon.reload_time*client.game.config.reload_speed), 0, 1)
+	if weapon.reload_time > 0 && client.game.config.reload_speed > 0 && me.reload_timer > 0 {
+		progress := clamp(1 - me.reload_timer/(weapon.reload_time*client.game.config.reload_speed), 0, 1)
 		ui_fill_rect(ui, shared.Vec4{1, 1, 1, 0.15}, x + 3*s, top + 3*s, (w - 6*s)*progress, h - 6*s)
 	}
 	line := top + 8*s

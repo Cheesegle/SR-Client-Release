@@ -55,6 +55,82 @@ host_setup_carries_the_players_choices :: proc(t: ^testing.T) {
 	testing.expect_value(t, find(entries, "nameTeam1").(string), "Reds")
 }
 
+// DrEvil's tournament link (Glorp's host-comp parameters) with SR's scheme.
+HOST_LINK_EXAMPLE :: "srclient://game?action=host-comp&mapId=Sandstorm&team1Name=lunarzthemoon&team2Name=motorlifefn&teamSize=2v2&team1Players=Lunarz%2C+realIy&team2Players=C6Z06%2C+Vxmpleo&comp=true&webhook=https%3A%2F%2Fkrunkeresports.com%2Fapi%2Fwebhook%2Fkrunker&compRosterT1=Lunarz%2C+realIy&compRosterT2=C6Z06%2C+Vxmpleo&spectators=Asokra%2C+bankloot"
+
+@(test)
+host_link_fills_the_comp_setup_like_krunkers_page :: proc(t: ^testing.T) {
+	settings := menuui.host_settings_default()
+	ok, problem := host_link_parse(HOST_LINK_EXAMPLE, &settings)
+	testing.expectf(t, ok, "the example link must parse: %s", problem)
+	testing.expect(t, settings.maps == {1}, "mapId=Sandstorm selects only Sandstorm")
+	testing.expect_value(t, settings.team_size, 1) // 2v2
+	testing.expect_value(t, menuui.host_text(&settings, .TEAM1), "lunarzthemoon")
+	testing.expect_value(t, menuui.host_text(&settings, .TEAM2), "motorlifefn")
+	testing.expect_value(t, menuui.host_text(&settings, .WEBHOOK), "https://krunkeresports.com/api/webhook/krunker")
+	testing.expect_value(t, menuui.host_text(&settings, .ROSTER1), "Lunarz, realIy")
+	testing.expect_value(t, menuui.host_text(&settings, .SPECTATORS), "Asokra, bankloot")
+
+	payload := host_custom_payload(&settings)
+	defer delete(payload)
+	messages, _, error_text := kproto.krunker_msgpack_decode_packet(append_counter(payload[:]))
+	testing.expect_value(t, error_text, "")
+	entries := messages[0].([]kproto.Krunker_Msgpack_Value)[1].([]kproto.Krunker_Msgpack_Map_Entry)
+	find :: proc(entries: []kproto.Krunker_Msgpack_Map_Entry, key: string) -> kproto.Krunker_Msgpack_Value {
+		for entry in entries { if name, ok := entry.key.(string); ok && name == key { return entry.value } }
+		return nil
+	}
+	testing.expect_value(t, find(entries, "maps").([]kproto.Krunker_Msgpack_Value)[0].(i64), 2)
+	testing.expect_value(t, find(entries, "tmSize").(i64), 1)
+	testing.expect_value(t, find(entries, "nameTeam1").(string), "lunarzthemoon")
+	testing.expect_value(t, find(entries, "webhook").(string), "https://krunkeresports.com/api/webhook/krunker")
+	// Krunker: teams = [team 1 names, team 2 names], specs = names; trimmed, after the settings.
+	teams := find(entries, "teams").([]kproto.Krunker_Msgpack_Value)
+	testing.expect_value(t, len(teams), 2)
+	t1 := teams[0].([]kproto.Krunker_Msgpack_Value)
+	t2 := teams[1].([]kproto.Krunker_Msgpack_Value)
+	testing.expect(t, len(t1) == 2 && t1[0].(string) == "Lunarz" && t1[1].(string) == "realIy", "team 1 roster split and trimmed")
+	testing.expect(t, len(t2) == 2 && t2[0].(string) == "C6Z06" && t2[1].(string) == "Vxmpleo", "team 2 roster split and trimmed")
+	specs := find(entries, "specs").([]kproto.Krunker_Msgpack_Value)
+	testing.expect(t, len(specs) == 2 && specs[0].(string) == "Asokra" && specs[1].(string) == "bankloot", "spectators split and trimmed")
+	last, _ := entries[len(entries) - 1].key.(string)
+	testing.expect_value(t, last, "specs")
+}
+
+@(test)
+host_link_rejects_what_it_cannot_host :: proc(t: ^testing.T) {
+	settings := menuui.host_settings_default()
+	ok, _ := host_link_parse("srclient://game?action=host-comp&mapId=Nowhere", &settings)
+	testing.expect(t, !ok, "a map outside the comp pool is refused")
+	ok, _ = host_link_parse("srclient://game?action=join&mapId=Burg", &settings)
+	testing.expect(t, !ok, "only host-comp is supported")
+	ok, _ = host_link_parse("srclient://game?action=host-comp&teamSize=5v5", &settings)
+	testing.expect(t, !ok, "team sizes stop at 4v4")
+	ok, _ = host_link_parse("srclient://game?action=host-comp&mapId=14&teamSize=4v4", &settings)
+	testing.expect(t, ok && settings.maps == {6} && settings.team_size == 3, "a numeric Krunker map id (14 = Site) works")
+	ok, _ = host_link_parse("SRCLIENT://game/?action=host-comp&mapId=eterno+simulator", &settings)
+	testing.expect(t, ok && settings.maps == {10}, "scheme case, a trailing slash and spaced map names are accepted")
+	testing.expect(t, host_link_is("srclient://x") && !host_link_is("glorp://game"), "only srclient:// links are taken")
+}
+
+// Krunker's init packet carries the custom game's config at index 7; its
+// browser reads the team names from config.nameTeam1 / nameTeam2.
+@(test)
+krunker_team_names_come_from_name_team_keys :: proc(t: ^testing.T) {
+	state: kproto.Krunker_World_State
+	defer kproto.krunker_world_reset(&state)
+	entries := []kproto.Krunker_Msgpack_Map_Entry{{key = "nameTeam1", value = "SR Test A"}, {key = "nameTeam2", value = "   "}}
+	packet := []kproto.Krunker_Msgpack_Value{"init", nil, nil, nil, nil, nil, nil, entries}
+	kproto.krunker_world_apply_game_config(&state, packet)
+	testing.expect_value(t, state.lobby_team_names[0], "SR Test A")
+	client: Client
+	client.krunker.connected = true
+	client.krunker_world = state
+	names := client_team_names(&client)
+	client.krunker_world = {}
+	testing.expect(t, names[0] == "SR Test A" && names[1] == "Bravo", "a blank name falls back to Krunker's team letter, as the browser does")
+}
+
 @(private = "file")
 append_counter :: proc(payload: []byte) -> []byte {
 	out := make([]byte, len(payload)+2, context.temp_allocator)

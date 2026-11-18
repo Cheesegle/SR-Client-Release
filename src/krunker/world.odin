@@ -152,6 +152,11 @@ Krunker_World_State :: struct {
 	// Recent hit confirmations (4) with their target, for the hit registration log.
 	hit_events: [16]Krunker_Hit_Event,
 	hit_event_next: int,
+	// Your last KILL_PLAYER packet as text (developer hit log compares the
+	// server's death-screen stats, e.g. shots fired, with what SR fired).
+	local_death_dump: [768]u8,
+	local_death_dump_len: int,
+	local_death_revision: u32,
 	// CHANGE_HEALTH drops of the local player with the attacker's x/z, for
 	// Krunker's hit indicators (browser JP).
 	damage_revision: u64,

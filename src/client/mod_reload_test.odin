@@ -50,8 +50,6 @@ test_png :: proc(path: string, size: i32) -> []byte {
 // same OpenGL texture id and same geometry, new contents, no restart.
 @(test)
 mods_apply_live_without_restart :: proc(t: ^testing.T) {
-	// Drives a raw OpenGL context; the Vulkan build's loaders need the Vulkan device.
-	when SR_VULKAN { return }
 	// Keep the runner's logger: testing.expect fails a test by logging.
 	logger := context.logger
 	context = runtime.default_context()

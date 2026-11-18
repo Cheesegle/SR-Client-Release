@@ -145,7 +145,7 @@ KRUNKER_BINDS := #partial [Binding_Action]Krunker_Bind{
 	.JUMP = {"jumpKey", 32, -1}, .CROUCH = {"crouchKey", 16, -1},
 	.AIM = {"aim1Key", 10003, 221}, .FIRE = {"shoot1Key", 10001, 220},
 	.RELOAD = {"reloadKey", 82, -1}, .INSPECT = {"inspKey", 88, -1},
-	.SECONDARY = {"swapKey", 69, -1}, .MELEE = {"meleeKey", 81, -1},
+	.PRIMARY = {"primKey", 84, -1}, .SECONDARY = {"swapKey", 69, -1}, .MELEE = {"meleeKey", 81, -1},
 }
 KRUNKER_MOVE_ACTIONS := [4]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT}
 KRUNKER_MOVE_DEFAULTS := [4]i64{87, 83, 65, 68}

@@ -104,15 +104,9 @@ when ODIN_TEST {
 		testing.expect(t, client.menu.page == .CLASSES && client.selected_class == 0 && client.krunker.class_index == 0 && client.selection_status == "Could not send class selection.",
 			"failed sends must preserve the old selection and keep the picker open")
 		client.krunker.q_index = 1
-		// Class 1 (Hunter) has a secondary choice, so it opens the loadout.
-		menu_apply_action(&client, {kind=.SELECT_CLASS,index=1}, class_selection_test_send)
-		testing.expect(t, client.menu.page == .LOADOUT && client.menu.loadout_parent == .CLASSES && client.menu.loadout_return_focus == 5678 && client.menu.return_focus == 1234 && client.selected_class == 1 && client.krunker.class_index == 1 && len(client.selection_status)==0,
-			"accepted class requests must open that class's loadout and retain the path back to its picker")
-		// Class 2 (Run N Gun) has no secondary: nothing to confirm, straight home.
-		client.menu.page = .CLASSES
 		menu_apply_action(&client, {kind=.SELECT_CLASS,index=2}, class_selection_test_send)
-		testing.expect(t, client.menu.page == .HOME && client.selected_class == 2 && client.krunker.class_index == 2,
-			"a class without a secondary choice must skip the loadout")
+		testing.expect(t, client.menu.page == .LOADOUT && client.menu.loadout_parent == .CLASSES && client.menu.loadout_return_focus == 5678 && client.menu.return_focus == 1234 && client.selected_class == 2 && client.krunker.class_index == 2 && len(client.selection_status)==0,
+			"accepted class requests must open that class's loadout and retain the path back to its picker")
 		testing.expect(t, !client.spawn_pending && !client.team_pending && !client.krunker_world.in_game, "class selection must not spawn or change teams")
 		view := menu_view(&client)
 		testing.expect(t, view.presentation == .STANDARD && len(menuui.play_reason(view)) == 0, "an automatic-team lobby must allow entry without a manual team")

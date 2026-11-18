@@ -1,6 +1,8 @@
 package main
 
 import "core:testing"
+import "core:strings"
+import shared "../shared"
 import "core:os"
 import "core:fmt"
 import "core:math"
@@ -173,5 +175,62 @@ when ODIN_TEST {
 		client_bound_input(held, &last_swap)
 		held[.SECONDARY] = true
 		testing.expect(t, client_bound_input(held, &last_swap).swap == 1, "releasing and pressing the key must allow another swap")
+		held[.SECONDARY] = false
+		client_bound_input(held, &last_swap)
+		held[.PRIMARY] = true
+		testing.expect(t, client_bound_input(held, &last_swap).swap == 3 && client_bound_input(held, &last_swap).swap == 0, "Krunker's Primary key sends wSwap 3, once per press")
+		testing.expect(t, menuui.default_bindings()[.PRIMARY] == {'T', 0} && menuui.default_bindings()[.CHAT] == {257, 0}, "Krunker defaults: primKey T, chatKey Enter only")
+	}
+
+	// Files from before the Primary key get Krunker's defaults once: chat at
+	// SR's old Enter+T moves T to Primary; a player's own later choice stays.
+	@(test)
+	older_settings_get_krunkers_primary_key_once :: proc(t: ^testing.T) {
+		path := "test-primary-migration.json"
+		defer os.remove(path)
+		old := client_settings_defaults()
+		old.bindings[.CHAT] = {257, 'T'}
+		old.bindings[.PRIMARY] = {0, 0}
+		data, _ := json.marshal(old)
+		text, _ := strings.replace_all(string(data), `,"primary_key_default":true`, "")
+		_ = os.write_entire_file(path, transmute([]byte)text)
+		loaded := client_settings_load(path)
+		testing.expect(t, loaded.bindings[.CHAT] == {257, 0} && loaded.bindings[.PRIMARY] == {'T', 0} && loaded.primary_key_default, "old default chat gives T to Primary")
+		// The player then unbinds Primary; that survives the next load.
+		loaded.bindings[.PRIMARY] = {0, 0}
+		again, _ := json.marshal(loaded)
+		_ = os.write_entire_file(path, again)
+		testing.expect(t, client_settings_load(path).bindings[.PRIMARY] == {0, 0}, "a later unbind is kept")
+		// A file where T is used elsewhere keeps it there.
+		taken := client_settings_defaults()
+		taken.bindings[.PRIMARY] = {0, 0}
+		taken.bindings[.INSPECT] = {'T', 0}
+		data2, _ := json.marshal(taken)
+		text2, _ := strings.replace_all(string(data2), `,"primary_key_default":true`, "")
+		_ = os.write_entire_file(path, transmute([]byte)text2)
+		moved := client_settings_load(path)
+		testing.expect(t, moved.bindings[.INSPECT] == {'T', 0} && moved.bindings[.PRIMARY] == {0, 0}, "T stays on the action the player gave it")
+	}
+
+	// Krunker's swapWeapon(player, ..., 0): code 3 goes to loadout slot 0 and is
+	// nothing when already there; code 4 is equipment, not the Primary key.
+	@(test)
+	primary_key_swaps_to_the_first_slot :: proc(t: ^testing.T) {
+		client: Client
+		map_inst: shared.Map
+		krunker_presentation_fixture(&client, &map_inst)
+		defer krunker_presentation_cleanup(&client)
+		player := client.me
+		shared.player_spawn(player, 4)
+		if !testing.expect(t, player.loadout_size >= 2, "the fixture class has a secondary") { return }
+		shared.player_swap_weapon(player, 1, false, false, false)
+		player.swap_timer = 0
+		press := shared.Input{delta = 0.003, move_dir = -1, swap = 3}
+		shared.player_proc_input(player, &press, false, false)
+		testing.expect_value(t, player.loadout_index, 0)
+		timer := player.swap_timer
+		again := shared.Input{delta = 0.003, move_dir = -1, swap = 3}
+		shared.player_proc_input(player, &again, false, false)
+		testing.expect(t, player.loadout_index == 0 && player.swap_timer <= timer, "Primary on the primary does not swap again")
 	}
 }

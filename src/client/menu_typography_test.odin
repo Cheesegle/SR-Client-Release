@@ -224,7 +224,7 @@ when ODIN_TEST {
 					for id in ([]string{"SettingsSidebar", "SettingsHeading", "SettingsPanel", "SettingsFooter", "SettingsSave", "SettingsCancel"}) {
 						box := clay.GetElementData(clay.ID(id)).boundingBox
 						testing.expectf(t, box.width > 0 && box.height > 0 && box.x >= overlay.x-1 && box.y >= overlay.y-1 && box.x+box.width <= overlay.x+overlay.width+1 && box.y+box.height <= overlay.y+overlay.height+1,
-							"settings section %s must fit at %v (box %v, overlay %v, scenario %v)", id, size, box, overlay, scenario)
+							"settings section %s must fit at %v", id, size)
 					}
 					for control in state.controls[:state.control_count] {
 						box := clay.GetElementData(control.id).boundingBox

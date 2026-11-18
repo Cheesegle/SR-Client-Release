@@ -125,6 +125,8 @@ when ODIN_TEST {
 	krunker_prediction_matches_transmission_across_frame_rates :: proc(t: ^testing.T) {
 		config := shared.config_load_gameplay()
 		defer shared.config_destroy_gameplay(config)
+		defer g_krunker_input_rate = KRUNKER_INPUT_RATE_DEFAULT
+		for input_rate in ([]i32{240, 360, 480, 720, 900, 1000}) {
 		baseline: shared.Vec3
 		for fps, rate_index in ([]int{50, 144, 700, 1500}) {
 			floor := shared.Object{active = true, collision_type = .BOX, position = {0, -1, 0}, scale = {10000, 1, 10000}}
@@ -132,6 +134,7 @@ when ODIN_TEST {
 			append(&map_inst.objects, &floor)
 			defer delete(map_inst.objects)
 			client: Client
+			client.hud_settings.input_rate = input_rate // Settings > Experimental
 			shared.game_configure(&client.game, &config.game, []^shared.Map{&map_inst}, nil, config.weapons, config.classes)
 			shared.game_init(&client.game, 0, 0, false)
 			defer shared.game_destroy(&client.game)
@@ -153,17 +156,16 @@ when ODIN_TEST {
 			elapsed: f64
 			last_ack: i32 = 12
 			transmitted_ms: i32
-			for elapsed < 1.40000001 {
-				delta := min(1/f64(fps), 1.40000001-elapsed)
+			for elapsed < 2.50000001 {
+				delta := min(1/f64(fps), 2.50000001-elapsed)
 				frame := shared.Input{delta = f32(delta), move_dir = 0, x_dir = 0.123456, y_dir = 0.713876}
 				pending_count := len(client.krunker.input_commands)
 				krunker_client_predict_input(&client, &frame)
 				for command in client.krunker.input_commands[pending_count:] {
-					// Whole ms on the wire: the command length rounded down or up.
-					command_ms := max(1, 1000.0 / f64(KRUNKER_INPUT_RATE))
-					delta_ms := f64(math.round(command.delta * 1000))
-					testing.expect(t, abs(f64(command.delta) * 1000 - delta_ms) < 0.0001 && (delta_ms == math.floor(command_ms) || delta_ms == math.ceil(command_ms)),
-						"commands must use wire-compatible whole-ms durations")
+					lo := f32(math.floor(krunker_input_seconds() * 1000)) / 1000
+					hi := f32(math.ceil(krunker_input_seconds() * 1000)) / 1000
+					testing.expect(t, command.delta == lo || command.delta == hi,
+						"commands must use wire-compatible whole-ms durations around the input interval")
 					transmitted_ms += i32(math.round(command.delta * 1000))
 				}
 				elapsed += delta
@@ -188,9 +190,8 @@ when ODIN_TEST {
 				}
 			}
 			for len(client.krunker.input_commands) > 0 { krunker_test_deliver_commands(t, &client, server) }
-			testing.expect(t, client.krunker.input_sequence == 13 + i32(math.round(1.4 * f64(KRUNKER_INPUT_RATE))),
-				"1.4 seconds must produce 1.4 * KRUNKER_INPUT_RATE unique commands at every display rate")
-			testing.expect(t, transmitted_ms == 1400,
+			testing.expect(t, client.krunker.input_sequence == 13 + i32(math.round(2.5 * f64(g_krunker_input_rate))), "2.5 seconds must produce 2.5 * input-rate unique commands at every display rate")
+			testing.expect(t, transmitted_ms == 2500,
 				"fractional command durations must preserve elapsed time without movement or cooldown speedup")
 			testing.expect(t, abs(client.me.position.x-server.position.x) < 0.0001 && abs(client.me.position.z-server.position.z) < 0.0001,
 				"local prediction must match the peer that processed the actual wire commands")
@@ -199,6 +200,7 @@ when ODIN_TEST {
 				"movement speed and travel must be independent of rendering FPS")
 			testing.expect(t, client.me.direction == (shared.Vec2{0.123456, 0.713876}), "sampling must not quantize the rendered mouse look")
 		}
+}
 	}
 
 	@(test)
@@ -288,8 +290,9 @@ when ODIN_TEST {
 		frame := shared.Input{delta = 0.001, move_dir = 0, swap = 2}
 		krunker_client_predict_input(&client, &frame)
 		frame.swap = 0
-		for _ in 0..<20 { krunker_client_predict_input(&client, &frame) }
-		if !testing.expect(t, len(client.krunker.input_commands) == KRUNKER_INPUT_RATE * 21 / 1000, "21 ms of render frames must accumulate into 21 ms worth of commands") { return }
+		frames := int(math.ceil(7 * krunker_input_seconds() * 1000)) - 1
+		for _ in 0..<frames { krunker_client_predict_input(&client, &frame) }
+		if !testing.expect(t, len(client.krunker.input_commands) == 7, "render frames must accumulate into one command per input interval") { return }
 		testing.expect(t, client.krunker.input_commands[0].swap == 2 && client.krunker.input_commands[1].swap == 0 && client.me.weapon.melee,
 			"a swap pressed between ticks must reach both prediction and the outgoing queue exactly once")
 		frame.x_dir, frame.y_dir = 0.2, 0.4
@@ -348,39 +351,5 @@ when ODIN_TEST {
 		fill(&client, 0, MAX_PREDICTED_INPUTS + 3)
 		client_cap_predicted_inputs(&client, MAX_PREDICTED_INPUTS)
 		testing.expect(t, len(client.predicted_inputs) == MAX_PREDICTED_INPUTS && client.predicted_inputs[0].seq == 3, "an overfull history must keep the newest commands")
-	}
-	// Disabled: covers input merging (krunker_client_merge_inputs, input_merged),
-	// which is not implemented yet. Enable together with it.
-	when false {
-		@(test)
-		merged_inputs_send_one_command_per_step :: proc(t: ^testing.T) {
-			client: Client
-			defer delete(client.predicted_inputs)
-			defer delete(client.krunker.input_commands)
-			state := &client.krunker
-			// 14 commands of 3 ms, the 5th shooting and the 2nd swapping: 33 ms fits
-			// the first 11, the other 3 stay queued and renumbered behind it.
-			for i in 0 ..< 14 {
-				command := shared.Input{seq = i32(40+i), delta = 0.003, move_dir = i32(i % 8), y_dir = f32(i)/10, shoot = i == 4, swap = i == 1 ? 2 : 0}
-				if i == 4 { command.krunker_shot_timed, command.krunker_shot_time = true, 12.5 }
-				append(&state.input_commands, command)
-				append(&client.predicted_inputs, command)
-			}
-			state.input_sequence = 54
-			testing.expect(t, krunker_client_unmerged_ms(state) == 42)
-			testing.expect(t, krunker_client_merge_inputs(&client, 33))
-			merged := state.input_commands[0]
-			testing.expect(t, state.input_merged == 1 && len(state.input_commands) == 4 && len(client.predicted_inputs) == 4, "eleven commands must become one in the queue and the history")
-			testing.expect(t, merged.seq == 40 && krunker_command_ms(merged) == 33 && merged.move_dir == 10 % 8 && abs(merged.y_dir-1.0) < 0.0001,
-				"the merged command keeps the first sequence, the summed duration and the latest held state")
-			testing.expect(t, merged.shoot && merged.swap == 2 && merged.krunker_shot_timed && merged.krunker_shot_time == 12.5, "momentary actions inside the step must survive the merge")
-			testing.expect(t, client.predicted_inputs[0] == merged && state.input_commands[1].seq == 41 && client.predicted_inputs[3].seq == 43 && state.input_sequence == 44,
-				"later sequence numbers must close up behind the merged command")
-			testing.expect(t, krunker_client_unmerged_ms(state) == 9)
-			packet, ok := krunker_ws_encode_input(state, nil, state.input_merged)
-			defer delete(packet)
-			decoded := krunker_test_decode_commands(t, packet)
-			testing.expect(t, ok && len(decoded) == 1, "q must carry exactly the merged command")
-		}
 	}
 }

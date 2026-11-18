@@ -631,11 +631,13 @@ test_graphics_menu :: proc() -> bool {
 	box := clay.GetElementData(clay.ID("ResetVisuals")).boundingBox
 	panel := clay.GetElementData(clay.ID("SettingsPanel")).boundingBox
 	if state.focus != clay.ID("ResetVisuals").id || box.y < panel.y-1 || box.y+box.height > panel.y+panel.height+1 { fmt.println("Reset visuals must remain reachable by keyboard"); return false }
-	// Night mode and its strength live on Experimental.
+	// Night mode and its strength live on Experimental, after Network thread.
 	menu_test_click(&state, view, clay.ID("SettingsTab", u32(menuui.Settings_Tab.EXPERIMENTAL)))
 	menu_test_frame(&state, view, {})
-	state.focus = clay.ID("NightMode", 2).id
+	state.focus = clay.ID("NetworkThread", 11).id
+	menu_test_frame(&state, view, {tab=true})
 	menu_test_frame(&state, view, {})
+	if state.focus != clay.ID("NightMode", 2).id { fmt.println("Night mode must follow Network thread"); return false }
 	menu_test_frame(&state, view, {enter=true})
 	menu_test_frame(&state, view, {})
 	menu_test_frame(&state, view, {tab=true})

@@ -129,7 +129,7 @@ when ODIN_TEST {
 			visuals = menuui.DEFAULT_VISUAL_SETTINGS, viewmodel = {values = #partial {.WEAPON_FOV = 95, .BOBBING = 0.7, .LEANING = 0.6, .OFFSET_X = 1, .OFFSET_Y = 1.3, .OFFSET_Z = 1, .ADS_OFFSET_Y = 1, .SWAP_Y = 1, .RELOAD_Y = 1, .ADS_FOV_POWER = 1},
 			toggles = #partial {.AIM_ANIMATION = true, .SHOW_HANDS = true, .SHOW_PRIMARY = true, .SHOW_SECONDARY = true, .SHOW_MELEE = true}}, crosshair = menuui.DEFAULT_CROSSHAIR_SETTINGS, quality = menuui.DEFAULT_QUALITY_SETTINGS})
 		defer delete(defaults)
-		testing.expect_value(t, defaults, `{"crosshairSho":5,"showKillC":true,"showDeaths":true,"controls":{"jumpKey":-1,"crouchKey":-1,"reloadKey":-1,"swapKey":-1,"meleeKey":-1,"inspKey":-1}}`)
+		testing.expect_value(t, defaults, `{"crosshairSho":5,"showKillC":true,"showDeaths":true,"controls":{"jumpKey":-1,"crouchKey":-1,"reloadKey":-1,"primKey":-1,"swapKey":-1,"meleeKey":-1,"inspKey":-1}}`)
 	}
 
 	@(test)

@@ -16,7 +16,7 @@ settings_bindings :: proc(state: ^State) {
 	// Display inspect with weapons and the leaderboard under Interface, as in
 	// Krunker's controls list, while preserving saved enum values. The debug
 	// overlay toggle sits beside the leaderboard.
-	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .SECONDARY, .MELEE, .LEADERBOARD, .CHAT, .DEBUG_OVERLAY, .MENU, .FULLSCREEN}) {
+	for action in ([len(Binding_Action)]Binding_Action{.FORWARD, .BACKWARD, .LEFT, .RIGHT, .JUMP, .CROUCH, .AIM, .FIRE, .RELOAD, .INSPECT, .PRIMARY, .SECONDARY, .MELEE, .LEADERBOARD, .CHAT, .DEBUG_OVERLAY, .MENU, .FULLSCREEN}) {
 		if action == .FORWARD { settings_section(state, "Move") }
 		if action == .AIM { settings_section(state, "Weapon") }
 		if action == .LEADERBOARD { settings_section(state, "Interface") }
@@ -99,6 +99,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .MENU_FPS_LIMIT: labels, anchor, action = MENU_FPS_LIMIT_LABELS[:], "MenuFpsLimit", .MENU_FPS_LIMIT
 	case .GAME_FPS_LIMIT: labels, anchor, action = GAME_FPS_LIMIT_LABELS[:], "GameFpsLimit", .GAME_FPS_LIMIT
 	case .VRR_CAP: labels, anchor, action = VRR_CAP_LABELS[:], "VrrCap", .VRR_CAP
+	case .INPUT_RATE: labels, anchor, action = INPUT_RATE_LABELS[:], "InputRate", .INPUT_RATE
 	case .MSAA:
 		count := 1
 		for level in MSAA_LEVELS[1:] { if level <= view.max_msaa { count += 1 } }

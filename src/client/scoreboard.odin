@@ -130,7 +130,8 @@ client_team_names :: proc(client: ^Client) -> [2]string {
 	if client.game.config.team1_name != "Team 1" && len(client.game.config.team1_name) > 0 { names[0] = client.game.config.team1_name }
 	if client.game.config.team2_name != "Team 2" && len(client.game.config.team2_name) > 0 { names[1] = client.game.config.team2_name }
 	if client.krunker.connected {
-		for name, i in client.krunker_world.lobby_team_names { if len(name) > 0 { names[i] = name } }
+		// Krunker: the configured name unless it is only whitespace.
+		for name, i in client.krunker_world.lobby_team_names { if len(strings.trim_space(name)) > 0 { names[i] = name } }
 	}
 	if client.net.connected { names = client.net.lobby.team_names }
 	return names

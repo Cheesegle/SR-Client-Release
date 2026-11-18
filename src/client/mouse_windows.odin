@@ -302,10 +302,7 @@ raw_input_thread_window_proc :: proc "system" (hwnd: win.HWND, message: win.UINT
 }
 
 raw_input_thread_main :: proc(data: rawptr) {
-	// Its own core (cpu_affinity.odin), at time-critical priority: it sleeps
-	// in GetMessageW until a report arrives, then must run at once.
-	cpu_pin_current_thread(.Input)
-	cpu_raise_current_thread_priority()
+	cpu_pin_current_thread_off_game_core()
 	t := (^Raw_Input_Thread)(data)
 	instance := win.HINSTANCE(win.GetModuleHandleW(nil))
 	class := win.WNDCLASSEXW{

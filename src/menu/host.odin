@@ -1,6 +1,7 @@
 package menu
 
 import "core:fmt"
+import "core:strings"
 import clay "../third_party/clay"
 
 // Host game: Krunker's Comp Server Setup (Select, Game Settings, Advanced,
@@ -54,8 +55,11 @@ HOST_TOGGLES := [Host_Toggle]Host_Toggle_Info{
 	.LIMIT_CLASSES  = {"limitClasses", "Limit Classes"},
 }
 
-Host_Text :: enum { TEAM1, TEAM2, WEBHOOK }
-HOST_TEXT_LABELS := [Host_Text]string{.TEAM1 = "Team 1 Name", .TEAM2 = "Team 2 Name", .WEBHOOK = "Discord Webhook"}
+// ROSTER1, ROSTER2, SPECTATORS: Krunker's comp "Team Rosters" (compRosterT1,
+// compRosterT2, compRosterSpecs): comma-separated names, empty on every open.
+Host_Text :: enum { TEAM1, TEAM2, WEBHOOK, ROSTER1, ROSTER2, SPECTATORS }
+HOST_TEXT_LABELS := [Host_Text]string{.TEAM1 = "Team 1 Name", .TEAM2 = "Team 2 Name", .WEBHOOK = "Discord Webhook",
+	.ROSTER1 = "Team 1 Players", .ROSTER2 = "Team 2 Players", .SPECTATORS = "Spectators"}
 HOST_TEXT_MAX :: 200
 
 Host_Settings :: struct {
@@ -112,7 +116,7 @@ host_text_input :: proc(state: ^State, input: Input) {
 	length := &state.host.text_length[field]
 	if input.clear_text { length^ = 0 }
 	if input.backspace && !state.previous.backspace && length^ > 0 { length^ -= 1 }
-	limit := field == .WEBHOOK ? HOST_TEXT_MAX : 24
+	limit := field == .TEAM1 || field == .TEAM2 ? 24 : HOST_TEXT_MAX
 	for c in input.text {
 		if c >= 32 && c < 127 && c != '`' && length^ < limit {
 			state.host.text[field][length^] = u8(c); length^ += 1
@@ -125,6 +129,8 @@ host_typing :: proc(state: ^State) -> bool { _, ok := host_text_focused(state); 
 host_open :: proc(state: ^State) {
 	if state.page == .HOME { state.return_focus = state.focus }
 	state.page, state.host_tab, state.pressed = .HOST, .SELECT, 0
+	// Krunker builds its host window fresh each time: the rosters start empty.
+	for field in ([]Host_Text{.ROSTER1, .ROSTER2, .SPECTATORS}) { state.host.text_length[field] = 0 }
 	state.focus = clay.ID("HostTab", u32(Host_Tab.SELECT)).id
 }
 
@@ -302,7 +308,8 @@ host_text_row :: proc(state: ^State, field: Host_Text) {
 			border = {color = focused ? SETTINGS_ORANGE : SETTINGS_LINE, width = clay.BorderOutside(focused ? 2 : 0)},
 			clip = {horizontal = true},
 		}) {
-			shown := focused ? fmt.tprintf("%s|", value) : len(value) == 0 && field == .WEBHOOK ? "Optional" : value
+			placeholder := field == .WEBHOOK ? "Optional" : field >= .ROSTER1 ? "<name0>, <name1>..." : ""
+			shown := focused ? fmt.tprintf("%s|", value) : len(value) == 0 ? placeholder : value
 			text(shown, 20, s, len(value) == 0 && !focused ? SETTINGS_MUTED : SETTINGS_DARK)
 		}
 	}
@@ -349,4 +356,19 @@ host_advanced :: proc(state: ^State, view: View) {
 			settings_slider(state, name, fmt.tprintf("HostClass%d", index), f32(state.host.class_limit[index]), 0, 20, {kind = .HOST_CLASS_LIMIT, index = i32(index)}, step = 1)
 		}
 	}
+	// Krunker's comp setup ends with Team Rosters.
+	settings_section_label("Team Rosters", s)
+	host_text_row(state, .ROSTER1)
+	host_text_row(state, .ROSTER2)
+	host_text_row(state, .SPECTATORS)
+}
+
+// Krunker's roster parse: split on commas, trim, drop empty names.
+host_roster_names :: proc(settings: ^Host_Settings, field: Host_Text, allocator := context.temp_allocator) -> [dynamic]string {
+	names := make([dynamic]string, allocator)
+	for part in strings.split(host_text(settings, field), ",", allocator) {
+		name := strings.trim_space(part)
+		if len(name) > 0 { append(&names, name) }
+	}
+	return names
 }

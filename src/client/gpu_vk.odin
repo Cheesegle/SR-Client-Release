@@ -889,8 +889,7 @@ vk_present_thread_hand_off :: proc(job: Vk_Present_Job) {
 
 @(private = "file")
 vk_present_thread_main :: proc() {
-	cpu_pin_current_thread(.Helper) // off the game, network and mouse cores
-	cpu_raise_current_thread_priority()
+	cpu_pin_current_thread_off_game_core() // this branch has no per-role pinning
 	pt := &g_vk_present_thread
 	sync.mutex_lock(&pt.lock)
 	for {
@@ -1949,6 +1948,16 @@ vk_gpu_texture_update :: proc(texture: Gpu_Texture, format: Gpu_Format, x, y, wi
 	vk_upload_end(&up)
 }
 
+vk_gpu_texture_rebuild_mips :: proc(texture: Gpu_Texture) {
+	t := vk_table_get(&g_vk.textures, u32(texture))
+	if t == nil || t.image.mips <= 1 { return }
+	up, _, _, _ := vk_upload_begin(0)
+	vk_transition(up.cmd, &t.image, 0, t.image.layers, .TRANSFER_DST_OPTIMAL)
+	vk_generate_mips(up.cmd, &t.image)
+	vk_transition(up.cmd, &t.image, 0, t.image.layers, .SHADER_READ_ONLY_OPTIMAL)
+	vk_upload_end(&up)
+}
+
 vk_gpu_texture_set_filter :: proc(texture: Gpu_Texture, filter: Gpu_Filter) {
 	t := vk_table_get(&g_vk.textures, u32(texture))
 	if t == nil || t.desc.filter == filter { return }
@@ -2427,7 +2436,7 @@ vk_pipelines_precompile :: proc(keys: []Vk_Pipeline_Key) {
 	workers := make([]^thread.Thread, len(jobs), context.temp_allocator)
 	for &job, i in jobs {
 		workers[i] = thread.create_and_start_with_poly_data(&job, proc(job: ^Job) {
-			cpu_pin_current_thread(.Helper)
+			cpu_pin_current_thread_off_game_core()
 			job.pipeline = vk_pipeline_build(job.key)
 		}, name = "vulkan pipeline")
 	}

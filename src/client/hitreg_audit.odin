@@ -44,6 +44,12 @@ Hitreg_Shot :: struct {
 	target_speed: f32,
 	target_step: f32,
 	hits_seen:   int, // hit_event_next at shot time, to match confirmations
+	// SR's own state at the shot (the server's must match for the same bullet).
+	spread, recoil_anim, recoil_anim_y: f32,
+	ammo_after:  u32,
+	since_last:  f64, // seconds since SR's previous shot
+	input_rate:  int, // Settings > Experimental > Inputs per second at the shot
+	ping:        i32, // Krunker's last reported ping (ms) at the shot
 }
 
 Hitreg_Audit :: struct {
@@ -53,6 +59,9 @@ Hitreg_Audit :: struct {
 	last_hit_event: int,
 	started:     bool,
 	shots, predicted, confirmed, agreed: int,
+	life_shots:  int, // shots SR fired since your last death
+	death_seen:  u32,
+	last_shot_time: f64,
 }
 g_hitreg: Hitreg_Audit
 
@@ -135,7 +144,14 @@ hitreg_audit_shot :: proc(client: ^Client, now: f64) {
 	me := client.me
 	if me == nil || me.weapon == nil || me.weapon.melee || !client.krunker.connected { return }
 	world := &client.krunker_world
+	g_hitreg.life_shots += 1
 	shot := Hitreg_Shot{time = now, weapon = me.weapon.name, aimed_sid = -1, nearest_sid = -1, miss = 1e9, hits_seen = world.hit_event_next}
+	shot.spread, shot.recoil_anim, shot.recoil_anim_y = me.spread, me.recoil_anim, me.recoil_anim_y
+	shot.ammo_after = me.ammo[me.loadout_index]
+	shot.since_last = g_hitreg.last_shot_time > 0 ? now - g_hitreg.last_shot_time : -1
+	g_hitreg.last_shot_time = now
+	shot.input_rate = g_krunker_input_rate
+	shot.ping = client.krunker_world.has_ping ? client.krunker_world.ping : -1
 	for &c in shot.offsets { c = '.' }
 	range := me.weapon.range > 0 ? me.weapon.range : 1000
 	origin := shared.Vec3{me.position.x, me.position.y + me.height - shared.GAME_CONSTANTS.camera_height, me.position.z}
@@ -199,9 +215,29 @@ hitreg_audit_shot :: proc(client: ^Client, now: f64) {
 // Every frame while connected: resolves shots older than the confirm window.
 hitreg_audit_tick :: proc(client: ^Client, now: f64) {
 	when !HITREG_AUDIT { return }
+	world := &client.krunker_world
+	if world.local_death_revision != g_hitreg.death_seen {
+		g_hitreg.death_seen = world.local_death_revision
+		hitreg_audit_resolve(client, now, true) // shots of this life first
+		fmt.sbprintf(&g_hitreg.lines, "# death t=%.3f sr_shots_this_life=%d server_kill_packet=%s\n", now, g_hitreg.life_shots, string(world.local_death_dump[:world.local_death_dump_len]))
+		g_hitreg.life_shots = 0
+	}
 	if g_hitreg.count == 0 { return }
 	if now - g_hitreg.pending[0].time < HITREG_CONFIRM_WINDOW { return }
 	hitreg_audit_resolve(client, now, false)
+}
+
+// True when a later waiting shot was fired closer to (event time - round trip)
+// than this one, so the confirmation is most likely that shot's.
+hitreg_event_fits_later_shot :: proc(world: ^kproto.Krunker_World_State, event_time, shot_time: f64, index: int) -> bool {
+	rtt := world.has_ping && world.ping > 0 ? f64(world.ping) / 1000 : 0.1
+	expected := event_time - rtt - 0.02 // plus about half a server send interval
+	for k in index + 1 ..< g_hitreg.count {
+		later := g_hitreg.pending[k].time
+		if later > event_time - 0.5 * rtt { break } // too recent: a hit needs at least a round trip, take half as the floor
+		if abs(later - expected) < abs(shot_time - expected) { return true }
+	}
+	return false
 }
 
 @(private = "file")
@@ -221,6 +257,11 @@ hitreg_audit_resolve :: proc(client: ^Client, now: f64, all: bool) {
 		for j in 0 ..< len(world.hit_events) {
 			event := world.hit_events[j]
 			if event.time >= shot.time - 0.001 && event.time - shot.time <= HITREG_CONFIRM_WINDOW && event.sid >= 0 {
+				// A confirmation arrives about one round trip after its shot. With
+				// shots closer together than the window (a 0.45 s Desert Eagle, any
+				// automatic), the oldest waiting shot must not take a later shot's
+				// confirmation: leave it to the shot whose time fits better.
+				if hitreg_event_fits_later_shot(world, event.time, shot.time, i) { continue }
 				server_sid, server_head = event.sid, event.headshot
 				world.hit_events[j].sid = -1 // one confirmation per shot
 				break
@@ -231,13 +272,13 @@ hitreg_audit_resolve :: proc(client: ^Client, now: f64, all: bool) {
 		if aimed { g_hitreg.predicted += 1 }
 		if server_sid >= 0 { g_hitreg.confirmed += 1 }
 		if aimed == (server_sid >= 0) { g_hitreg.agreed += 1 }
-		fmt.sbprintf(&g_hitreg.lines, "t=%.3f %s aimed=%s fired=%s server=%s target=%d moving=%v speed=%.3f step=%.2f miss=%.2f offsets=%s\n",
+		fmt.sbprintf(&g_hitreg.lines, "t=%.3f %s aimed=%s fired=%s server=%s target=%d moving=%v speed=%.3f step=%.2f miss=%.2f offsets=%s gap=%.3f ammo=%d spread=%.2f recoil=%.5f recoil_y=%.5f rate=%d ping=%d\n",
 			shot.time, shot.weapon,
 			aimed ? fmt.tprintf("%d%s", shot.aimed_sid, shot.aimed_part == .HEAD ? "H" : "B") : "-",
 			shot.fired_sid >= 0 ? fmt.tprintf("%d%c", shot.fired_sid, rune(shot.fired)) : "-",
 			server_sid >= 0 ? fmt.tprintf("%d%s", server_sid, server_head ? "H" : "B") : "-",
 			aimed ? shot.aimed_sid : shot.nearest_sid, shot.moving, shot.target_speed, shot.target_step,
-			shot.miss < 1e8 ? shot.miss : -1, string(shot.offsets[:]))
+			shot.miss < 1e8 ? shot.miss : -1, string(shot.offsets[:]), shot.since_last, shot.ammo_after, shot.spread, shot.recoil_anim, shot.recoil_anim_y, shot.input_rate, shot.ping)
 		resolved += 1
 	}
 	copy(g_hitreg.pending[:], g_hitreg.pending[resolved:g_hitreg.count])
