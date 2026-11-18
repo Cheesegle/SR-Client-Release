@@ -59,7 +59,14 @@ Krunker_WS_State :: struct {
 	// INPUT_FAILED.
 	input_wire: kproto.Krunker_Input_Wire,
 	input_swap: u8,
+	// Presses seen on display frames since the last physics tick, so a tap
+	// shorter than a physics tick still reaches the next command.
+	latched_jump, latched_shoot, latched_reload, latched_crouch, latched_scope: bool,
+	latched_move: bool, latched_move_dir: i32, // last pressed direction this tick
 	command_direction: shared.Vec2,
+	// Aim the queued commands carry (wire-rounded pitch, yaw); see
+	// KRUNKER_AIM_PER_PACKET.
+	aim_anchor: shared.Vec2,
 	render_previous, render_current: Krunker_Render_Sample,
 	render_sample_ready: bool,
 	prediction_corrections: int,
@@ -656,8 +663,12 @@ krunker_ws_input_sent :: proc(state: ^Krunker_WS_State, count: int, counter: u8,
 krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected || !state.spawned || !state.bootstrapped do return
-	state.send_seconds = client.krunker_world.tick_frequency > 0 ? 1 / f64(client.krunker_world.tick_frequency) : KRUNKER_SEND_SECONDS
-	if state.send_elapsed < krunker_send_seconds(state) || len(state.pending) > 0 || len(state.input_commands) == 0 do return
+	// Fixed send rate (KRUNKER_SEND_SECONDS), regardless of the lobby's
+	// tickFrequency. At the input rate, each tick's command goes out the frame
+	// it is built: the tolerance matches the input loop's, so equal rates never
+	// slip a frame on f32 rounding.
+	state.send_seconds = KRUNKER_SEND_SECONDS
+	if state.send_elapsed + 1e-7 < krunker_send_seconds(state) || len(state.pending) > 0 || len(state.input_commands) == 0 do return
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
