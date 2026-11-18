@@ -7,7 +7,7 @@ import kproto "../krunker"
 import glfw "vendor:glfw"
 
 // Sample independently of rendering and sending; wire durations use whole ms.
-KRUNKER_INPUT_RATE :: 360
+KRUNKER_INPUT_RATE :: 720
 KRUNKER_INPUT_SECONDS :: 1.0 / KRUNKER_INPUT_RATE
 KRUNKER_SEND_SECONDS :: 1.0 / 30.0
 KRUNKER_MAX_PREDICTED_INPUTS :: 2 * KRUNKER_INPUT_RATE
