@@ -195,3 +195,11 @@ cpu_pinning_reset :: proc() {
 	SetProcessDefaultCpuSets(win.GetCurrentProcess(), nil, 0)
 	g_cpu_pinning = {}
 }
+
+// Ticks per second of the clock Vulkan calls QUERY_PERFORMANCE_COUNTER (the
+// latency probe in gpu_vk.odin converts calibrated timestamps with it).
+cpu_clock_frequency :: proc() -> i64 {
+	freq: win.LARGE_INTEGER
+	win.QueryPerformanceFrequency(&freq)
+	return i64(freq)
+}

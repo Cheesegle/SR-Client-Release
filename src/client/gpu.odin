@@ -326,6 +326,13 @@ gpu_frame_begin :: proc() {
 	gl_gpu_frame_begin()
 }
 
+// Between frames, before input is read: how many seconds the next frame
+// should wait to start (Vulkan's low-latency pacing; 0 on OpenGL).
+gpu_frame_ready_delay :: proc() -> f64 {
+	if g_gpu_backend == .Vulkan { return vk_gpu_frame_ready_delay() }
+	return 0
+}
+
 gpu_frame_end :: proc() {
 	if g_gpu_backend == .Vulkan { vk_gpu_frame_end(); return }
 	gl_gpu_frame_end()

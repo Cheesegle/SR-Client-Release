@@ -360,6 +360,24 @@ client_pace_idle_frame :: proc(client: ^Client, frame_start, interval: f64) {
 	}
 }
 
+// Low latency: when the GPU is the bottleneck, the next frame starts (and
+// reads input) only as early as it must to keep the GPU busy
+// (gpu_frame_ready_delay), not a whole GPU frame early.
+client_wait_frame_ready :: proc(client: ^Client) {
+	delay := gpu_frame_ready_delay()
+	if delay <= 0 { return }
+	deadline := glfw.GetTime() + delay
+	for !bool(glfw.WindowShouldClose(client.window)) {
+		remaining := deadline - glfw.GetTime()
+		if remaining <= 0 { return }
+		if remaining > IDLE_FRAME_SPIN_MARGIN {
+			client_wait_events(remaining - IDLE_FRAME_SPIN_MARGIN)
+		} else {
+			client_timer_yield()
+		}
+	}
+}
+
 MAX_PREDICTED_INPUTS :: 256
 
 client_window_resolution :: proc(client: ^Client) -> Display_Resolution {
@@ -1976,6 +1994,7 @@ main :: proc() {
 		// the newest keyboard state (mouse motion is read in client_tick).
 		phase_mark(.IDLE_WAIT)
 		client_pace_idle_frame(client, frame_start, client_idle_frame_interval(client))
+		client_wait_frame_ready(client)
 		events_start := glfw.GetTime()
 		phase_mark(.POLL_EVENTS)
 		client_poll_events()

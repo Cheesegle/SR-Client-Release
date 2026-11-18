@@ -269,6 +269,10 @@ Vk_Frame :: struct {
 	serial:    u64,          // which recording this slot holds
 	submitted: bool,
 	presenting: bool,        // handed to the present thread, which submits it
+	// Low-latency pacing (vk_gpu_frame_ready_delay): when the frame's recording
+	// was meant to start and when it reached the queue, time.Tick nanoseconds.
+	ll_start_ns: f64,
+	submit_ns:   f64,
 	timed:     bool,
 	marked:    bit_set[Gpu_Pass], // gpu_pass_mark timestamps written (queries 2 + pass)
 }
@@ -428,6 +432,333 @@ g_vk_device_lost: bool
 
 vk_gpu_device_lost :: proc() -> bool { return sync.atomic_load(&g_vk_device_lost) }
 
+// ---------------------------------------------------------------------------
+// Latency probe: SR_LATENCY_PROBE=<seconds> (off otherwise). For every window
+// frame it measures the time from the start of its recording (right before the
+// game reads input) to the GPU finishing it (the end timestamp written after
+// the present blit, moved to the CPU clock with VK_EXT_calibrated_timestamps),
+// and the time between frame starts. It waits SR_LATENCY_PROBE_WARMUP seconds
+// (default 10) after the first frame, records, prints a summary and closes the
+// window.
+@(private = "file")
+Vk_Latency_Probe :: struct {
+	seconds, warmup: f64,
+	enabled:         bool, // asked for, and calibrated timestamps are available
+	first:           time.Tick,
+	recording:       bool,
+	finished:        bool,
+	start:           [GPU_FRAMES_IN_FLIGHT]time.Tick,
+	counted:         [GPU_FRAMES_IN_FLIGHT]bool,
+	prev_start:      time.Tick,
+	latency_ms:      [dynamic]f64,
+	interval_ms:     [dynamic]f64,
+	gpu_ms:          [dynamic]f64,
+	collect_ms:      f64, // game thread: waiting for the slot's frame (fence, present thread)
+	present_ms:      f64, // game thread: in gpu_present
+	delay_ms, cpu_est_ms, gpu_est_ms: f64, // low-latency pacing, summed per frame
+}
+
+@(private = "file")
+g_vk_probe: Vk_Latency_Probe
+
+// GPU timestamps on the CPU clock (VK_KHR/EXT_calibrated_timestamps): the
+// latency probe and low-latency pacing (vk_gpu_frame_ready_delay) use them.
+@(private = "file")
+Vk_Clock :: struct {
+	available:  bool,
+	khr:        bool, // VK_KHR_calibrated_timestamps rather than EXT
+	cal_gpu:    u64,  // device ticks at cal_cpu_ns
+	cal_cpu_ns: f64,  // time.Tick nanoseconds
+	cal_tick:   time.Tick,
+}
+
+@(private = "file")
+g_vk_clock: Vk_Clock
+
+// Before device creation: adds the calibrated timestamps extension when the
+// device has it.
+@(private = "file")
+vk_clock_setup :: proc(physical: vk.PhysicalDevice, extensions: ^[dynamic]cstring) {
+	count: u32
+	vk.EnumerateDeviceExtensionProperties(physical, nil, &count, nil)
+	props := make([]vk.ExtensionProperties, count, context.temp_allocator)
+	vk.EnumerateDeviceExtensionProperties(physical, nil, &count, raw_data(props))
+	has_ext, has_khr := false, false
+	for &e in props {
+		name := string(cstring(&e.extensionName[0]))
+		if name == vk.EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME { has_ext = true }
+		if name == vk.KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME { has_khr = true }
+	}
+	switch {
+	case has_khr: append(extensions, vk.KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME); g_vk_clock.khr = true
+	case has_ext: append(extensions, vk.EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)
+	case: return
+	}
+	g_vk_clock.available = true
+}
+
+@(private = "file")
+vk_clock_calibrate :: proc() -> bool {
+	c := &g_vk_clock
+	domain: vk.TimeDomainKHR = ODIN_OS == .Windows ? .QUERY_PERFORMANCE_COUNTER : .CLOCK_MONOTONIC
+	infos := [2]vk.CalibratedTimestampInfoKHR{
+		{sType = .CALIBRATED_TIMESTAMP_INFO_KHR, timeDomain = .DEVICE},
+		{sType = .CALIBRATED_TIMESTAMP_INFO_KHR, timeDomain = domain},
+	}
+	stamps: [2]u64
+	deviation: u64
+	result := c.khr ? vk.GetCalibratedTimestampsKHR(g_vk.device, 2, &infos[0], &stamps[0], &deviation) : vk.GetCalibratedTimestampsEXT(g_vk.device, 2, &infos[0], &stamps[0], &deviation)
+	if result != .SUCCESS { c.available = false; return false }
+	c.cal_gpu = stamps[0]
+	c.cal_cpu_ns = f64(stamps[1]) * 1e9 / f64(cpu_clock_frequency())
+	c.cal_tick = time.tick_now()
+	return true
+}
+
+// A GPU timestamp as time.Tick nanoseconds; ok false without calibration.
+@(private = "file")
+vk_clock_gpu_to_cpu_ns :: proc(stamp: u64) -> (ns: f64, ok: bool) {
+	c := &g_vk_clock
+	if !c.available { return }
+	if c.cal_tick == {} || time.duration_seconds(time.tick_since(c.cal_tick)) > 0.5 { // follow clock drift
+		if !vk_clock_calibrate() { return }
+	}
+	return c.cal_cpu_ns + f64(i64(stamp - c.cal_gpu)) * f64(g_vk.props.limits.timestampPeriod), true
+}
+
+@(private = "file")
+vk_tick_ns :: proc(t: time.Tick) -> f64 { return f64(time.tick_diff(time.Tick{}, t)) }
+
+@(private = "file")
+vk_probe_setup :: proc() {
+	p := &g_vk_probe
+	seconds, _ := strconv.parse_f64(os.get_env("SR_LATENCY_PROBE", context.temp_allocator))
+	if seconds <= 0 { return }
+	warmup, warmup_ok := strconv.parse_f64(os.get_env("SR_LATENCY_PROBE_WARMUP", context.temp_allocator))
+	p.seconds, p.warmup = seconds, warmup_ok ? warmup : 10
+	if !g_vk_clock.available { fmt.eprintln("[Probe] calibrated timestamps unavailable; latency probe off"); return }
+	p.enabled = true
+	fmt.printfln("[Probe] latency probe: %.0f s after %.0f s warm-up, present thread %s, low latency %s", p.seconds, p.warmup,
+		os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "0" ? "off" : os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "1" ? "always" : "adaptive",
+		os.get_env("SR_LOW_LATENCY", context.temp_allocator) == "0" ? "off" : "on")
+}
+
+// A window frame starts recording (its slot has been collected).
+@(private = "file")
+vk_probe_frame_start :: proc(slot: int, collect_ms: f64) {
+	p := &g_vk_probe
+	if !p.enabled || p.finished { return }
+	now := time.tick_now()
+	if p.first == {} { p.first = now }
+	elapsed := time.duration_seconds(time.tick_diff(p.first, now))
+	if !p.recording && elapsed >= p.warmup { p.recording = true; p.prev_start = now; p.counted = {} }
+	p.start[slot] = now
+	p.counted[slot] = false
+	if !p.recording { return }
+	if elapsed >= p.warmup + p.seconds { vk_probe_finish(); return }
+	p.counted[slot] = true
+	p.collect_ms += collect_ms
+	if p.prev_start != now { append(&p.interval_ms, time.duration_milliseconds(time.tick_diff(p.prev_start, now))) }
+	p.prev_start = now
+}
+
+// The frame in this slot finished; `end` is its last GPU timestamp.
+@(private = "file")
+vk_probe_frame_done :: proc(slot: int, begin, end: u64) {
+	p := &g_vk_probe
+	if !p.enabled || !p.counted[slot] { return }
+	p.counted[slot] = false
+	append(&p.gpu_ms, f64(end - begin) * f64(g_vk.props.limits.timestampPeriod) / 1e6)
+	end_ns, ok := vk_clock_gpu_to_cpu_ns(end)
+	if !ok { return }
+	append(&p.latency_ms, (end_ns - vk_tick_ns(p.start[slot])) / 1e6)
+}
+
+@(private = "file")
+vk_probe_finish :: proc() {
+	p := &g_vk_probe
+	p.finished = true
+	stats :: proc(values: []f64) -> (avg, p50, p95, p99, worst: f64) {
+		if len(values) == 0 { return }
+		sorted := make([]f64, len(values), context.temp_allocator)
+		copy(sorted, values)
+		for i in 1 ..< len(sorted) { // insertion sort is plenty for a few thousand
+			v := sorted[i]
+			j := i
+			for j > 0 && sorted[j - 1] > v { sorted[j] = sorted[j - 1]; j -= 1 }
+			sorted[j] = v
+		}
+		for v in sorted { avg += v }
+		avg /= f64(len(sorted))
+		at :: proc(s: []f64, q: f64) -> f64 { return s[min(len(s) - 1, int(q * f64(len(s))))] }
+		return avg, at(sorted, 0.5), at(sorted, 0.95), at(sorted, 0.99), sorted[len(sorted) - 1]
+	}
+	i_avg, i_p50, i_p95, i_p99, i_max := stats(p.interval_ms[:])
+	l_avg, l_p50, l_p95, l_p99, l_max := stats(p.latency_ms[:])
+	fmt.printfln("[Probe] present thread %s: %d frames, %.1f FPS", g_vk_present_thread.running ? "on" : "off", len(p.interval_ms), i_avg > 0 ? 1000 / i_avg : 0)
+	fmt.printfln("[Probe] frame time ms   avg %.3f  p50 %.3f  p95 %.3f  p99 %.3f  max %.3f", i_avg, i_p50, i_p95, i_p99, i_max)
+	fmt.printfln("[Probe] start->GPU done avg %.3f  p50 %.3f  p95 %.3f  p99 %.3f  max %.3f", l_avg, l_p50, l_p95, l_p99, l_max)
+	g_avg, g_p50, _, g_p99, _ := stats(p.gpu_ms[:])
+	frames := f64(max(1, len(p.interval_ms)))
+	fmt.printfln("[Probe] GPU per frame   avg %.3f  p50 %.3f  p99 %.3f; game thread per frame: slot wait %.3f, gpu_present %.3f", g_avg, g_p50, g_p99, p.collect_ms / frames, p.present_ms / frames)
+	fmt.printfln("[Probe] presented on the game thread %d, on the present thread %d (whole run)", g_vk_present_mode.inline_frames, g_vk_present_mode.thread_frames)
+	fmt.printfln("[Probe] low latency per frame: delay %.3f, CPU estimate %.3f, GPU estimate %.3f", p.delay_ms / frames, p.cpu_est_ms / frames, p.gpu_est_ms / frames)
+	if g_vk.present.window != nil { glfw.SetWindowShouldClose(g_vk.present.window, true) }
+}
+
+// ---------------------------------------------------------------------------
+// Low-latency frame start (SR_LOW_LATENCY=0 turns it off).
+//
+// With two frames in flight a GPU-bound game reads input for a frame while the
+// GPU still has the whole previous frame to draw: input waits about two GPU
+// frames to be drawn. Instead, the next frame starts (and reads input) as late
+// as it can while still reaching the queue just before the GPU finishes the
+// frame in flight, so the GPU never idles and the frame rate holds. The finish
+// is predicted from the previous frame's GPU end timestamp (on the CPU clock,
+// Vk_Clock) and recent GPU and CPU frame times; the estimates lean early (the
+// fastest recent GPU frame, the slowest recent CPU frame, plus a margin), so a
+// misprediction costs a little latency rather than frame rate. CPU-bound
+// frames, frame caps and V-Sync (present-wait pacing) see no delay.
+@(private = "file")
+VK_LL_GPU_SAMPLES :: 8
+@(private = "file")
+VK_LL_CPU_SAMPLES :: 16
+
+@(private = "file")
+Vk_Low_Latency :: struct {
+	enabled:         bool,
+	gpu_ns:          [VK_LL_GPU_SAMPLES]f64, // GPU time of recent frames
+	cpu_ns:          [VK_LL_CPU_SAMPLES]f64, // recent frames' start to submit
+	gpu_n, cpu_n:    int,
+	last_end_ns:     f64, // GPU end of the newest finished frame
+	last_end_serial: u64,
+}
+
+@(private = "file")
+g_vk_ll: Vk_Low_Latency
+
+// A window frame finished on the GPU (`begin`, `end`: its timestamps).
+@(private = "file")
+vk_ll_frame_done :: proc(frame: ^Vk_Frame, begin, end: u64) {
+	ll := &g_vk_ll
+	defer frame.ll_start_ns, frame.submit_ns = 0, 0
+	if !ll.enabled { return }
+	end_ns, ok := vk_clock_gpu_to_cpu_ns(end)
+	if !ok { return }
+	if frame.serial > ll.last_end_serial { ll.last_end_ns, ll.last_end_serial = end_ns, frame.serial }
+	ll.gpu_ns[ll.gpu_n % VK_LL_GPU_SAMPLES] = f64(end - begin) * f64(g_vk.props.limits.timestampPeriod)
+	ll.gpu_n += 1
+	if frame.ll_start_ns > 0 && frame.submit_ns > frame.ll_start_ns {
+		ll.cpu_ns[ll.cpu_n % VK_LL_CPU_SAMPLES] = frame.submit_ns - frame.ll_start_ns
+		ll.cpu_n += 1
+	}
+}
+
+// Game thread, between frames, before input is read: waits until the next
+// frame's slot is free and returns how much longer (seconds) the next frame
+// should wait before it starts (0: start now).
+vk_gpu_frame_ready_delay :: proc() -> f64 {
+	sc := &g_vk.present
+	if sc.window == nil || g_vk.recording { return 0 }
+	vk_collect(g_vk.slot) // the frame before last; the next frame records into its slot
+	delay := vk_ll_delay()
+	// The game thread's slack this frame: everything since the frame ended
+	// (frame cap, waiting for the GPU) plus the delay. vk_present_use_thread
+	// decides from it where to present.
+	pm := &g_vk_present_mode
+	if pm.frame_end != {} { pm.slack_ns = f64(time.tick_diff(pm.frame_end, time.tick_now())) + delay * 1e9 }
+	return delay
+}
+
+@(private = "file")
+vk_ll_delay :: proc() -> f64 {
+	sc := &g_vk.present
+	now := vk_tick_ns(time.tick_now())
+	next := &g_vk.frames[g_vk.slot]
+	next.ll_start_ns = now
+	ll := &g_vk_ll
+	if !ll.enabled || sc.vsync || ll.gpu_n < VK_LL_GPU_SAMPLES || ll.cpu_n < VK_LL_CPU_SAMPLES { return 0 }
+	// The newest frame: in flight, its predecessor (last_end_serial) finished.
+	newest := &g_vk.frames[(g_vk.slot + GPU_FRAMES_IN_FLIGHT - 1) % GPU_FRAMES_IN_FLIGHT]
+	if !newest.submitted || ll.last_end_serial + 1 != newest.serial { return 0 }
+	submit_ns := now // not on the queue yet: it will be within microseconds
+	if newest.presenting {
+		pt := &g_vk_present_thread
+		sync.mutex_lock(&pt.lock)
+		if pt.submitted >= newest.serial { submit_ns = newest.submit_ns }
+		sync.mutex_unlock(&pt.lock)
+	} else if newest.submit_ns > 0 {
+		submit_ns = newest.submit_ns
+	}
+	gpu := max(f64)
+	for v in ll.gpu_ns { gpu = min(gpu, v) }
+	cpu, slowest: f64 // the second slowest: one hitch does not hold latency up for 16 frames
+	for v in ll.cpu_ns {
+		if v > slowest { cpu, slowest = slowest, v } else if v > cpu { cpu = v }
+	}
+	margin := 100_000 + 0.05 * gpu // 0.1 ms + 5% of a GPU frame
+	finish := max(ll.last_end_ns, submit_ns) + gpu
+	start := finish - margin - cpu
+	if start <= now { return 0 }
+	start = min(start, now + gpu) // never more than a frame
+	next.ll_start_ns = start
+	if g_vk_probe.recording {
+		g_vk_probe.delay_ms += (start - now) / 1e6
+		g_vk_probe.cpu_est_ms += cpu / 1e6
+		g_vk_probe.gpu_est_ms += gpu / 1e6
+	}
+	return (start - now) / 1e9
+}
+
+// Where a window frame is presented. The present thread takes acquire, blit,
+// submit and present (0.1-0.2 ms on the drivers measured) off the game thread,
+// which raises the frame rate only while the game thread is the bottleneck;
+// the hand-over itself adds a thread wake-up before the frame reaches the
+// queue (it never shortens input-to-GPU latency). So frames are presented on
+// the game thread while it has slack (it waits for the GPU, the low-latency
+// delay or V-Sync anyway) and handed to the present thread only while it has
+// none. The decision follows the average slack; after a switch it holds for
+// 64 frames while the average settles in the new mode.
+@(private = "file")
+Vk_Present_Mode :: struct {
+	inline:         bool,
+	forced:         bool, // SR_VK_PRESENT_THREAD=1: every frame on the present thread
+	hold:           int, // frames before the next switch may happen
+	slack_ns:       f64, // set by vk_gpu_frame_ready_delay
+	slack_avg_ns:   f64,
+	frame_end:      time.Tick, // the game thread finished the newest frame
+	inline_cost_ns: f64, // the game thread's time presenting inline (average)
+	last_inline:    bool, // the newest frame was presented on the game thread
+	inline_frames:  int,
+	thread_frames:  int,
+}
+
+@(private = "file")
+g_vk_present_mode := Vk_Present_Mode{inline = true, hold = 64, inline_cost_ns = 150_000}
+
+@(private = "file")
+vk_present_use_thread :: proc() -> bool {
+	pt := &g_vk_present_thread
+	if !pt.running { return false }
+	pm := &g_vk_present_mode
+	if pm.forced { return true }
+	slack := pm.slack_ns + g_vk.present.last_wait_ms * 1e6
+	pm.slack_avg_ns += (slack - pm.slack_avg_ns) / 16
+	// Inline wins whenever the game thread has room for most of the present:
+	// the frame then reaches the queue without a thread wake-up.
+	if pm.hold > 0 {
+		pm.hold -= 1
+	} else if pm.inline ? pm.slack_avg_ns < 10_000 : pm.slack_avg_ns > 0.75 * pm.inline_cost_ns + 10_000 {
+		pm.inline, pm.hold = !pm.inline, 64
+	}
+	if !pm.inline { return true }
+	// Presenting here needs the thread idle: frames reach the swapchain in order.
+	sync.mutex_lock(&pt.lock)
+	idle := !pt.has_job && !pt.busy
+	sync.mutex_unlock(&pt.lock)
+	return !idle
+}
+
 // Every vkQueueSubmit, vkQueuePresentKHR and vkDeviceWaitIdle holds this: the
 // queue is used by the game thread and the present thread.
 @(private = "file")
@@ -448,7 +779,8 @@ g_vk_queue_lock: sync.Mutex
 // Ownership: while the thread runs, only it touches the swapchain. The game
 // thread drains it (vk_present_thread_drain) before rebuilding the swapchain,
 // waiting for the device, or reusing a frame slot it handed over.
-// SR_VK_PRESENT_THREAD=0 presents on the game thread instead.
+// SR_VK_PRESENT_THREAD=0 presents every frame on the game thread, =1 every
+// frame on the present thread; unset, vk_present_use_thread picks per frame.
 @(private = "file")
 Vk_Present_Job :: struct {
 	slot:          int,
@@ -480,7 +812,6 @@ Vk_Present_Thread :: struct {
 	// Present thread only.
 	pool:           vk.CommandPool,
 	blit:           [GPU_FRAMES_IN_FLIGHT]vk.CommandBuffer,
-	last_presented: u64,
 }
 
 @(private = "file")
@@ -506,6 +837,7 @@ vk_present_thread_start :: proc() {
 		return
 	}
 	pt.running = true
+	g_vk_present_mode.forced = os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "1"
 }
 
 @(private = "file")
@@ -612,6 +944,7 @@ vk_present_thread_run :: proc(pt: ^Vk_Present_Thread, job: ^Vk_Present_Job) {
 	presented := false
 	sync.mutex_lock(&g_vk_queue_lock)
 	vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, job.fence), "vkQueueSubmit (present)")
+	g_vk.frames[job.slot].submit_ns = vk_tick_ns(time.tick_now()) // read by the game thread after pt.submitted says so
 	if presentable {
 		present := vk.PresentInfoKHR{
 			sType = .PRESENT_INFO_KHR, waitSemaphoreCount = 1, pWaitSemaphores = &rendered,
@@ -640,15 +973,14 @@ vk_present_thread_run :: proc(pt: ^Vk_Present_Thread, job: ^Vk_Present_Job) {
 	// vsync: wait until the frame before this one is on screen, so the game
 	// starts its next frame (and reads input) as late as the display allows
 	// while one frame stays queued. A timeout (minimised, occluded) lets it go.
-	if job.pace && pt.last_presented != 0 && pt.last_presented >= job.first_id {
-		result := vk.WaitForPresentKHR(g_vk.device, sc.swapchain, pt.last_presented, 100 * 1_000_000)
+	if job.pace && job.present_id > job.first_id {
+		result := vk.WaitForPresentKHR(g_vk.device, sc.swapchain, job.present_id - 1, 100 * 1_000_000)
 		#partial switch result {
 		case .SUCCESS, .TIMEOUT, .SUBOPTIMAL_KHR:
 		case .ERROR_OUT_OF_DATE_KHR: sync.atomic_store(&sc.dirty, true)
 		case: vk_ok(result, "vkWaitForPresentKHR")
 		}
 	}
-	pt.last_presented = job.present_id
 }
 
 @(private = "file")
@@ -836,6 +1168,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 			enable.pNext = &enable_present_wait
 			g_vk.present.present_wait = true
 		}
+		vk_clock_setup(g_vk.physical, &device_extensions)
 	}
 	device_info := vk.DeviceCreateInfo{
 		sType = .DEVICE_CREATE_INFO, pNext = &enable, queueCreateInfoCount = 1, pQueueCreateInfos = &queue_info,
@@ -918,6 +1251,8 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		// Built by the first frame, after the caller's gpu_set_vsync.
 		g_vk.present.dirty = true
 		vk_present_thread_start()
+		g_vk_ll.enabled = g_vk_clock.available && os.get_env("SR_LOW_LATENCY", context.temp_allocator) != "0"
+		vk_probe_setup()
 	}
 	fmt.printfln("[Vulkan] Using %s (%s), Vulkan %s%s", g_vk.device_name, g_vk.vendor_name, g_vk.version_text,
 		validation ? ", validation on" : "")
@@ -1805,6 +2140,8 @@ vk_collect :: proc(slot: int) {
 		period := f64(g_vk.props.limits.timestampPeriod)
 		if vk.GetQueryPoolResults(g_vk.device, frame.queries, 0, 2, size_of(stamps), &stamps[0], size_of(u64), {._64, .WAIT}) == .SUCCESS {
 			append(&g_vk.completed, f64(stamps[1] - stamps[0]) * period / 1e6)
+			vk_probe_frame_done(slot, stamps[0], stamps[1])
+			vk_ll_frame_done(frame, stamps[0], stamps[1])
 			if frame.marked != {} {
 				passes: [Gpu_Pass]u64
 				for pass in frame.marked {
@@ -1823,7 +2160,9 @@ vk_collect :: proc(slot: int) {
 @(private = "file")
 vk_begin_recording :: proc(timed: bool) {
 	frame := &g_vk.frames[g_vk.slot]
+	collect_start := time.tick_now()
 	vk_collect(g_vk.slot)
+	collect_ms := time.duration_milliseconds(time.tick_since(collect_start))
 	vk.ResetFences(g_vk.device, 1, &frame.fence)
 	vk.ResetCommandBuffer(frame.cmd, {})
 	vk.ResetDescriptorPool(g_vk.device, frame.pool, {})
@@ -1834,6 +2173,7 @@ vk_begin_recording :: proc(timed: bool) {
 		vk.CmdWriteTimestamp2(frame.cmd, {.TOP_OF_PIPE}, frame.queries, 0)
 	}
 	frame.timed = timed
+	if timed && g_vk.present.window != nil { vk_probe_frame_start(g_vk.slot, collect_ms) }
 	g_vk.serial += 1
 	frame.serial = g_vk.serial
 	g_vk.recording = true
@@ -1876,6 +2216,7 @@ vk_submit :: proc(wait: vk.Semaphore = 0, signal: vk.Semaphore = 0) {
 	sync.mutex_lock(&g_vk_queue_lock)
 	vk_ok(vk.QueueSubmit(g_vk.queue, 1, &submit, frame.fence), "vkQueueSubmit")
 	sync.mutex_unlock(&g_vk_queue_lock)
+	frame.submit_ns = vk_tick_ns(time.tick_now())
 	frame.submitted = true
 	g_vk.recording = false
 	g_vk.in_pass = false
@@ -1904,6 +2245,7 @@ vk_gpu_frame_begin :: proc() {
 vk_gpu_frame_end :: proc() {
 	gpu_flush_deferred()
 	vk_submit()
+	g_vk_present_mode.frame_end = time.tick_now()
 }
 
 vk_gpu_frames_finish :: proc() {
@@ -2644,7 +2986,7 @@ vk_present_wait_pace :: proc() {
 	sc := &g_vk.present
 	sc.last_wait_ms = 0
 	if !sc.present_wait || !sc.vsync || sc.swapchain == 0 || sync.atomic_load(&sc.dirty) || sc.present_id < 2 { return }
-	if pt := &g_vk_present_thread; pt.running {
+	if pt := &g_vk_present_thread; pt.running && !g_vk_present_mode.last_inline {
 		// The present thread waits for the display after each present; this
 		// waits for it to have done so for the newest frame handed over.
 		start := time.tick_now()
@@ -2697,6 +3039,8 @@ vk_window_sync :: proc() {
 // presented (minimised, swapchain out of date) is still submitted by
 // gpu_frame_end.
 vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
+	present_start := time.tick_now()
+	defer if g_vk_probe.recording { g_vk_probe.present_ms += time.duration_milliseconds(time.tick_since(present_start)) }
 	gpu_flush_deferred()
 	vk_gpu_pass_mark(.Present)
 	sc := &g_vk.present
@@ -2705,7 +3049,10 @@ vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 	if t == nil { return }
 	cmd := vk_cmd()
 	frame := &g_vk.frames[g_vk.slot]
-	if g_vk_present_thread.running {
+	pm := &g_vk_present_mode
+	if vk_present_use_thread() {
+		pm.last_inline = false
+		pm.thread_frames += 1
 		// Close the frame here; the present thread acquires, blits, submits
 		// and presents it (and writes its end timestamp after the blit).
 		vk_pass_end()
@@ -2728,6 +3075,10 @@ vk_gpu_present :: proc(window: glfw.WindowHandle = nil) {
 		vk_present_thread_hand_off(job)
 		return
 	}
+	inline_start := time.tick_now()
+	pm.last_inline = true
+	pm.inline_frames += 1
+	defer pm.inline_cost_ns += (f64(time.tick_diff(inline_start, time.tick_now())) - pm.inline_cost_ns) * 0.05
 	index: u32
 	acquired := vk.AcquireNextImageKHR(g_vk.device, sc.swapchain, max(u64), frame.acquired, 0, &index)
 	#partial switch acquired {
