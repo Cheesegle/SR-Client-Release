@@ -223,6 +223,8 @@ host_custom_payload :: proc(settings: ^menuui.Host_Settings) -> [dynamic]byte {
 
 host_send_custom :: proc(state: ^Krunker_WS_State, settings: ^menuui.Host_Settings) -> bool {
 	if !state.connected || state.handle == nil { return false }
+	krunker_net_send_begin()
+	defer krunker_net_send_end()
 	next_counter := state.ah_num
 	packet := krunker_ws_finish_packet(host_custom_payload(settings), "custom", &next_counter)
 	defer delete(packet)

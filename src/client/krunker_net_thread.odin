@@ -21,6 +21,14 @@ import kproto "../krunker"
 // the game thread, so game state is never touched by two threads.
 //
 // The curl handle is shared: every ws_send / ws_recv holds net_lock.
+//
+// SR 0.47: the thread also answers Krunker's ping (pi) with po the moment it
+// arrives, as the browser does from its message event between frames,
+// instead of waiting for the next game frame. Every sender holds send_lock
+// from reading the packet counter (ah_num) until it commits it, so the
+// counter keeps exactly one writer at a time. Lock order: send_lock, then lock.
+// Inputs stay on the game thread, built per frame exactly like Krunker's own
+// client, so hit registration is unchanged.
 
 Krunker_Net_Inbound :: struct {
 	payload: []byte,
@@ -30,7 +38,10 @@ Krunker_Net_Inbound :: struct {
 Krunker_Net_Thread :: struct {
 	thread: ^thread.Thread,
 	lock: sync.Mutex,
+	send_lock: sync.Mutex,
 	running: bool, // owner: game thread
+	po_answered: int, // atomic: pi the thread answered that the game thread has not seen yet
+	po_sent: int,     // diagnostics
 	stop: bool,    // atomic
 	inbox: [dynamic]Krunker_Net_Inbound,
 	// The first failure the thread saw; reported by the game thread.
@@ -48,6 +59,57 @@ g_net_thread: Krunker_Net_Thread
 
 // Every send goes through here so the network thread never uses the handle at
 // the same time.
+// Held by every sender from reading ah_num to committing it.
+krunker_net_send_begin :: proc() { if g_net_thread.running { sync.mutex_lock(&g_net_thread.send_lock) } }
+krunker_net_send_end :: proc() { if g_net_thread.running { sync.mutex_unlock(&g_net_thread.send_lock) } }
+
+// The game thread saw a pi: true when the network thread already answered it.
+krunker_net_thread_took_ping :: proc() -> bool {
+	net := &g_net_thread
+	if !net.running { return false }
+	for {
+		n := sync.atomic_load(&net.po_answered)
+		if n <= 0 { return false }
+		if _, ok := sync.atomic_compare_exchange_strong(&net.po_answered, n, n - 1); ok { return true }
+	}
+}
+
+// pi messages in one complete payload (tiny payloads only; pi is 1 element).
+krunker_net_ping_count :: proc(payload: []byte) -> int {
+	if len(payload) == 0 || len(payload) > 64 || payload[0] & 0xF0 != 0x90 { return 0 }
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
+	messages, _, error_text := kproto.krunker_msgpack_decode_packet(payload)
+	if len(error_text) != 0 { return 0 }
+	count := 0
+	for value in messages {
+		packet, ok := value.([]kproto.Krunker_Msgpack_Value)
+		if !ok || len(packet) == 0 { continue }
+		if opcode, text := packet[0].(string); text && opcode == "pi" { count += 1 }
+	}
+	return count
+}
+
+// Sends po from the network thread with the shared counter.
+@(private = "file")
+krunker_net_send_po :: proc(state: ^Krunker_WS_State) -> bool {
+	net := &g_net_thread
+	sync.mutex_lock(&net.send_lock)
+	defer sync.mutex_unlock(&net.send_lock)
+	if len(state.pending) > 0 { return false } // keep order behind queued control messages
+	next_counter := state.ah_num
+	packet := krunker_ws_message("po", &next_counter, state.q_index)
+	defer delete(packet)
+	sent: c.size_t
+	sync.mutex_lock(&net.lock)
+	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
+	sync.mutex_unlock(&net.lock)
+	if code != .E_OK || int(sent) != len(packet) { return false }
+	state.ah_num = next_counter
+	net.po_sent += 1
+	return true
+}
+
 krunker_ws_raw_send :: proc(state: ^Krunker_WS_State, packet: []byte, sent: ^c.size_t) -> curl.code {
 	if len(packet) == 0 { return .E_OK }
 	net := &g_net_thread
@@ -60,9 +122,10 @@ krunker_net_thread_start :: proc(state: ^Krunker_WS_State) {
 	net := &g_net_thread
 	if net.running || state.handle == nil { return }
 	net^ = {}
-	net.thread = thread.create_and_start_with_poly_data(state, krunker_net_thread_run)
-	if net.thread == nil { kproto.network_log("net-thread", "could not start; reading on the game thread"); return }
+	// running first: from here every game-thread sender takes send_lock.
 	net.running = true
+	net.thread = thread.create_and_start_with_poly_data(state, krunker_net_thread_run)
+	if net.thread == nil { net.running = false; kproto.network_log("net-thread", "could not start; reading on the game thread"); return }
 	kproto.network_log("net-thread", "started")
 }
 
@@ -71,6 +134,7 @@ krunker_net_thread_stop :: proc() {
 	if !net.running { return }
 	sync.atomic_store(&net.stop, true)
 	thread.join(net.thread)
+	if net.po_sent > 0 { kproto.network_log("net-thread", fmt.tprintf("stopped; answered %d pings on the network thread", net.po_sent)) }
 	thread.destroy(net.thread)
 	for item in net.inbox { delete(item.payload) }
 	delete(net.inbox)
@@ -86,6 +150,8 @@ krunker_net_thread_run :: proc(state: ^Krunker_WS_State) {
 	net := &g_net_thread
 	buffer: [16384]byte
 	for !sync.atomic_load(&net.stop) {
+		pings := 0
+		held: Krunker_Net_Inbound
 		sync.mutex_lock(&net.lock)
 		failed := net.failed
 		for iterations := 0; !failed && iterations < 256; iterations += 1 {
@@ -116,10 +182,27 @@ krunker_net_thread_run :: proc(state: ^Krunker_WS_State) {
 			if !complete { continue }
 			copied := make([]byte, len(payload))
 			copy(copied, payload)
+			if pings = krunker_net_ping_count(copied); pings > 0 {
+				// Hand this message over only after po went out (below), so the
+				// game thread never sees a pi without knowing it was answered.
+				held = Krunker_Net_Inbound{payload = copied, received_at = glfw.GetTime()}
+				break
+			}
 			append(&net.inbox, Krunker_Net_Inbound{payload = copied, received_at = glfw.GetTime()})
 		}
 		sync.mutex_unlock(&net.lock)
 		if failed { break }
+		if pings > 0 {
+			// Answer pi now. The game thread skips the po for each one answered here.
+			for _ in 0 ..< pings {
+				if !state.connected || !krunker_net_send_po(state) { break }
+				sync.atomic_add(&net.po_answered, 1)
+			}
+			sync.mutex_lock(&net.lock)
+			append(&net.inbox, held)
+			sync.mutex_unlock(&net.lock)
+			continue // poll again right away
+		}
 		time.sleep(time.Millisecond)
 	}
 }

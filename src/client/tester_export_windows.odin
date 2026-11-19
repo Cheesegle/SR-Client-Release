@@ -31,3 +31,12 @@ cpu_model_name_windows :: proc() -> string {
 	if err != nil || len(name) == 0 { return "Unknown CPU" }
 	return name
 }
+
+// "Windows 10.0 build 26100, 32 GB RAM" for the tester export.
+tester_export_system_text :: proc() -> string {
+	version := win.OSVERSIONINFOEXW{dwOSVersionInfoSize = size_of(win.OSVERSIONINFOEXW)}
+	win.RtlGetVersion(&version)
+	memory := win.MEMORYSTATUSEX{dwLength = size_of(win.MEMORYSTATUSEX)}
+	ram_gb := win.GlobalMemoryStatusEx(&memory) ? f64(memory.ullTotalPhys) / (1024 * 1024 * 1024) : 0
+	return fmt.tprintf("Windows %d.%d build %d, %.0f GB RAM", version.dwMajorVersion, version.dwMinorVersion, version.dwBuildNumber, ram_gb)
+}

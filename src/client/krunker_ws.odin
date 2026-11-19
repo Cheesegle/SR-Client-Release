@@ -377,6 +377,8 @@ krunker_ws_message :: proc(opcode: string, ah_num: ^u8, q_index: int, team: i32 
 }
 
 krunker_ws_send_internal :: proc(state: ^Krunker_WS_State, opcode: string, queue_on_again: bool) -> bool {
+	krunker_net_send_begin()
+	defer krunker_net_send_end()
 	state.send_blocked = false
 	// Advance the shared counter only after a complete successful send.
 	// Retrying an unsent packet must reuse its counter, including across wrap.
@@ -414,6 +416,8 @@ krunker_ws_chat_packet :: proc(state: ^Krunker_WS_State, channel: i32, text: str
 
 krunker_ws_send_chat :: proc(state: ^Krunker_WS_State, channel: i32, text: string) -> bool {
 	if !state.connected || state.handle == nil || len(state.pending) > 0 { return false }
+	krunker_net_send_begin()
+	defer krunker_net_send_end()
 	next_counter := state.ah_num
 	packet := krunker_ws_chat_packet(state, channel, text, &next_counter)
 	defer delete(packet)
@@ -523,7 +527,8 @@ krunker_ws_apply_world :: proc(client: ^Client, payload: []byte, send_control: p
 			case "pi":
 				// SOCKET_PING is answered with the application PING (po), even
 				// while the player is choosing a team/class in the lobby.
-				if !send_control(state, "po") { state.connected = false; return }
+				// With the network thread on, it may have answered already.
+				if !krunker_net_thread_took_ping() && !send_control(state, "po") { state.connected = false; return }
 			case "init":
 				state.spawned = false
 				kproto.network_log("world", fmt.tprintf("init map=%d mode=%d comp=%v ranked=%v", client.krunker_world.map_index, client.krunker_world.mode_index, client.krunker_world.is_comp, client.krunker_world.is_ranked))
@@ -660,6 +665,8 @@ krunker_ws_send_input :: proc(client: ^Client) {
 	if !state.connected || !state.spawned || !state.bootstrapped do return
 	state.send_seconds = client.krunker_world.tick_frequency > 0 ? 1 / f64(client.krunker_world.tick_frequency) : KRUNKER_SEND_SECONDS
 	if state.send_elapsed < krunker_send_seconds(state) || len(state.pending) > 0 || len(state.input_commands) == 0 do return
+	krunker_net_send_begin()
+	defer krunker_net_send_end()
 	count := min(len(state.input_commands), kproto.KRUNKER_MAX_INPUT_BATCH)
 	first_sequence := state.input_commands[0].seq
 	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")

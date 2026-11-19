@@ -11,6 +11,11 @@ real desktop program (Odin + Vulkan), not inside a browser.
 Prefer no installer? Download `SR-Client-Portable-x.y.z.zip`, unzip anywhere,
 run `sr_client.exe`.
 
+**Best experience: play in Fullscreen or Borderless** (Settings > Display >
+Video mode). Both send frames straight to the screen (~0.15 ms from a
+finished frame to the screen, measured with PresentMon). Windowed goes
+through the Windows desktop compositor and adds about 5 ms of delay.
+
 Requirements: Windows 10/11 and a GPU with Vulkan 1.3 (any GPU from about
 the last ten years); older GPUs use OpenGL 4.5 automatically. The Krunker login window
 uses Microsoft's [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/),
@@ -45,11 +50,32 @@ run in a browser.
 - Import your Krunker (or Glorp) settings, with switches to skip keybinds,
   sensitivity or sound; settings marked **K** work exactly like Krunker's
 - Uses the dedicated GPU on laptops
+- **Inputs per second** (Settings > Experimental): 120 to 1000 real inputs per
+  second; Krunker's own Network Rate numbers are half the real rate, so 720 is
+  exactly the browser (SR's default is 360)
+- **Weapons 1:1 with Krunker's code:** fire, reload and swap timers in Krunker's
+  own milliseconds; each class's slide; Infiltrator's knife charge and the
+  charge bar; Krunker's scope settings (image and borders off by default, as
+  competitive players use them); Krunker's kill cam that turns to your killer
+- **CPU pinning:** the game thread gets a core of its own (on Ryzen X3D chips
+  with two dies, a core on the 3D V-Cache die)
 - Reset to defaults
 
 Game files (maps, models, textures, sounds) are plain files in the `assets`
 folder next to `sr_client.exe`, not packed into the program, so they can be
 modded.
+
+## Version history
+Every release stays on the **Releases** page, so you can see how SR grew.
+Full details per version are in [`CHANGELOG.md`](CHANGELOG.md).
+
+| Version | Highlights |
+|---|---|
+| 0.47 | Fullscreen/Borderless recommendation under Video mode; the Experimental network thread answers Krunker's ping as soon as it arrives; X3D V-Cache core pinning; same or better FPS and delay than 0.46 in every display mode |
+| 0.46 | Hit registration timers in Krunker's exact milliseconds; class slides; Infiltrator knife charge and charge bar; scope settings; Krunker's kill cam; Burg's cart wheels; inputs-per-second choices 120-1000; red * on settings that need a restart |
+| 0.40 | Browser-exact hit registration; inputs per second; auto-host links |
+| 0.25 | Vulkan renderer on by default with its own CPU core; inputs at the lobby's tick rate; Krunker's sounds 1:1; hardpoint markers and round messages like Krunker |
+| 0.23 | Earliest build on the Releases page: the native client for custom and comp games; the network log is only written when something goes wrong |
 
 ## How it works
 - **Same game, same servers.** SR Client connects to Krunker's own game servers

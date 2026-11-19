@@ -1743,7 +1743,8 @@ main :: proc() {
 	if options.no_cpu_pinning || classic {
 		fmt.println(classic ? "[CPU] pinning off (Classic renderer)" : "[CPU] pinning off (--no-cpu-pinning)")
 	} else {
-		fmt.printfln("[CPU] %s", cpu_pinning_apply())
+		g_cpu_pinning_text = strings.clone(cpu_pinning_apply())
+		fmt.printfln("[CPU] %s", g_cpu_pinning_text)
 	}
 	if len(options.asset_sweep) > 0 {
 		os.exit(asset_sweep_run(options.asset_sweep))

@@ -13,3 +13,5 @@ tester_export_desktop_path :: proc() -> string {
 tester_export_show_in_folder :: proc(path: string) {}
 
 cpu_model_name_windows :: proc() -> string { return "Unknown CPU" }
+
+tester_export_system_text :: proc() -> string { return ODIN_OS_STRING }

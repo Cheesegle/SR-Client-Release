@@ -1,5 +1,19 @@
 # Changelog
 
+## SR Client 0.47.0
+- **Display note:** under Video mode: Fullscreen or Borderless recommended;
+  Windowed goes through the Windows compositor and adds about 5 ms (measured
+  with PresentMon: ~0.15 ms vs ~5.6 ms from a finished frame to the screen).
+- **Network thread (Settings > Experimental):** now also answers Krunker's
+  ping (pi -> po) the moment it arrives, as the browser does between frames,
+  instead of on the next game frame. Every sender now holds one send lock
+  from reading the packet counter to committing it. Inputs stay on the game
+  thread, built per frame exactly like Krunker's client (hit registration
+  unchanged).
+- **CPU pinning on Ryzen X3D with two dies (7950X3D, 9950X3D, 7900X3D...):**
+  the game thread goes to a core on the die with the 3D V-Cache (biggest
+  L3). CPUs with one L3 size (9800X3D, Intel) pick the same core as before.
+
 ## SR Client 0.46.0
 - **Inputs per second** (Settings > Experimental): 120, 240, 360 (default),
   480, 720, 840, 1000. These are real inputs per second; Krunker's own

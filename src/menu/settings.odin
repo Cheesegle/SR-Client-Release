@@ -181,7 +181,7 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		}
 		settings_note(state, "Experimental. How often your movement, aim and shots go to the server, as REAL inputs per second. Krunker's own Network Rate numbers are half the real rate: its 360 really sends up to 720, so 720 is exactly what the browser does (SR's default is 360). 1000 is the most Krunker's protocol allows (1 ms per input). Takes effect right away, no restart.")
 		settings_toggle_row(state, "Network thread", "NetworkThread", values.hud.network_thread, {kind = .HUD_TOGGLE, index = 11})
-		settings_note(state, "Reads the game connection on its own thread. It does not raise average FPS; it keeps frames smooth when the network spikes and times snapshots by their real arrival. Takes effect right away; switching it off applies from the next match. Turn it off if anything feels wrong.")
+		settings_note(state, "Reads the game connection on its own thread and answers Krunker's ping the moment it arrives, as the browser does. It does not raise average FPS; it keeps frames smooth when the network spikes and times snapshots by their real arrival. Takes effect right away; switching it off applies from the next match. Turn it off if anything feels wrong.")
 		settings_night(state)
 	}
 }
@@ -505,6 +505,11 @@ settings_resolution_label :: proc(state: ^State, view: View) -> string {
 	return view.resolution
 }
 
+// Measured on the test PC (PresentMon): Fullscreen and Borderless both present
+// straight to the screen (Legacy Flip, ~0.15 ms); Windowed is composed by
+// Windows (Copy with GPU GDI, ~5.6 ms).
+DISPLAY_MODE_NOTE :: "Fullscreen or Borderless recommended: both send frames straight to the screen. Windowed goes through the Windows desktop compositor and adds about 5 ms of delay."
+
 settings_display_rows :: proc(state: ^State, view: View) {
 	s := state.scale
 	values := state.settings_draft
@@ -515,6 +520,7 @@ settings_display_rows :: proc(state: ^State, view: View) {
 			spacer()
 			settings_dropdown_field(state, labels[clamp(values.display_mode, 0, 2)], "DisplayMode", .DISPLAY_MODE)
 		}
+		settings_note(state, DISPLAY_MODE_NOTE)
 	}
 	if settings_current_tab(state) == .VIDEO && settings_search_show(state, "Monitor") {
 		if clay.UI(clay.ID("MonitorRow"))(settings_row(state)) {

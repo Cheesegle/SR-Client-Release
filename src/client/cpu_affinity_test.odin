@@ -17,6 +17,30 @@ when ODIN_TEST {
 	}
 
 	@(test)
+	cpu_game_core_prefers_the_3d_vcache_die :: proc(t: ^testing.T) {
+		// 7950X3D-like: cores 0-3 on the 32 MB die, 4-7 on the 96 MB die.
+		logical := make([dynamic]Cpu_Logical, context.temp_allocator)
+		for c in 0 ..< 8 {
+			for s in 0 ..< 2 {
+				append(&logical, Cpu_Logical{id = u32(256 + c*2 + s), index = u8(c*2 + s), core = u8(c), l3_kb = c < 4 ? 32*1024 : 96*1024})
+			}
+		}
+		cores := cpu_cores_from_logical(logical[:], context.temp_allocator)
+		pick, ok := cpu_pick_game_core(cores[:])
+		testing.expect(t, ok && pick == 4, "the first core on the V-Cache die")
+		// Cache die listed first: still never core 0.
+		for &lp in logical { lp.l3_kb = lp.core < 4 ? 96*1024 : 32*1024 }
+		cores = cpu_cores_from_logical(logical[:], context.temp_allocator)
+		pick, ok = cpu_pick_game_core(cores[:])
+		testing.expect(t, ok && pick == 1, "V-Cache die first: core 1")
+		// One L3 (9800X3D): unchanged, core 1.
+		for &lp in logical { lp.l3_kb = 96*1024 }
+		cores = cpu_cores_from_logical(logical[:], context.temp_allocator)
+		pick, ok = cpu_pick_game_core(cores[:])
+		testing.expect(t, ok && pick == 1, "one L3: the first core after core 0")
+	}
+
+	@(test)
 	cpu_game_core_is_never_core0 :: proc(t: ^testing.T) {
 		// Uniform 4 cores x 2 threads: core 1 (logical 2 and 3), both siblings.
 		cores := cpu_cores_from_logical(topology({{0, 2, false}, {0, 2, false}, {0, 2, false}, {0, 2, false}})[:], context.temp_allocator)

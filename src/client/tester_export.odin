@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:strings"
 import "core:time"
@@ -28,6 +29,10 @@ TESTER_EXPORT_CURRENT :: "logs/tester-export-current.txt"
 TESTER_EXPORT_DESKTOP_NAME :: "SR-Client-test-logs.txt"
 TESTER_EXPORT_CHECKPOINT :: 20.0 // seconds between in-progress saves
 TESTER_EXPORT_MAX_WEAPONS :: 8
+// Frame times are counted in 0.1 ms bins up to 100 ms (one add per frame, no
+// allocation), so the export can give the average, the 1% low and hitches
+// without storing frames.
+TESTER_EXPORT_FRAME_BINS :: 1000
 
 Tester_Weapon_Stats :: struct {
 	name: string,
@@ -46,6 +51,12 @@ Tester_Export :: struct {
 	frames: int,
 	frame_seconds: f64,
 	worst_frame: f64,
+	frame_bins: [TESTER_EXPORT_FRAME_BINS]u32,
+	hitches_50ms, hitches_250ms: int, // frames longer than 50 / 250 ms while playing
+	ping_sq_sum: f64,
+	ping_last: i32,
+	ping_change_sum: f64, // sum of |ping - previous ping|, for jitter
+	corrections_start, decode_errors_start, pings_answered_start: int,
 	ping_sum: f64,
 	ping_count: int,
 	ping_min, ping_max: i32,
@@ -110,6 +121,9 @@ tester_export_tick :: proc(client: ^Client, delta: f32) {
 			tester_export_reset()
 			g_export.open, g_export.started_wall, g_export.started_at = true, time.now(), now
 			g_export.ping_min, g_export.last_checkpoint = max(i32), now
+			g_export.corrections_start = client.krunker.prediction_corrections
+			g_export.decode_errors_start = client.krunker.decode_errors
+			g_export.pings_answered_start = g_net_thread.po_sent
 		}
 		return
 	}
@@ -123,10 +137,16 @@ tester_export_tick :: proc(client: ^Client, delta: f32) {
 		g_export.frames += 1
 		g_export.frame_seconds += f64(delta)
 		g_export.worst_frame = max(g_export.worst_frame, f64(delta))
+		g_export.frame_bins[min(int(delta * 10000), TESTER_EXPORT_FRAME_BINS - 1)] += 1
+		if delta > 0.05 { g_export.hitches_50ms += 1 }
+		if delta > 0.25 { g_export.hitches_250ms += 1 }
 	}
 	if world.has_ping && world.ping > 0 && now - g_export.last_ping_sample >= 1 {
 		g_export.last_ping_sample = now
 		g_export.ping_sum += f64(world.ping)
+		g_export.ping_sq_sum += f64(world.ping) * f64(world.ping)
+		if g_export.ping_count > 0 { g_export.ping_change_sum += abs(f64(world.ping - g_export.ping_last)) }
+		g_export.ping_last = world.ping
 		g_export.ping_count += 1
 		g_export.ping_min, g_export.ping_max = min(g_export.ping_min, world.ping), max(g_export.ping_max, world.ping)
 	}
@@ -210,16 +230,36 @@ tester_export_section :: proc(client: ^Client, number: int, ending: string) -> s
 	if !any_rate && !g_export.rate_other { fmt.sbprintf(&b, " %d (no shots)", g_krunker_input_rate) }
 	strings.write_string(&b, "\n")
 	if g_export.ping_count > 0 {
-		fmt.sbprintf(&b, "ping ms: avg %.0f, min %d, max %d\n", g_export.ping_sum / f64(g_export.ping_count), g_export.ping_min, g_export.ping_max)
+		n := f64(g_export.ping_count)
+		mean := g_export.ping_sum / n
+		spread := math.sqrt(max(0, g_export.ping_sq_sum / n - mean * mean))
+		jitter := g_export.ping_count > 1 ? g_export.ping_change_sum / (n - 1) : 0
+		fmt.sbprintf(&b, "ping ms (Krunker's): avg %.0f, min %d, max %d, spread %.1f, jitter %.1f\n", mean, g_export.ping_min, g_export.ping_max, spread, jitter)
 	} else { strings.write_string(&b, "ping ms: (none reported)\n") }
 	if g_export.frames > 0 && g_export.frame_seconds > 0 {
-		fmt.sbprintf(&b, "fps while playing: avg %.0f, worst frame %.1f ms\n", f64(g_export.frames) / g_export.frame_seconds, g_export.worst_frame * 1000)
+		low1 := tester_export_frame_percentile(0.99)
+		median := tester_export_frame_percentile(0.5)
+		fmt.sbprintf(&b, "fps while playing: avg %.0f, median %.0f, 1%% low %.0f, worst frame %.1f ms, hitches over 50 ms: %d, over 250 ms: %d\n",
+			f64(g_export.frames) / g_export.frame_seconds, median > 0 ? 1000 / median : 0, low1 > 0 ? 1000 / low1 : 0,
+			g_export.worst_frame * 1000, g_export.hitches_50ms, g_export.hitches_250ms)
 	}
-	fmt.sbprintf(&b, "pc: %s | %s\n", cpu_model_name(), tester_export_gpu_name())
+	fmt.sbprintf(&b, "network: prediction corrections %d, decode errors %d, network thread %s (pings answered on it: %d)\n",
+		client.krunker.prediction_corrections - g_export.corrections_start, client.krunker.decode_errors - g_export.decode_errors_start,
+		client.hud_settings.network_thread ? "on" : "off", g_net_thread.po_sent - g_export.pings_answered_start)
+	info := gpu_device_info()
+	fmt.sbprintf(&b, "pc: %s | %s | driver %s | %s\n", cpu_model_name(), tester_export_gpu_name(), info.version, tester_export_system_text())
+	if len(g_cpu_pinning_text) > 0 { fmt.sbprintf(&b, "cpu pinning: %s\n", g_cpu_pinning_text) }
 	if monitor := glfw.GetPrimaryMonitor(); monitor != nil {
 		mode := glfw.GetVideoMode(monitor)
 		fmt.sbprintf(&b, "monitor: %dx%d @ %d Hz, fps limit %s\n", mode.width, mode.height, mode.refresh_rate, menuui.game_fps_limit_validate(client.hud_settings.fps_limit) > 0 ? fmt.tprintf("%d", menuui.game_fps_limit_validate(client.hud_settings.fps_limit)) : "off")
 	}
+	modes := [Display_Mode]string{.Windowed = "Windowed", .Borderless = "Borderless", .Fullscreen = "Fullscreen"}
+	q := client.quality_settings
+	fmt.sbprintf(&b, "settings: %s %dx%d, renderer %s, v-sync %s, msaa %d, shadows %s (%s), lighting %s, input rate setting %d\n",
+		modes[client.display_mode], client.viewport_width, client.viewport_height, g_gpu_backend == .Vulkan ? "Vulkan" : "Classic (OpenGL)",
+		client.vsync ? "on" : "off", q.msaa, q.shadows ? "on" : "off",
+		menuui.SHADOW_QUALITY_LABELS[menuui.Shadow_Quality(clamp(q.shadow_quality, 0, 1))],
+		menuui.LIGHTING_LABELS[menuui.Lighting_Quality(clamp(q.lighting, 0, 3))], menuui.input_rate_value(client.hud_settings.input_rate))
 	strings.write_string(&b, "weapons (shots / crosshair on a player / server hits):\n")
 	for i in 0 ..< g_export.weapon_count {
 		w := g_export.weapons[i]
@@ -240,6 +280,21 @@ tester_export_section :: proc(client: ^Client, number: int, ending: string) -> s
 	strings.write_string(&b, strings.to_string(g_export.shots))
 	strings.write_string(&b, "\n")
 	return strings.to_string(b)
+}
+
+// The frame time (ms) at fraction p of this game's frames (0.99 = the 1% low).
+@(private = "file")
+tester_export_frame_percentile :: proc(p: f64) -> f64 {
+	total: u64
+	for n in g_export.frame_bins { total += u64(n) }
+	if total == 0 { return 0 }
+	want := u64(f64(total) * p)
+	seen: u64
+	for n, i in g_export.frame_bins {
+		seen += u64(n)
+		if seen > want { return (f64(i) + 0.5) / 10 }
+	}
+	return f64(TESTER_EXPORT_FRAME_BINS) / 10
 }
 
 @(private = "file")

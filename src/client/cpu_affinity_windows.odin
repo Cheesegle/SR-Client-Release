@@ -53,6 +53,42 @@ foreign kernel32 {
 	GetSystemCpuSetInformation :: proc(Information: ^SYSTEM_CPU_SET_INFORMATION, BufferLength: win.ULONG, ReturnedLength: ^win.ULONG, Process: win.HANDLE, Flags: win.ULONG) -> win.BOOL ---
 	SetThreadSelectedCpuSets :: proc(Thread: win.HANDLE, CpuSetIds: ^win.ULONG, CpuSetIdCount: win.ULONG) -> win.BOOL ---
 	SetProcessDefaultCpuSets :: proc(Process: win.HANDLE, CpuSetIds: ^win.ULONG, CpuSetIdCount: win.ULONG) -> win.BOOL ---
+	GetLogicalProcessorInformationEx :: proc(RelationshipType: i32, Buffer: rawptr, ReturnedLength: ^win.DWORD) -> win.BOOL ---
+}
+
+// L3 size per logical processor, from GetLogicalProcessorInformationEx
+// (RelationCache). Records are read by byte offset:
+//   0 Relationship u32, 4 Size u32, then CACHE_RELATIONSHIP at 8:
+//   8 Level u8, 12 CacheSize u32, 38 GroupCount u16 (0 on older Windows = 1),
+//   40 GroupMasks[]: GROUP_AFFINITY {Mask u64, Group u16, Reserved} (16 bytes).
+@(private = "file")
+cpu_l3_sizes :: proc(logical: []Cpu_Logical) {
+	RELATION_CACHE :: 2
+	needed: win.DWORD
+	GetLogicalProcessorInformationEx(RELATION_CACHE, nil, &needed)
+	if needed == 0 { return }
+	words := make([]u64, (int(needed) + 7) / 8, context.temp_allocator)
+	buffer := ([^]u8)(raw_data(words))
+	if !GetLogicalProcessorInformationEx(RELATION_CACHE, buffer, &needed) { return }
+	offset := 0
+	for offset + 56 <= int(needed) {
+		size := int((cast(^u32)&buffer[offset + 4])^)
+		if size < 56 { break }
+		if (cast(^u32)&buffer[offset])^ == RELATION_CACHE && buffer[offset + 8] == 3 {
+			kb := (cast(^u32)&buffer[offset + 12])^ / 1024
+			count := max(1, int((cast(^u16)&buffer[offset + 38])^))
+			for g in 0 ..< count {
+				at := offset + 40 + g * 16
+				if at + 16 > offset + size { break }
+				mask := (cast(^u64)&buffer[at])^
+				group := (cast(^u16)&buffer[at + 8])^
+				for &lp in logical {
+					if lp.group == group && lp.index < 64 && mask & (u64(1) << lp.index) != 0 { lp.l3_kb = max(lp.l3_kb, kb) }
+				}
+			}
+		}
+		offset += size
+	}
 }
 
 CPU_MAX_GROUPS :: 32
@@ -91,6 +127,7 @@ cpu_logical_query :: proc(allocator := context.allocator) -> [dynamic]Cpu_Logica
 		}
 		offset += int(info.Size)
 	}
+	cpu_l3_sizes(result[:])
 	return result
 }
 
