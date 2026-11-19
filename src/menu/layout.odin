@@ -42,6 +42,28 @@ play_reason :: proc(view: View) -> string {
 	return ""
 }
 
+// The mouse wheel scrolls the innermost container under the pointer that can
+// move that way. Clay alone gives the wheel to the innermost clip element
+// even when it cannot scroll (a text field clips its text sideways), so
+// hovering a text field stopped the page from scrolling.
+wheel_scroll :: proc(scroll: clay.Vector2) {
+	if scroll == {} { return }
+	over := clay.GetPointerOverIds()
+	for axis in 0 ..< 2 {
+		if scroll[axis] == 0 { continue }
+		target: clay.ScrollContainerData
+		for i in 0 ..< int(over.length) {
+			data := clay.GetScrollContainerData(over.internalArray[i])
+			if !data.found { continue }
+			can := axis == 1 ? data.config.vertical && data.contentDimensions.height > data.scrollContainerDimensions.height : data.config.horizontal && data.contentDimensions.width > data.scrollContainerDimensions.width
+			if can { target = data } // later ids are deeper
+		}
+		if !target.found { continue }
+		span := axis == 1 ? target.contentDimensions.height - target.scrollContainerDimensions.height : target.contentDimensions.width - target.scrollContainerDimensions.width
+		target.scrollPosition[axis] = clamp(target.scrollPosition[axis] + scroll[axis]*10, -span, 0)
+	}
+}
+
 build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32) -> clay.ClayArray(clay.RenderCommand) {
 	clay.SetCurrentContext(state.ctx)
 	prepare_settings(state, view)
@@ -51,7 +73,8 @@ build :: proc(state: ^State, view: View, input: Input, width, height, delta: f32
 	state.scale = max(0.4, min(width / 1600, height / 900)) * menu_ui_zoom(view.hud)
 	// Clay advances ten pixels per wheel unit. Use 120 logical pixels per
 	// notch so long settings lists move about two rows, independent of UI scale.
-	clay.UpdateScrollContainers(false, input.scroll * (12*state.scale), min(delta, 0.1))
+	wheel_scroll(input.scroll * (12*state.scale))
+	clay.UpdateScrollContainers(false, {}, min(delta, 0.1))
 	state.control_count = 0
 	s := state.scale
 	gap: f32 = view.presentation == .COMPETITIVE ? 16 : 24
