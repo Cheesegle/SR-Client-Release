@@ -463,9 +463,20 @@ small_window :: proc(state: ^State, view: View) {
 account :: proc(state: ^State, view: View) {
 	s := state.scale
 	text(view.auth_pending ? "Finish signing in in the Krunker window." : view.logged_in ? "Signed in to Krunker." : "Sign in to Krunker to join and host games.", 20, s, view.logged_in ? WHITE : MUTED)
-	text("Login opens Krunker's own sign-in page in a small window; SR never sees your password. Log out forgets the account and the login window's data.", 16, s, MUTED)
+	text("SR logs in with Krunker's login service directly: your account email and password, or Email me a code if the account has no password. SR keeps the login (encrypted), never the password, and renews it itself. The browser only opens when Krunker asks for verification.", 16, s, MUTED)
+	text("Username login: Krunker verifies every username login (a CAPTCHA), so it opens Krunker's page once; SR keeps the login afterwards. The same button is for Google, Discord and other sign-ins. Log out forgets the account.", 16, s, MUTED)
+	busy := view.auth_pending || view.connecting
+	has_email := state.login_text_length[.EMAIL] > 0
+	login_field(state, .EMAIL, "Email", "Your Krunker account email")
+	login_field(state, .PASSWORD, "Password", "Your Krunker password")
+	if state.login_code_sent { login_field(state, .CODE, "Code from the email", "Enter the code") }
 	if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
-		button(state, view.auth_pending ? "Logging in..." : "Login", "Login", {kind = .LOGIN}, primary = !view.logged_in, enabled = !view.auth_pending && !view.connecting)
+		button(state, "Log in", "LoginPassword", {kind = .LOGIN_PASSWORD}, primary = !view.logged_in && !state.login_code_sent, enabled = !busy && has_email && state.login_text_length[.PASSWORD] > 0)
+		button(state, state.login_code_sent ? "Send a new code" : "Email me a code", "LoginSendCode", {kind = .LOGIN_SEND_CODE}, enabled = !busy && has_email)
+		if state.login_code_sent { button(state, "Log in with code", "LoginCode", {kind = .LOGIN_CODE}, primary = true, enabled = !busy && state.login_text_length[.CODE] > 0) }
+	}
+	if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, childGap = u16(16*s)}}) {
+		button(state, view.auth_pending ? "Logging in..." : "Username / Google login", "Login", {kind = .LOGIN}, enabled = !busy)
 		button(state, state.logout_armed ? "Click again to log out" : "Log out", "ForgetBrowserSession", {kind = .FORGET_BROWSER_SESSION})
 	}
 	if view.auth_pending { button(state, "Cancel", "CancelJoin", {kind = .CANCEL_JOIN}) }

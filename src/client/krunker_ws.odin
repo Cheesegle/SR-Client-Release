@@ -775,8 +775,13 @@ krunker_ws_connect :: proc(client: ^Client, link: ^shared.Join_Link) -> bool {
 	when ODIN_OS == .Windows {
 		if client.access.status == .PENDING { return true }
 		client.access.captcha_retried = false
-		if client_access_browser_link(link) && !client_access_select(client, time.time_to_unix(time.now())) {
-			return client_access_begin(client)
+		// Access without a browser: memory or cache, else the stored FRVR session
+		// (renewed through FRVR's API). Without a session, SR asks for a login
+		// in its Account window; the browser only opens for verification.
+		now := time.time_to_unix(time.now())
+		if client_access_browser_link(link) && !client_access_select(client, now) && !client_access_renew(client, now) {
+			client_access_need_login(client)
+			return false
 		}
 	}
 	return krunker_ws_connect_ready(client, link)
