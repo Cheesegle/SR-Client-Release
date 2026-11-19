@@ -80,7 +80,7 @@ test_shot_paths_use_player_hitboxes :: proc() -> bool {
 	setup :: proc(shooter, target: ^shared.Player, side_offset: f32) {
 		shooter.position, shooter.direction = {0, 0, 0}, {0, -math.PI / 2.0} // Facing +x.
 		shooter.spread, shooter.recoil_anim_y = 0, 0
-		shooter.swap_timer = 0
+		shooter.swap_timer_ms = 0
 		target.position = {10, 4, side_offset} // Eye height (9.5) crosses the body box.
 		target.health = f32(target.max_health)
 		target.active = true

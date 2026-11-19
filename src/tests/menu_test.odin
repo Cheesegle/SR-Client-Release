@@ -364,12 +364,12 @@ test_slider_numbers :: proc() -> bool {
 			menu_test_frame(&state, view, {text=text})
 			action := menu_test_frame(&state, view, {enter=true})
 			actual := menuui.settings_slider_value(&state, view, control.action)
-			if control.action.kind == .HUD_SCALE || control.action.kind == .OBJECTIVE_OPACITY { expected = math.round(expected*10)/10 } // UI Scale and objective opacity keep Krunker's 0.1 steps
+			if control.action.kind == .HUD_SCALE || control.action.kind == .OBJECTIVE_OPACITY || control.action.kind == .SCOPE_VALUE { expected = math.round(expected*10)/10 } // UI Scale, objective opacity and the scope mods keep Krunker's 0.1 steps
 			if state.number_edit != .NONE || action.kind != .NONE || abs(actual-expected)>0.0001 { fmt.println("Manual entry must update the matching draft value in its displayed units", tab, control.action, actual, expected); return false }
 			menu_test_frame(&state, view, {})
 		}
 	}
-	if count != 37 { fmt.println("Missing editable slider values", count); return false } // Includes the six hitmarker and two objective opacity sliders; master volume is on Sound only.
+	if count != 41 { fmt.println("Missing editable slider values", count); return false } // Includes the six hitmarker, two objective opacity and four scope sliders; master volume is on Sound only.
 	menuui.activate(&state, {action={kind=.SETTINGS_TAB, index=i32(menuui.Settings_Tab.VIDEO)}})
 	menu_test_frame(&state, view, {})
 	gap: menuui.Control

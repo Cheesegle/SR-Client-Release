@@ -16,7 +16,7 @@ physics_game_init :: proc(game: ^shared.Game, map_inst: ^shared.Map, is_local: b
 	player := shared.player_init(game)
 	shared.game_players_add(game, player)
 	shared.player_spawn(player, 0)
-	player.swap_timer = 0
+	player.swap_timer_ms = 0
 	return player
 }
 

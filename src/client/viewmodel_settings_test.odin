@@ -181,17 +181,17 @@ when ODIN_TEST {
 		testing.expect(t, gun.visible && !hand.visible, "hiding hands must leave the weapon visible")
 		client.viewmodel_settings.values[.ROTATION] = 0.5
 		client.viewmodel_settings.values[.SWAP_Y] = 2
-		player.swap_timer = 0.5
+		player.swap_timer_ms = 500
 		player_update_meshes(&player, false)
 		testing.expect(t, abs(upper.rotation.z-0.175)<1e-6 && abs(upper.rotation.x+math.PI/4)<1e-6, "rotation and swap Y must affect the weapon rig")
-		player.swap_timer, player.reload_timer = 0, 0.75
+		player.swap_timer_ms, player.reload_timer_ms = 0, 750
 		client.viewmodel_settings.values[.RELOAD_Y] = 0
 		player_update_meshes(&player, false)
 		testing.expect(t, upper.rotation.x == 0 && upper.rotation.y == 0, "reload Y zero must suppress the lowering animation")
 		client.viewmodel_settings.values[.RELOAD_Y] = 1
 		player_update_meshes(&player, false)
 		testing.expect(t, abs(upper.rotation.x+0.7)<1e-6 && abs(upper.rotation.y+0.25)<1e-6, "reload Y one must preserve the normal lowering animation")
-		player.reload_timer = 0
+		player.reload_timer_ms = 0
 		player.lean_anim = {0.3,0.2,0.1}
 		client.viewmodel_settings.values[.LEANING] = 2
 		player_update_meshes(&player, false)

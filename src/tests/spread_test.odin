@@ -73,12 +73,12 @@ test_weapon_spread :: proc() -> bool {
 	// on Krunker's server (whole ms). f32 seconds left ~2e-7 and fired a whole
 	// input late. 450 ms (Revolver) and 95 ms (SMG) with SR's 3/3/2 ms inputs.
 	for rate_ms in ([]int{450, 95, 125, 115, 900, 1000}) {
-		t := f32(rate_ms) / 1000
+		t := shared.weapon_seconds_to_ms(f32(rate_ms) / 1000)
 		steps := [3]int{3, 3, 2}
 		elapsed, i := 0, 0
 		for elapsed < rate_ms {
 			d := min(steps[i % 3], rate_ms - elapsed)
-			t = shared.krunker_timer_step(t, f32(d) / 1000)
+			shared.weapon_timer_tick(&t, shared.input_delta_ms(f32(d) / 1000))
 			elapsed += d; i += 1
 			if elapsed < rate_ms && t <= 0 {
 				fmt.eprintln("Weapon timer ended early at", elapsed, "of", rate_ms)

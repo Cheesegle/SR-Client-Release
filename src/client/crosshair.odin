@@ -15,7 +15,7 @@ client_crosshair_opacity :: proc(client: ^Client, settings: menuui.Crosshair_Set
 	aim := player.aim_val
 	if client.krunker.connected { aim = krunker_client_render_sample(client).aim }
 	opacity := 1-clamp(aim, 0, 1)
-	if player.inspecting || player.reload_timer > 0 { opacity = 0 }
+	if player.inspecting || player.reload_timer_ms > 0 { opacity = 0 }
 	if player_uses_third_person_camera(player) && !player.weapon.scope { opacity = 1 }
 	return menuui.crosshair_opacity(settings, opacity)
 }

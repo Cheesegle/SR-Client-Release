@@ -18,7 +18,7 @@ when ODIN_TEST {
 				player := client.me
 				shared.player_spawn(player, 0, id)
 				shared.player_swap_weapon(player, 1, true, true, true)
-				player.swap_timer = 0
+				player.swap_timer_ms = 0
 				frame := shared.Input{delta = 0.007, move_dir = -1, shoot = true}
 				// At 7 ms simulation ticks the Auto Pistol fires every 105 ms;
 				// Techy-9 finishes one burst, then requires a trigger release.
@@ -40,7 +40,7 @@ when ODIN_TEST {
 				shared.player_proc_input(player, &frame, predicted, false, predicted, predicted)
 				frame.reload = false
 				for _ in 0..<150 { shared.player_proc_input(player, &frame, predicted, false, predicted, predicted) }
-				testing.expect(t, player.reload_timer == 0 && player.ammo[1] == 15,
+				testing.expect(t, player.reload_timer_ms == 0 && player.ammo[1] == 15,
 					"both secondary magazines must refill after their one-second reload")
 			}
 		}

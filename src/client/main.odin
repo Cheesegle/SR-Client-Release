@@ -949,7 +949,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 		player.team = state.team
 		shared.game_players_add(&client.game, player)
 		shared.player_spawn(player, state.class_id, state.secondary_id)
-		player.swap_timer = 0
+		player.swap_timer_ms = 0
 		player.active = false
 	}
 
@@ -961,7 +961,7 @@ client_apply_player_state :: proc(client: ^Client, state: ^shared.Packet_Player_
 			player_meshes_fini(player)
 		}
 		shared.player_spawn(player, state.class_id, state.secondary_id)
-		player.swap_timer = 0
+		player.swap_timer_ms = 0
 		was_active = false
 	}
 
@@ -1549,6 +1549,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	client.mouse_state.last_pos.y = f32(y)
 	client.last_noclip_key = noclip_key
 
+	when TESTER_EXPORT { tester_export_tick(client, delta) }
 	if !client.net.connected && !client.krunker.connected {
 		shared.game_tick(&client.game, now, delta)
 	} else {
@@ -1789,6 +1790,7 @@ main :: proc() {
 	client.hitmarker_settings = preferences.hitmarker
 	client.damage_settings = preferences.damage
 	defer { if client.settings_dirty { client_settings_save(client_settings_snapshot(client)) } }
+	when TESTER_EXPORT { tester_export_recover() }
 	client.selected_secondary = 2
 	client.render_batching = !options.no_batching
 
@@ -1959,6 +1961,10 @@ main :: proc() {
 
 	print_startup_info(client)
 	if len(options.host_link) > 0 { host_link_queue(client, options.host_link) }
+	// Tests: SR_TEST_SPAWN=<n> spawns Local practice at the same spot every time.
+	if text, found := os.lookup_env("SR_TEST_SPAWN", context.temp_allocator); found {
+		if n, ok := strconv.parse_int(text); ok && n >= 0 { shared.g_test_spawn = n }
+	}
 	free_all(context.temp_allocator)
 
 	client_vrr_update(client, force = true)
@@ -2028,6 +2034,8 @@ main :: proc() {
 	// Closing must never hang on a network or browser thread: if cleanup takes
 	// longer than a few seconds, the process ends anyway.
 	client_exit_watchdog_start()
+	// Developer builds: save the tester log of a game still in progress.
+	when TESTER_EXPORT { tester_export_shutdown(client) }
 
 	client_access_cancel(client)
 	delete(client.access.token)
@@ -2068,9 +2076,8 @@ prefab_init_cb :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_data: 
 
 cpu_model_name :: proc() -> string {
 	when ODIN_OS == .Windows {
-		// /proc/cpuinfo does not exist on Windows; the startup banner falls back
-		// to a safe label rather than printing a confusing error.
-		return "Windows"
+		// /proc/cpuinfo does not exist on Windows: the registry has the name.
+		return cpu_model_name_windows()
 	} else {
 		cpuinfo, err := os.read_entire_file_from_path("/proc/cpuinfo", context.temp_allocator)
 		if err != nil {

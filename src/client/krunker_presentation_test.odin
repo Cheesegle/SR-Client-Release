@@ -16,7 +16,7 @@ when ODIN_TEST {
 		shared.game_players_add(&client.game, client.me)
 		shared.player_spawn(client.me, 2)
 		client.me.uid, client.me.is_you, client.me.noclip = 7, true, true
-		client.me.swap_timer = 0
+		client.me.swap_timer_ms = 0
 		client.krunker_world.local_sid = 7
 		client.krunker.spawned, client.krunker.bootstrapped = true, true
 		client.krunker.input_sequence = 13
@@ -63,13 +63,13 @@ when ODIN_TEST {
 		testing.expect(t, client.me.ammo[0] == 9, "an old ammo correction must not undo newer predicted shots")
 		frame.shoot, frame.reload = false, true
 		krunker_client_predict_input(&client, &frame)
-		remaining := client.me.reload_timer
+		remaining := client.me.reload_timer_ms
 		testing.expect(t, remaining > 0, "live reload input must start a reload")
 		krunker_client_apply_motion(&client, client.me, &source, false)
-		testing.expect(t, client.me.reload_timer == remaining, "movement ACKs must preserve an ongoing reload")
+		testing.expect(t, client.me.reload_timer_ms == remaining, "movement ACKs must preserve an ongoing reload")
 		frame.reload = false
 		for _ in 0..<int(math.ceil(remaining/0.007))+1 { krunker_client_predict_input(&client, &frame) }
-		testing.expect(t, client.me.reload_timer == 0 && client.me.ammo[0] == 24, "the magazine must refill when the predicted reload completes")
+		testing.expect(t, client.me.reload_timer_ms == 0 && client.me.ammo[0] == 24, "the magazine must refill when the predicted reload completes")
 		shared.player_swap_weapon(client.me, 1, true, true, true)
 		before := len(client.game.impacts)
 		shared.player_melee(client.me, true)
@@ -83,7 +83,7 @@ when ODIN_TEST {
 		krunker_presentation_fixture(&client, &map_inst)
 		defer krunker_presentation_cleanup(&client)
 		shared.player_spawn(client.me, 8)
-		client.me.swap_timer = 0
+		client.me.swap_timer_ms = 0
 		client.me.noclip = true
 		testing.expect(t, client.me.weapon.akimbo && client.me.spread == 10, "Uzi's zero base spread must still respect its minimum spread of 10")
 		ammo := client.me.ammo[0]
@@ -116,7 +116,7 @@ when ODIN_TEST {
 		peer := shared.player_init(&client.game)
 		shared.game_players_add(&client.game, peer)
 		shared.player_spawn(peer, 2)
-		peer.uid, peer.swap_timer = 8, 0
+		peer.uid, peer.swap_timer_ms = 8, 0
 		record := []kproto.Krunker_Msgpack_Value{i64(8), i64(0), i64(0), i64(0), i64(179), i64(0), i64(0), true, f64(0), i64(3), f64(1), kproto.Krunker_Msgpack_Nil{}, i64(20)}
 		packet := []kproto.Krunker_Msgpack_Value{"k", record, i64(10), i64(1000)}
 		client.krunker_world.received_at = 1

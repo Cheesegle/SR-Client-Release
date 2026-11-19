@@ -126,7 +126,7 @@ when ODIN_TEST {
 		config := shared.config_load_gameplay()
 		defer shared.config_destroy_gameplay(config)
 		defer g_krunker_input_rate = KRUNKER_INPUT_RATE_DEFAULT
-		for input_rate in ([]i32{240, 360, 480, 720, 900, 1000}) {
+		for input_rate in ([]i32{120, 240, 360, 480, 720, 840, 1000}) {
 		baseline: shared.Vec3
 		for fps, rate_index in ([]int{50, 144, 700, 1500}) {
 			floor := shared.Object{active = true, collision_type = .BOX, position = {0, -1, 0}, scale = {10000, 1, 10000}}
@@ -144,11 +144,11 @@ when ODIN_TEST {
 			shared.game_players_add(&client.game, client.me)
 			shared.player_spawn(client.me, 2)
 			client.me.is_you = true
-			client.me.swap_timer = 0
+			client.me.swap_timer_ms = 0
 			server := shared.player_init(&client.game)
 			defer shared.player_destroy(server)
 			shared.player_spawn(server, 2)
-			server.swap_timer = 0
+			server.swap_timer_ms = 0
 			client.krunker.spawned, client.krunker.bootstrapped = true, true
 			client.krunker.input_sequence = 13
 			snapshot: kproto.Krunker_World_Player
@@ -284,7 +284,7 @@ when ODIN_TEST {
 		shared.game_players_add(&client.game, client.me)
 		shared.player_spawn(client.me, 2)
 		client.me.noclip = true
-		client.me.swap_timer = 0
+		client.me.swap_timer_ms = 0
 		client.krunker.spawned, client.krunker.bootstrapped = true, true
 		client.krunker.input_sequence = 13
 		frame := shared.Input{delta = 0.001, move_dir = 0, swap = 2}

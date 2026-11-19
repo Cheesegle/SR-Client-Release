@@ -48,7 +48,7 @@ when ODIN_TEST {
 			player := shared.player_init(&client.game)
 			shared.game_players_add(&client.game, player)
 			shared.player_spawn(player, 0)
-			player.is_you, player.position, player.swap_timer = true, {}, 0
+			player.is_you, player.position, player.swap_timer_ms = true, {}, 0
 			client.me = player
 			client.inspect_pressed = false
 			player_generate_meshes(player, true)
@@ -103,12 +103,12 @@ when ODIN_TEST {
 		for _ in 0..<360 { client_update_inspect(&client, true, true, false, 1.0/360) }
 		testing.expect(t, abs(client.inspect_angle-angle_60)<0.00001, "inspect must have the same speed at 60 and 360 FPS")
 		for interruption in 0..<7 {
-			player.active, player.reload_timer, player.swap_timer, player.aim_val, weapon.no_inspect = true, 0, 0, 0, false
+			player.active, player.reload_timer_ms, player.swap_timer_ms, player.aim_val, weapon.no_inspect = true, 0, 0, 0, false
 			client_update_inspect(&client, false, true, false, 0)
 			if !player.inspecting { client_update_inspect(&client, true, true, false, 0) }
 			switch interruption {
-			case 0: player.reload_timer = 1
-			case 1: player.swap_timer = 1
+			case 0: player.reload_timer_ms = 1
+			case 1: player.swap_timer_ms = 1
 			case 2: player.aim_val = 0.1
 			case 3: player.active = false
 			case 4: weapon.no_inspect = true

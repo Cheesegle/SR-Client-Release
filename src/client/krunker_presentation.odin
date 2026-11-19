@@ -13,7 +13,7 @@ krunker_client_apply_ammo :: proc(client: ^Client, player: ^shared.Player, sourc
 		capacity := client.game.weapons[player.loadout[slot]].ammo
 		count := clamp(u32(ammo), 0, capacity)
 		if slot == int(player.loadout_index) && count > player.ammo[slot] {
-			player.reload_timer = 0
+			player.reload_timer_ms = 0
 			player.did_shoot = false
 		}
 		player.ammo[slot] = count
@@ -62,7 +62,7 @@ krunker_client_interpolate_remotes :: proc(client: ^Client, now: f64, delta: f32
 			if !was_grounded && player.on_ground { shared.player_emit_presentation(player, .LAND) }
 		}
 		player.step_chase += ((player.server_step_valid ? player.server_step : player.step_val)-player.step_chase)*min(1, delta*20)
-		for &cooldown in player.reloads { cooldown = max(0, cooldown-delta) }
+		for &cooldown in player.reloads_ms { shared.weapon_timer_tick(&cooldown, f64(delta)*1000) }
 	}
 }
 
@@ -98,13 +98,13 @@ krunker_client_present_shots :: proc(client: ^Client) {
 				}
 			}
 		}
-		if player.reloads[player.loadout_index] <= 0 {
+		if player.reloads_ms[player.loadout_index] <= 0 {
 			if !player.weapon.projectile || player.weapon.projectile_disable && !client.game.config.bullet_drop {
 				shared.player_emit_presentation(player, .FIRE)
 			}
 			shared.player_apply_recoil(player)
 			shared.player_start_view_kick(player)
-			player.reloads[player.loadout_index] = player.weapon.rate * client.game.config.fire_rate
+			player.reloads_ms[player.loadout_index] = shared.player_fire_cooldown_ms(player)
 		}
 		if len(client.game.impacts) >= 256 { ordered_remove(&client.game.impacts, 0) }
 		append(&client.game.impacts, impact)

@@ -130,7 +130,7 @@ when ODIN_TEST {
 			remote := shared.player_init(&client.game)
 			shared.game_players_add(&client.game, remote)
 			shared.player_spawn(remote, 0)
-			remote.uid, remote.active, remote.swap_timer = 2, true, 0
+			remote.uid, remote.active, remote.swap_timer_ms = 2, true, 0
 			forward := shared.Vec3{-math.sin(yaw), 0, -math.cos(yaw)}
 			remote.position = view.player != {} ? view.player : position + forward * 30 - shared.Vec3{0, 11, 0}
 			remote.direction = {yaw + math.PI, 0}

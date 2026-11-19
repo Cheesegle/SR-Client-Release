@@ -237,7 +237,7 @@ when ODIN_TEST {
 		remote := shared.player_init(&client.game)
 		shared.game_players_add(&client.game, remote)
 		shared.player_spawn(remote, 0)
-		remote.uid, remote.active, remote.swap_timer = 2, true, 0
+		remote.uid, remote.active, remote.swap_timer_ms = 2, true, 0
 		remote.position, remote.last_position, remote.direction = {0, 0, -30}, {0, 0, -30}, {0, math.PI} // Facing the camera.
 
 		camera := camera_init(math.PI / 2)

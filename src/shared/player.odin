@@ -3,12 +3,17 @@ package shared
 import "core:math"
 import "core:math/rand"
 
+// SR_TEST_SPAWN (tests only): offline games always use this spawn; -1 = off.
+g_test_spawn := -1
+
 player_init :: proc(game: ^Game) -> ^Player {
 	player := new(Player)
 	player.game = game
 	player.slid_cont = 1
 	player.scale = GAME_CONSTANTS.player_scale
 	player.secondary_id = 2
+	player.class_slide_time, player.class_slide_accel = 1, 1
+	player.throw_charge_ms, player.melee_rate = 900, 1
 	return player
 }
 
@@ -55,6 +60,14 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 	player.wall_jump = class.wall_jump
 	player.wall_jump_max = i32(max(class.wall_jump_max, 0))
 	player.wall_jump_count = 0
+	// Krunker resetStep: slideTimer *= (h.config.slT||1), velocity *= h.config.slA.
+	// Every stock class sets slA (Spray N Pray .98, others 1); 0 means unset.
+	player.class_slide_time = class.slide_time != 0 ? class.slide_time : 1
+	player.class_slide_accel = class.slide_accel != 0 ? class.slide_accel : 1
+	// Krunker: throwCharge = config.throwChrg || 900; melee cooldown x melRate.
+	player.throw_charge_ms = class.throw_charge > 0 ? f64(class.throw_charge) : 900
+	player.melee_rate = class.melee_rate > 0 ? class.melee_rate : 1
+	player.charge_time_ms, player.full_charge, player.over_charged, player.charge_progress = 0, false, false, 0
 	player.health = f32(class.health)
 	player.max_health = class.health
 
@@ -102,13 +115,13 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 
 	delete(player.loadout)
 	delete(player.ammo)
-	delete(player.reloads)
+	delete(player.reloads_ms)
 	clear(&player.input_queue)
 
 	player.loadout_size = i32(len(composed))
 	player.loadout = make([]i32, player.loadout_size)
 	player.ammo = make([]u32, player.loadout_size)
-	player.reloads = make([]f32, player.loadout_size)
+	player.reloads_ms = make([]f64, player.loadout_size)
 	copy(player.loadout, composed[:])
 
 	if player.game != nil && player.game.map_inst != nil {
@@ -149,11 +162,11 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 	player.covered_distance = 0.0
 	player.aim_time = 0.0
 
-	player.swap_timer = 0.0
+	player.swap_timer_ms = 0.0
 	player.slide_timer = 0.0
 	player.can_slide_timer = 0.0
 	player.jump_timer = 0.0
-	player.reload_timer = 0.0
+	player.reload_timer_ms = 0.0
 
 	player_update_height(player)
 	player_swap_weapon(player, 0, true, false, false)
@@ -187,6 +200,9 @@ player_spawn :: proc(player: ^Player, class_index: i32 = 0, secondary_id: i32 = 
 		if len(eligible) > 0 {
 			spawn = eligible[rand.int_max(len(eligible))]
 		}
+		// Performance and delay tests (SR_TEST_SPAWN=<n> at launch, off
+		// otherwise): always the same spawn, so every run sees the same view.
+		if g_test_spawn >= 0 { spawn = player.game.map_inst.spawns[g_test_spawn % len(player.game.map_inst.spawns)] }
 
 		player.position = spawn.position
 		player.direction.x = 0.0
@@ -276,9 +292,10 @@ player_reset_step :: proc(player: ^Player, recon: bool) {
 	player.slide_timer = GAME_CONSTANTS.slide_time *
 		player.game.config.slide_time *
 		player.game.map_inst.config.slide_time *
+		player.class_slide_time *
 		player.crouch_val
 
-	slide_mlt := (player.on_terrain ? GAME_CONSTANTS.player_terrain_slide_velocity_mlt : GAME_CONSTANTS.player_slide_velocity_mlt) * player.game.map_inst.config.slide_accel * player.game.config.slide_speed
+	slide_mlt := (player.on_terrain ? GAME_CONSTANTS.player_terrain_slide_velocity_mlt : GAME_CONSTANTS.player_slide_velocity_mlt) * player.game.map_inst.config.slide_accel * player.class_slide_accel * player.game.config.slide_speed
 
 	player.velocity.x *= slide_mlt
 	player.velocity.z *= slide_mlt
@@ -555,7 +572,8 @@ player_swap_weapon :: proc(player: ^Player, index: i32, force_swap, instant_swap
 	player.loadout_index = index
 
 	if !instant_swap && loadout_changed {
-		player.reload_timer = 0.0
+		player.reload_timer_ms = 0.0
+		player.charge_time_ms, player.full_charge = 0, false
 		player.did_shoot = false
 		player.burst_count = 0
 	}
@@ -574,7 +592,7 @@ player_swap_weapon :: proc(player: ^Player, index: i32, force_swap, instant_swap
 
 	if !instant_swap && player.weapon != nil {
 		if !recon && loadout_changed {
-			player.swap_timer = player.weapon.swap_time
+			player.swap_timer_ms = weapon_seconds_to_ms(player.weapon.swap_time)
 		}
 	}
 	if loadout_changed {
@@ -594,20 +612,20 @@ player_swap_weapon :: proc(player: ^Player, index: i32, force_swap, instant_swap
 }
 
 player_reload :: proc(player: ^Player) {
-	if player.reload_timer != 0 || player.ammo[player.loadout_index] >= player.weapon.ammo {
+	if player.reload_timer_ms != 0 || player.ammo[player.loadout_index] >= player.weapon.ammo {
 		return
 	}
 
-	player.reload_timer = player.weapon.reload_time * player.game.config.reload_speed
+	player.reload_timer_ms = player_reload_duration_ms(player)
 	player.burst_count = 0
 }
 
-player_apply_recoil :: proc(player: ^Player) {
+player_apply_recoil :: proc(player: ^Player, force_mlt: f32 = 1) {
 	if player == nil || player.weapon == nil {
 		return
 	}
 
-	player.recoil_force += player.weapon.recoil
+	player.recoil_force += player.weapon.recoil * force_mlt // Krunker: x3.5 for a charge blast
 
 	rand_recoil := (rand.float32() - 0.5) * 2.0 * math.PI
 	player.recoil.x += player.weapon.recoil_r * math.sin(rand_recoil)
@@ -762,20 +780,11 @@ player_update_recoil :: proc(player: ^Player, delta: f32) {
 
 // Fresh client prediction may play movement effects. Reconciliation replays
 // leave predict_effects false so snapshots cannot restart the same animation.
-// Krunker's server counts weapon timers in whole milliseconds (rate 450,
-// inputs of 2 or 3 ms), so they land exactly on 0. SR keeps seconds in f32,
-// which leaves a sub-microsecond remainder (e.g. 0.45 - 150 steps = 2e-7) and
-// made SR fire one input after the server. Anything under half a millisecond
-// is that rounding remainder, never real time left.
-krunker_timer_step :: proc(timer, delta: f32) -> f32 {
-	t := timer - delta
-	return t < 0.0005 ? 0 : t
-}
 
 player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool, predict_effects: bool = false, predict_combat: bool = false) {
 	// Capture fresh actions once. Reconciliation replays only restore motion.
 	was_grounded, was_wall_jump := player.on_ground, player.did_wall_jump
-	previous_reload, previous_slide := player.reload_timer, player.slide_timer
+	previous_reload, previous_slide := player.reload_timer_ms, player.slide_timer
 	previous_weapon, previous_shot := player.loadout_index, player.shot_seq
 	emit_presentation := player.game != nil && player.game.presentation_enabled && (!recon || predict_effects)
 	player.land_velocity = 0
@@ -783,9 +792,9 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		if emit_presentation {
 			if player.shot_seq != previous_shot { player_emit_presentation(player, .FIRE) }
 			if previous_weapon != player.loadout_index { player_emit_presentation(player, .SWAP) }
-			if previous_reload <= 0 && player.reload_timer > 0 { player_emit_presentation(player, .RELOAD) }
+			if previous_reload <= 0 && player.reload_timer_ms > 0 { player_emit_presentation(player, .RELOAD) }
 			// Krunker's endReload sound: the reload finished (not cancelled by a swap).
-			if previous_reload > 0 && player.reload_timer <= 0 && previous_weapon == player.loadout_index { player_emit_presentation(player, .RELOAD_END) }
+			if previous_reload > 0 && player.reload_timer_ms <= 0 && previous_weapon == player.loadout_index { player_emit_presentation(player, .RELOAD_END) }
 			if was_grounded && !player.on_ground && player.velocity.y > 0 || !was_wall_jump && player.did_wall_jump { player_emit_presentation(player, .JUMP) }
 			// Krunker plays the landing in resetStep, before a bhop's next jump.
 			if !was_grounded && player.land_velocity != 0 { player_emit_presentation(player, .LAND) }
@@ -878,8 +887,8 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 
 	if player.weapon.no_aim && player.aim_val > 0.0 {
 		player.aim_val = 0.0
-	} else if player.weapon.zoom != 0 && (!player.weapon.no_aim || player.swap_timer > 0.0) {
-		can_scope := player.reload_timer <= 0.0 && player.swap_timer <= 0.0 && (!player.weapon.melee || (player.can_throw && player.game.config.throwable_melees))
+	} else if player.weapon.zoom != 0 && (!player.weapon.no_aim || player.swap_timer_ms > 0.0) {
+		can_scope := player.reload_timer_ms <= 0.0 && player.swap_timer_ms <= 0.0 && (!player.weapon.melee || (player.can_throw && player.game.config.throwable_melees))
 
 		if input.scope && player.aim_val < 1.0 && can_scope {
 			player.aim_val += 1.0 / player.weapon.aim_speed * delta
@@ -1126,23 +1135,26 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 	// while movement reconciliation never repeats these effects.
 	velocity_before_combat := player.velocity
 	if (!recon || predict_combat) && player.game.map_inst.config.model != .SPRITE {
+		player_charge_step(player, input, input_delta_ms(delta))
 		if input.reload && !player.game.mode.config.no_reloads {
 			player_reload(player)
 		}
 
-		if player.reload_timer > 0.0 {
-			player.reload_timer = krunker_timer_step(player.reload_timer, delta)
+		// Krunker's f64 millisecond timers (weapon_timers.odin).
+		delta_ms := input_delta_ms(delta)
+		if player.reload_timer_ms > 0.0 {
+			weapon_timer_tick(&player.reload_timer_ms, delta_ms)
 
-			if player.reload_timer == 0 {
+			if player.reload_timer_ms == 0 {
 				player.did_shoot = false
 				player.ammo[player.loadout_index] = player.weapon.ammo
 			}
 		}
 
-		player.swap_timer = krunker_timer_step(player.swap_timer, delta)
+		weapon_timer_tick(&player.swap_timer_ms, delta_ms)
 
 		for i in 0 ..< player.loadout_size {
-			player.reloads[i] = krunker_timer_step(player.reloads[i], delta)
+			weapon_timer_tick(&player.reloads_ms[i], delta_ms)
 		}
 
 		if player.weapon != nil && !move_lock {
@@ -1156,12 +1168,13 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 				will_shoot = true
 			}
 
-			if will_shoot && player.reloads[player.loadout_index] <= 0.0 && player.swap_timer <= 0.0 && player.reload_timer <= 0.0 {
+			if will_shoot && player.reloads_ms[player.loadout_index] <= 0.0 && player.swap_timer_ms <= 0.0 && player.reload_timer_ms <= 0.0 {
 				if player.weapon.melee {
 					player_melee(player, recon)
 				} else {
 					if player.ammo[player.loadout_index] > 0 || player.unlimited_ammo {
-						player_shoot(player, recon)
+						// Krunker: fullCharge ? shoot(..., blast) : shoot(...).
+						player_shoot(player, recon, player.full_charge)
 					} else if !player.game.mode.config.no_reloads {
 						player_reload(player)
 					}
@@ -1229,7 +1242,10 @@ player_step :: proc(player: ^Player, distance: f32) {
 player_melee :: proc(player: ^Player, presentation_only: bool = false) {
 	is_throw := player.can_throw && player.weapon.can_throw && player.aim_val == 1.0
 
-	player.reloads[player.loadout_index] = player.weapon.rate * player.game.config.fire_rate
+	// Krunker: rate * fiRat * ... * config.melRate (the class), then the
+	// throw charge resets.
+	player.reloads_ms[player.loadout_index] = player_fire_cooldown_ms(player) * weapon_timer_multiplier(player.melee_rate > 0 ? player.melee_rate : 1)
+	player.charge_time_ms, player.full_charge = 0, false
 	player.did_shoot = true
 	player.did_act = true
 
@@ -1297,24 +1313,77 @@ player_melee :: proc(player: ^Player, presentation_only: bool = false) {
 	}
 }
 
-player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
-	if !player.unlimited_ammo {
+// Krunker's charge step (procInputs, fresh inputs, after aiming): charge
+// weapons charge while firing (shootChrg) and melee weapons charge their
+// throw while aiming; ovrChrg cancels a charge held past 1.2x its time.
+// Krunker's aimVal runs the other way (1 = hip), so its aimVal<1 is
+// aim_val > 0 here and its aimVal==1 is aim_val == 0.
+KRUNKER_OVERCHARGE :: 1.2 // Krunker mS
+player_charge_step :: proc(player: ^Player, input: ^Input, u: f64) {
+	weapon := player.weapon
+	if weapon == nil || player.game == nil || !player.game.config.charge_weapons { return }
+	charging := weapon.shoot_charge ? input.shoot : player.aim_val > 0
+	full_time := weapon.charge_time > 0 ? f64(weapon.charge_time) : player.throw_charge_ms
+	if full_time <= 0 { return }
+	can_charge := weapon.charge_time > 0 && (player.ammo[player.loadout_index] > 0) || player.can_throw && weapon.can_throw
+	if charging && !player.over_charged && player.swap_timer_ms <= 0 && can_charge {
+		player.charge_time_ms += player.charge_time_ms >= full_time ? 0.1*u/(160/(full_time*(KRUNKER_OVERCHARGE-1))) : u
+		if weapon.over_charge {
+			if player.charge_time_ms >= full_time*KRUNKER_OVERCHARGE { player.charge_time_ms, player.full_charge, player.over_charged = 0, false, true }
+		} else if player.charge_time_ms >= full_time {
+			player.full_charge, player.charge_time_ms = true, full_time
+		}
+		player.charge_progress = f32(player.charge_time_ms/full_time)
+	} else if weapon.charge_dec > 0 && player.charge_time_ms > 0 {
+		player.charge_time_ms -= f64(weapon.charge_dec)*u
+		player.full_charge = false
+		if player.charge_time_ms <= 0 {
+			player.charge_time_ms = 0
+			if player.aim_val == 0 { player.over_charged = false }
+		}
+		player.charge_progress = f32(player.charge_time_ms/full_time)
+	} else {
+		player.full_charge, player.charge_time_ms = false, 0
+		if player.aim_val == 0 { player.over_charged = false }
+	}
+	// this.makingMProg||f||(this.interMProg=0)
+	if player.charge_time_ms <= 0 { player.charge_progress = 0 }
+}
+
+player_shoot :: proc(player: ^Player, presentation_only: bool = false, blast: bool = false) {
+	weapon := player.weapon
+	// Krunker: B=!unlimitedAmmo; fullChrgSht&&!blast -> B=false (only the
+	// full-charge blast uses ammo).
+	if !player.unlimited_ammo && !(weapon.full_charge_shot && !blast) && player.ammo[player.loadout_index] > 0 {
 		player.ammo[player.loadout_index] -= 1
 	}
 
-	player.did_shoot = true
 	player.did_act = true
 	player.shot_seq += 1
+	if !weapon.bypass_charge {
+		player.did_shoot = true
+		player.charge_time_ms, player.full_charge = 0, false
+	}
+	// rateChrg: the cooldown shrinks as the charge builds (x1.5 .. x0.7).
+	rate_mlt: f64 = 1
+	if weapon.rate_charge && weapon.charge_time > 0 {
+		rate_mlt = max(0.7, 1.5*(1 - min(1, player.charge_time_ms/f64(weapon.charge_time))))
+	}
+	if blast {
+		player.full_charge, player.charge_time_ms = false, 0
+	} else {
+		player.did_shoot = true
+	}
 
 	if player.burst_count != 0 {
 		player.burst_count -= 1
 	} else {
-		player.burst_count = player.weapon.burst ? i32(player.weapon.burst_count) - 1 : 0
+		player.burst_count = weapon.burst ? i32(weapon.burst_count) - 1 : 0
 	}
 
-	player.reloads[player.loadout_index] = (player.burst_count != 0 && player.weapon.burst ? player.weapon.burst_rate : player.weapon.rate) * player.game.config.fire_rate
+	player.reloads_ms[player.loadout_index] = player_fire_cooldown_ms(player, player.burst_count != 0 && weapon.burst) * rate_mlt
 
-	player_apply_recoil(player)
+	player_apply_recoil(player, blast ? 3.5 : 1)
 	player_start_view_kick(player)
 
 	is_projectile := player.weapon.projectile && (!player.weapon.projectile_disable || player.game.config.bullet_drop)
@@ -1379,7 +1448,9 @@ player_shoot :: proc(player: ^Player, presentation_only: bool = false) {
 				continue
 			}
 
+			skip_players := presentation_only && player.game.server_hits_players
 			for target in player.game.players {
+				if skip_players { break }
 				if target == player || !target.active || target.team != 0 && target.team == player.team && !player.game.mode.config.dmg_team {
 					continue
 				}
@@ -1502,7 +1573,7 @@ player_interpolate :: proc(player: ^Player, delta: f32) {
 player_destroy :: proc(player: ^Player) {
 	delete(player.loadout)
 	delete(player.ammo)
-	delete(player.reloads)
+	delete(player.reloads_ms)
 	delete(player.input_queue)
 
 	free(player)

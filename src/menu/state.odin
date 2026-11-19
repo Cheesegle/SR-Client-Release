@@ -9,7 +9,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, HOST, ACCOUN
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, INPUT_RATE, OBJECTIVE_OPACITY }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, INPUT_RATE, OBJECTIVE_OPACITY, SCOPE_VALUE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 // Krunker's tabs (General, Controls, Display, Render, Game, Sound) plus SR's
 // own Experimental tab. The enum names predate the Krunker layout.
@@ -31,7 +31,7 @@ HUD_Settings :: struct {
 	hide_chat: bool,          // chat and kill lines, bottom left
 	// Settings > Experimental (kept here so it saves with the HUD flags).
 	network_thread: bool,     // read the network on its own thread
-	input_rate: i32,          // Krunker inputs per second, one of INPUT_RATES; 0 (older files) = 360
+	input_rate: i32,          // real inputs per second, one of INPUT_RATES; 0 (older files) = 360
 	hud_scale: f32,           // pre-0.13 HUD size; replaced by ui_scale, kept so old files load
 	// Krunker's UI Scale (scaleUI, 0.1..1, default 0.7); 0 (older files) = default.
 	ui_scale: f32,
@@ -59,6 +59,13 @@ HUD_Settings :: struct {
 	// marker's opacity, and while aiming down sights near it. Tenths plus
 	// one, so 0 (older files) is Krunker's default (1 and 0.5).
 	objective_opacity, ads_objective_opacity: i32,
+	// Krunker's scope settings (Settings > Mods > Scope): scopeOpac (the
+	// scope image), scopeBorders.display / scopeBorderOpac (the bars outside
+	// it) and scopeWidth / scopeHeight (x100 px). Stored as tenths plus one,
+	// 0 = default. SR's defaults hide the image and the borders: competitive
+	// players turn them off in Krunker, leaving the plain zoomed view.
+	scope_opacity, scope_border_opacity, scope_width, scope_height: i32,
+	scope_borders: bool,
 }
 Krunker_Region :: struct { id, name: string }
 // Krunker's Default Region list, in its order (ids as its settings save them).
@@ -83,6 +90,37 @@ objective_opacity_encode :: proc(value: f32) -> i32 {
 }
 objective_opacity :: proc(settings: HUD_Settings) -> f32 { return objective_opacity_decode(settings.objective_opacity, OBJECTIVE_OPACITY_DEFAULT) }
 ads_objective_opacity :: proc(settings: HUD_Settings) -> f32 { return objective_opacity_decode(settings.ads_objective_opacity, ADS_OBJECTIVE_OPACITY_DEFAULT) }
+SCOPE_OPACITY_DEFAULT :: 0 // SR: no scope image (Krunker's default is 1)
+SCOPE_BORDER_OPACITY_DEFAULT :: 1
+SCOPE_SIZE_DEFAULT :: 6.8 // Krunker scopeWidth/scopeHeight; the image is size*100 px
+SCOPE_SIZE_MIN :: 0.1
+SCOPE_SIZE_MAX :: 10
+scope_tenths_decode :: proc(stored: i32, fallback, low, high: f32) -> f32 {
+	if stored <= 0 { return fallback }
+	return clamp(f32(stored - 1)/10, low, high)
+}
+scope_tenths_encode :: proc(value, low, high: f32) -> i32 {
+	if value != value { return 0 } // NaN
+	return i32(clamp(value, low, high)*10 + 0.5) + 1
+}
+// index 0 scopeOpac, 1 scopeBorderOpac, 2 scopeWidth, 3 scopeHeight.
+scope_value :: proc(settings: HUD_Settings, index: int) -> f32 {
+	switch index {
+	case 0: return scope_tenths_decode(settings.scope_opacity, SCOPE_OPACITY_DEFAULT, 0, 1)
+	case 1: return scope_tenths_decode(settings.scope_border_opacity, SCOPE_BORDER_OPACITY_DEFAULT, 0, 1)
+	case 2: return scope_tenths_decode(settings.scope_width, SCOPE_SIZE_DEFAULT, SCOPE_SIZE_MIN, SCOPE_SIZE_MAX)
+	case 3: return scope_tenths_decode(settings.scope_height, SCOPE_SIZE_DEFAULT, SCOPE_SIZE_MIN, SCOPE_SIZE_MAX)
+	}
+	return 0
+}
+scope_value_set :: proc(settings: ^HUD_Settings, index: int, value: f32) {
+	switch index {
+	case 0: settings.scope_opacity = scope_tenths_encode(value, 0, 1)
+	case 1: settings.scope_border_opacity = scope_tenths_encode(value, 0, 1)
+	case 2: settings.scope_width = scope_tenths_encode(value, SCOPE_SIZE_MIN, SCOPE_SIZE_MAX)
+	case 3: settings.scope_height = scope_tenths_encode(value, SCOPE_SIZE_MIN, SCOPE_SIZE_MAX)
+	}
+}
 FPS_UPDATE_DEFAULT_MS :: 250
 FPS_UPDATE_MIN_MS :: 50 // Krunker allows 0 (every frame); SR keeps the HUD cache useful.
 FPS_UPDATE_MAX_MS :: 1000
@@ -717,6 +755,9 @@ activate :: proc(state: ^State, control: Control) -> Action {
 				else { state.settings_draft.hud.ads_objective_opacity = objective_opacity_encode(value) }
 			}
 			return {}
+		case .SCOPE_VALUE:
+			if value := control.action.value; value == value { scope_value_set(&state.settings_draft.hud, int(control.action.index), value) }
+			return {}
 		case .FPS_UPDATE_RATE:
 			if value := control.action.value; value == value { state.settings_draft.hud.fps_update_ms = i32(clamp(value + 0.5, FPS_UPDATE_MIN_MS, FPS_UPDATE_MAX_MS)) } // Skips NaN.
 			return {}
@@ -780,6 +821,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 16: state.settings_draft.hud.ui_scaling_off = !state.settings_draft.hud.ui_scaling_off
 			case 17: state.settings_draft.hud.hide_kill_counter = !state.settings_draft.hud.hide_kill_counter
 			case 18: state.settings_draft.hud.hide_death_counter = !state.settings_draft.hud.hide_death_counter
+			case 19: state.settings_draft.hud.scope_borders = !state.settings_draft.hud.scope_borders
 			}
 			return {}
 		case .RESOLUTION:
@@ -921,13 +963,13 @@ set_invite :: proc(state: ^State, value: string) {
 // Network Rate number: the browser sends once half its interval has passed, so
 // its Network Rate 360 is up to 720 inputs a second at high FPS). 1000 is the
 // protocol's limit: input durations are whole milliseconds, at least 1.
-INPUT_RATES := [6]i32{240, 360, 480, 720, 900, 1000}
-INPUT_RATE_LABELS := [6]string{"240", "360 (default)", "480", "720", "900", "1000"}
+INPUT_RATES := [7]i32{120, 240, 360, 480, 720, 840, 1000}
+INPUT_RATE_LABELS := [7]string{"120", "240", "360 (default)", "480", "720 (= Krunker 360)", "840", "1000"}
 INPUT_RATE_DEFAULT :: 360
 
 input_rate_index :: proc(rate: i32) -> i32 {
 	for value, i in INPUT_RATES { if value == rate { return i32(i) } }
-	return 1 // 0 (older files) or anything unknown: 360
+	return 2 // 0 (older files) or a removed choice (900): 360
 }
 
 input_rate_value :: proc(rate: i32) -> i32 { return INPUT_RATES[input_rate_index(rate)] }

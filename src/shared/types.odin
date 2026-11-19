@@ -286,6 +286,18 @@ Weapon :: struct {
 	no_auto:               bool,
 	no_inspect:            bool,
 	can_throw:             bool,
+	// Krunker's charge fields: chrgTime (ms), ovrChrg, shootChrg (charge while
+	// firing instead of aiming), bypassChrg, chrgDec, fullChrgSht (only the
+	// full-charge blast uses ammo), fullChrgMlt, rateChrg (fire rate follows
+	// the charge). Melee weapons charge their throw with the class throwChrg.
+	charge_time:           f32,
+	over_charge:           bool,
+	shoot_charge:          bool,
+	bypass_charge:         bool,
+	charge_dec:            f32,
+	full_charge_shot:      bool,
+	full_charge_mlt:       f32,
+	rate_charge:           bool,
 	melee:                 bool,
 	equipment:             bool,
 	bomb:                  bool,
@@ -393,6 +405,8 @@ Player :: struct {
 	wall_jump:                       bool,
 	wall_jump_max:                   i32, // from the class; 0 means none
 	wall_jump_count:                 i32, // wall jumps since last landing (Krunker wallJumpC)
+	class_slide_time:                f32, // the class's slT (Krunker resetStep), 1 when unset
+	class_slide_accel:               f32, // the class's slA (Spray N Pray .98), 1 when unset
 	did_act:                         bool,
 	did_shoot:                       bool,
 	did_jump:                        bool,
@@ -400,6 +414,14 @@ Player :: struct {
 	can_slide:                       bool,
 	can_slide_timer:                 f32,
 	can_throw:                       bool,
+	// Krunker chargeTime (ms), fullCharge, overCharged, throwCharge (the
+	// class's throwChrg) and interMProg (the charge bar, 0..1.2).
+	charge_time_ms:                  f64,
+	full_charge:                     bool,
+	over_charged:                    bool,
+	throw_charge_ms:                 f64,
+	charge_progress:                 f32,
+	melee_rate:                      f32, // the class's melRate, 1 when unset
 	kills:                           u32,
 	deaths:                          u32,
 	death_streak:                    u32,
@@ -431,8 +453,8 @@ Player :: struct {
 	slid_cont:                       i32,
 	air_time:                        f32,
 	covered_distance:                f32,
-	swap_timer:                      f32,
-	reload_timer:                    f32,
+	swap_timer_ms:                      f64,
+	reload_timer_ms:                    f64,
 	slide_timer:                     f32,
 	jump_timer:                      f32,
 	interact_progress:               f32,
@@ -506,7 +528,7 @@ Player :: struct {
 	melee_punch_left:                bool,
 	loadout:                         []i32,
 	ammo:                            []u32,
-	reloads:                         []f32,
+	reloads_ms:                         []f64, // fire cooldown per loadout slot, ms (Krunker: reloads[])
 	burst_count:                     i32,
 	loadout_size:                    i32,
 	loadout_index:                   i32,
@@ -545,6 +567,8 @@ Game_Config :: struct {
 	no_streaks:         bool,
 	disable_borders:    bool,
 	throwable_melees:   bool,
+	charge_weapons:     bool, // Krunker chrgWeps ("Chargable Weapons", default on)
+	kill_cams:          bool, // Krunker kCams ("Kill Cams", default on)
 	select_team:        bool,
 	allow_spectate:     bool,
 	third_person:       bool,
@@ -700,6 +724,11 @@ Game :: struct {
 	now:          f32,
 	move_lock:    bool,
 	is_local:     bool,
+	// Live Krunker lobby: only Krunker's server ray-tests players (its rewound
+	// complexHitboxes). The browser's own shot ray never stops at a player
+	// (fetchState finds no stateHistory on a client), so predicted shots pass
+	// through players here too.
+	server_hits_players: bool,
 	ready:        bool,
 	end_timer:    f32,
 	nuke_timer:   f32,
@@ -736,6 +765,8 @@ DEFAULT_GAME_CONFIG :: Game_Config {
 	no_streaks      = false,
 	disable_borders = false,
 	throwable_melees = true,
+	charge_weapons  = true,
+	kill_cams       = true,
 	select_team     = false,
 	allow_spectate  = true,
 	third_person    = false,

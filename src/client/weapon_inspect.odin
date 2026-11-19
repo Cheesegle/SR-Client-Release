@@ -20,7 +20,7 @@ client_update_inspect :: proc(client: ^Client, down, enabled, cancel: bool, delt
 	weapon := player.weapon
 	allowed := enabled && player.active && weapon != nil
 	if allowed {
-		allowed = !weapon.no_inspect && player.aim_val <= 0.001 && player.reload_timer <= 0 && player.swap_timer <= 0 &&
+		allowed = !weapon.no_inspect && player.aim_val <= 0.001 && player.reload_timer_ms <= 0 && player.swap_timer_ms <= 0 &&
 			(!weapon.melee || player.can_throw)
 	}
 	if !allowed || cancel || client.inspect_weapon != weapon || client.inspect_slot != player.loadout_index {

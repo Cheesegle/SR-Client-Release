@@ -1,5 +1,28 @@
 # Changelog
 
+## SR Client 0.46.0
+- **Inputs per second** (Settings > Experimental): 120, 240, 360 (default),
+  480, 720, 840, 1000. These are real inputs per second; Krunker's own
+  Network Rate numbers are half the real rate (its 360 sends up to 720), which
+  the note under the setting explains.
+- Settings that need a restart are marked with a red *.
+- **Hit registration:** weapon timers (fire cooldown, reload, swap) run in
+  Krunker's own millisecond math, so every shot is allowed on exactly the
+  input where Krunker's server allows it.
+- **Movement:** slides use each class's slide factors like Krunker (Spray N
+  Pray was corrected after every slide).
+- **Shots and hits:** predicted shots pass through players like the
+  browser's; a hitmarker for every hit Krunker reports.
+- **Infiltrator:** the Charge Rifle works like Krunker's (free shots that speed
+  up as it charges, the full-charge blast uses the round), knife throws charge
+  while aiming, with Krunker's charge bar.
+- **Scope:** Krunker's scope settings (Settings > Interface). The scope image
+  and black borders are off by default, as competitive players set them.
+- **Death screen:** Krunker's kill cam: the camera turns to and flies towards
+  your killer, you can look around against a pull, and the killer's name and
+  health stay visible.
+- **Burg:** the cart's wheels and axles are drawn.
+
 ## SR Client 0.40.0
 Everything since 0.25.0.
 

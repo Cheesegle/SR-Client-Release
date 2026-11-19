@@ -29,7 +29,7 @@ test_trooper_blaster :: proc() -> bool {
 	}
 	shooter.position = {0, 0, 0}
 	shooter.direction = {0, -math.PI / 2}
-	shooter.swap_timer = 0
+	shooter.swap_timer_ms = 0
 	// Aim the collision fixture so hip-fire accuracy does not miss the target.
 	shooter.aim_val = 1
 	target.position = {100, 0, 0}
@@ -85,10 +85,10 @@ test_trooper_blaster :: proc() -> bool {
 	shared.game_players_add(&game, shooter)
 
 	shared.player_spawn(shooter, 13)
-	shooter.swap_timer = 0
+	shooter.swap_timer_ms = 0
 	shooter.ammo[0] = 0
 	shared.player_reload(shooter)
-	if shooter.reload_timer <= 0 { return false }
+	if shooter.reload_timer_ms <= 0 { return false }
 	input = {delta = 0.01, move_dir = -1}
 	for _ in 0 ..< 200 { shared.player_proc_input(shooter, &input, false, false) }
 	if shooter.ammo[0] != 16 {

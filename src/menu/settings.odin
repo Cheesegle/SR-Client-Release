@@ -39,6 +39,10 @@ settings_window :: proc(state: ^State, view: View) {
 					krunker_badge(s)
 					text("= same as Krunker", 16, s, SETTINGS_MUTED)
 				}
+				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = {left = u16(24*s), right = u16(24*s)}, childGap = u16(8*s), childAlignment = {y = .Center}}}) {
+					text("*", 20, s, SETTINGS_RESTART_RED)
+					text("= needs a restart", 16, s, SETTINGS_MUTED)
+				}
 				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = clay.PaddingAll(u16(24*s))}}) { text("SR CLIENT", 16, s, SETTINGS_MUTED) }
 			}
 			if clay.UI(clay.ID("SettingsContent"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom}}) {
@@ -132,6 +136,13 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		// Krunker's objOpac / adsObjOpac: the hardpoint marker.
 		settings_slider(state, "Objective Info Opacity", "ObjectiveOpacity", objective_opacity(values.hud), 0, 1, {kind = .OBJECTIVE_OPACITY, index = 0}, step = 0.1)
 		settings_slider(state, "Objective Info ADS Opacity", "AdsObjectiveOpacity", ads_objective_opacity(values.hud), 0, 1, {kind = .OBJECTIVE_OPACITY, index = 1}, step = 0.1)
+		// Krunker's Scope mods: image opacity, borders, size. SR hides both by default.
+		settings_slider(state, "Scope opacity", "ScopeOpacity", scope_value(values.hud, 0), 0, 1, {kind = .SCOPE_VALUE, index = 0}, step = 0.1)
+		settings_toggle_row(state, "Scope borders", "ScopeBorders", values.hud.scope_borders, {kind = .HUD_TOGGLE, index = 19})
+		settings_slider(state, "Scope border opacity", "ScopeBorderOpacity", scope_value(values.hud, 1), 0, 1, {kind = .SCOPE_VALUE, index = 1}, step = 0.1)
+		settings_slider(state, "Scope width", "ScopeWidth", scope_value(values.hud, 2), SCOPE_SIZE_MIN, SCOPE_SIZE_MAX, {kind = .SCOPE_VALUE, index = 2}, step = 0.1)
+		settings_slider(state, "Scope height", "ScopeHeight", scope_value(values.hud, 3), SCOPE_SIZE_MIN, SCOPE_SIZE_MAX, {kind = .SCOPE_VALUE, index = 3}, step = 0.1)
+		settings_note(state, "Krunker's scope mods. SR turns the scope image and the black borders off by default, as competitive players do in Krunker; raise Scope opacity or turn Scope borders on to bring them back.")
 		// Krunker showKills ("Display Kill feed", on) and feedLimit ("Killfeed Limit", 1-10, default 8).
 		settings_toggle_row(state, "Show killfeed", "HudKillFeed", !values.hud.hide_kill_feed, {kind = .HUD_TOGGLE, index = 6})
 		settings_slider(state, "Killfeed limit", "HudKillFeedLimit", f32(kill_feed_limit(values.hud)), 1, KILL_FEED_MAX_LIMIT, {kind = .KILL_FEED_LIMIT}, step = 1)
@@ -168,7 +179,7 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 				settings_dropdown_field(state, INPUT_RATE_LABELS[input_rate_index(values.hud.input_rate)], "InputRate", .INPUT_RATE)
 			}
 		}
-		settings_note(state, "How often your movement, aim and shots go to the server. These are real inputs per second: the browser's Network Rate 360 sends up to 720 at high FPS, and 1000 is the most Krunker's protocol allows (1 ms per input). Takes effect right away, no restart.")
+		settings_note(state, "Experimental. How often your movement, aim and shots go to the server, as REAL inputs per second. Krunker's own Network Rate numbers are half the real rate: its 360 really sends up to 720, so 720 is exactly what the browser does (SR's default is 360). 1000 is the most Krunker's protocol allows (1 ms per input). Takes effect right away, no restart.")
 		settings_toggle_row(state, "Network thread", "NetworkThread", values.hud.network_thread, {kind = .HUD_TOGGLE, index = 11})
 		settings_note(state, "Reads the game connection on its own thread. It does not raise average FPS; it keeps frames smooth when the network spikes and times snapshots by their real arrival. Takes effect right away; switching it off applies from the next match. Turn it off if anything feels wrong.")
 		settings_night(state)
@@ -424,11 +435,22 @@ settings_row :: proc(state: ^State) -> clay.ElementDeclaration {
 	}
 }
 
+SETTINGS_RESTART_RED :: clay.Color{235, 47, 47, 255}
+
 settings_label :: proc(label: string, s: f32) {
 	if clay.UI()({layout = {sizing = {width = clay.SizingFixed(304*s)}, childGap = u16(8*s), childAlignment = {y = .Center}}}) {
 		text(label, 21, s)
 		if krunker_label(label) { krunker_badge(s) }
+		if restart_label(label) { text("*", 24, s, SETTINGS_RESTART_RED) }
 	}
+}
+
+// Settings that only take effect after SR is restarted: marked with a red *.
+RESTART_LABELS :: [?]string{"Vulkan Renderer (off = Classic)"}
+
+restart_label :: proc(label: string) -> bool {
+	for name in RESTART_LABELS { if name == label { return true } }
+	return false
 }
 
 // Rows imported 1:1 from Krunker's settings (Settings > Import) and exported

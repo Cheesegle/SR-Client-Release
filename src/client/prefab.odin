@@ -470,6 +470,43 @@ prefab_init :: proc(object: ^shared.Object, colors: []shared.Vec4, raw_obj: json
 		return mesh
 	}
 
+	if prefab_id == int(shared.Prefab.CYLINDER) {
+		// Krunker's addCylinder: generated geometry with the object's texture,
+		// colour, opacity and texture offsets. Width and length both use
+		// min(w, l) as the diameter. It casts shadows when opaque and
+		// receives them (Burg's cart wheels and axles).
+		geometry := create_cylinder_geo()
+		if geometry == nil {
+			texture_release(texture_id)
+			return nil
+		}
+
+		material := basic_material_init()
+		mesh := mesh_init(geometry, &material.base)
+
+		diameter := min(object.scale.x, object.scale.z)
+		mesh.visible = visible
+		mesh.transform.position = object.position
+		mesh.transform.rotation = rotation
+		mesh.transform.scale = {diameter, object.scale.y, diameter}
+
+		material.texture = texture_id
+		material.color = color
+		material.color.w = opacity
+		material.emissive = emissive
+		material.base.transparent = opacity != 1.0 || tex_id == 12 || tex_id == 13
+		if tex_id == 12 || tex_id == 13 {
+			material.alpha_test = 0.02
+		}
+		apply_object_material_properties(material, object, obj_obj)
+		material.face_mask = 0x3f
+		material.use_face_tex_scaling = false
+		material.receive_shadow = true
+		if opacity == 1.0 { mesh.shadow_caster = .STATIC }
+
+		return mesh
+	}
+
 	if prefab_id == int(shared.Prefab.RAMP) {
 		geometry := create_ramp_geo()
 		if geometry == nil {

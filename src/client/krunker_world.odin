@@ -37,6 +37,7 @@ krunker_client_load_world_map :: proc(client: ^Client) -> bool {
 	client.game.map_count = 1
 	if world.has_game_config { client.game.config = world.game_config }
 	shared.game_init(&client.game, 0, world.mode_index, false)
+	client.game.server_hits_players = true
 	if !client.game.ready { krunker_ws_set_status(client, "Could not initialize lobby map/mode; see logs/krunker-network.log"); return false }
 	client_load_current_map(client)
 	client.camera.position = map_inst.camera_position
@@ -55,7 +56,7 @@ krunker_client_regenerate_loadout :: proc(client: ^Client, player: ^shared.Playe
 	shared.player_spawn(player, source.class_index, source.secondary_id)
 	player.position, player.direction = position, direction
 	player.on_ground, player.crouch_val, player.aim_val = source.on_ground, source.crouch_val, source.aim_val
-	player.swap_timer = 0
+	player.swap_timer_ms = 0
 	shared.player_update_height(player)
 	if player.is_you {
 		clear(&client.predicted_inputs)
@@ -124,7 +125,7 @@ krunker_client_sync_world :: proc(client: ^Client) {
 		if respawned {
 			// As with native snapshots, spawning projects a server-owned entity.
 			// Its offline spawn/swap timer would never advance during prediction.
-			player.swap_timer = 0
+			player.swap_timer_ms = 0
 			if is_you && !live_change { krunker_client_reset_prediction(client); state.local_ammo_revision = 0 }
 		}
 		player.team = source.team

@@ -43,7 +43,7 @@ when ODIN_TEST {
 		shared.player_spawn(player, 13)
 		player.is_you = true
 		player.position = {}
-		player.swap_timer = 0
+		player.swap_timer_ms = 0
 		player_generate_meshes(player, true)
 		mesh := cast(^Player_Mesh)player.mesh
 		if !testing.expect(t, mesh != nil && len(mesh.arms) == 2 && mesh.arms[0].weapon_right != nil, "Trooper must load its Blaster mesh") do return

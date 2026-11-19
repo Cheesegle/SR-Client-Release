@@ -126,6 +126,12 @@ player_healthbars_update_visibility :: proc(client: ^Client, now: f32) {
 			player.can_be_seen, player.nameplate_alpha, player.nameplate_seen_at = true, 1, now
 			continue
 		}
+		// Krunker's kill cam makes the killer visible (objInstances.visible),
+		// so its nameplate and health stay up for the whole death.
+		if g_death.active && g_death.has_target && player.uid == g_death.killer_uid {
+			player.can_be_seen, player.nameplate_alpha, player.nameplate_seen_at = true, 1, now
+			continue
+		}
 		if client.game.config.hide_enemy_nametags {
 			player.can_be_seen, player.nameplate_alpha = false, 0
 			continue

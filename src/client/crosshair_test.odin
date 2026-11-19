@@ -59,9 +59,9 @@ when ODIN_TEST {
 		settings.values[.OPACITY] = 0
 		testing.expect(t, client_crosshair_opacity(&client, settings)==0, "zero custom opacity must hide the crosshair")
 		settings = client.crosshair_settings
-		player.aim_val, player.reload_timer = 0, 1
+		player.aim_val, player.reload_timer_ms = 0, 1
 		testing.expect(t, client_crosshair_opacity(&client, settings)==0)
-		player.reload_timer, player.inspecting = 0, true
+		player.reload_timer_ms, player.inspecting = 0, true
 		testing.expect(t, client_crosshair_opacity(&client, settings)==0)
 		player.active, settings.toggles[.ALWAYS_SHOW] = false, true
 		testing.expect(t, client_crosshair_opacity(&client, settings)==0, "Always show must not draw a crosshair without an active player")

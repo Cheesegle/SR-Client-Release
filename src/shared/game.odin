@@ -238,6 +238,7 @@ game_configure :: proc(game: ^Game, config: ^Game_Config, maps: []^Map, modes: [
 game_init :: proc(game: ^Game, map_index, mode_index: i32, is_local: bool) {
 	game.ready = false
 	game.is_local = is_local
+	game.server_hits_players = false
 
 	game_clear_players(game)
 

@@ -468,11 +468,15 @@ krunker_world_apply_gameplay :: proc(state: ^Krunker_World_State, packet: []Krun
 		if len(packet) < 2 { return false }; return krunker_world_apply_leaders(state, packet[1])
 	case "4":
 		// Hit confirmation is presentation only. Health arrives separately in h.
-		if len(packet) < 5 { return false }
-		if _, ok := krunker_world_bounded_number(packet[2], -10000, 10000); !ok { return false }
-		// DO_DAMAGE (sid, damage, headshot, kill, ...), handled by the browser D4e.
-		state.last_hit_at, state.hit_headshot, state.hit_lethal = state.received_at, krunker_world_bool(packet[3]), krunker_world_bool(packet[4])
-		state.hit_events[state.hit_event_next] = {state.received_at, krunker_world_i32(packet[1], -1), state.hit_headshot, state.hit_lethal, krunker_world_f32(packet[2])}
+		// DO_DAMAGE (sid, damage, headshot, kill, ...). Every argument is
+		// optional in the browser's handler: objects, spawnables and nukes get a
+		// bare DO_DAMAGE and spectators get (sid, damage, headshot); each one
+		// still plays hit_0/crit_0 and shows the hitmarker (showHit(!!kill)).
+		if len(packet) > 2 {
+			if _, ok := krunker_world_bounded_number(packet[2], -10000, 10000); !ok { return false }
+		}
+		state.last_hit_at, state.hit_headshot, state.hit_lethal = state.received_at, len(packet) > 3 && krunker_world_bool(packet[3]), len(packet) > 4 && krunker_world_bool(packet[4])
+		state.hit_events[state.hit_event_next] = {state.received_at, len(packet) > 1 ? krunker_world_i32(packet[1], -1) : -1, state.hit_headshot, state.hit_lethal, len(packet) > 2 ? krunker_world_f32(packet[2]) : 0}
 		state.hit_event_next = (state.hit_event_next + 1) % len(state.hit_events)
 		state.hit_revision += 1
 		return true

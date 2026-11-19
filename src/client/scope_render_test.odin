@@ -7,6 +7,7 @@ import "core:testing"
 import gl "vendor:OpenGL"
 import glfw "vendor:glfw"
 import shared "../shared"
+import menuui "../menu"
 
 when ODIN_TEST {
 	@(test)
@@ -61,7 +62,11 @@ when ODIN_TEST {
 			gpu_clear(color = true, depth = true)
 			scene_render(client.scene, &camera, f32(w), f32(h))
 			ui_update(ui, f32(w), f32(h))
-			overlay_scope_render(ui)
+			hud: menuui.HUD_Settings
+			testing.expect(t, menuui.scope_value(hud, 0) == 0 && !hud.scope_borders, "SR hides the scope image and borders by default")
+			menuui.scope_value_set(&hud, 0, 1)
+			hud.scope_borders = true
+			overlay_scope_render(ui, hud)
 			testing.expect(t, scope_icon != 0, "the packaged default scope image must load")
 			pixel: [3]u8
 			test_read_rgb(0, h/2, 1, 1, &pixel[0])

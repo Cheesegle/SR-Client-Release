@@ -35,7 +35,7 @@ test_walking_animation :: proc() -> bool {
 		player.render_you = true
 		player.position = {0, 1, 0}
 		player.on_ground = true
-		player.swap_timer = 0
+		player.swap_timer_ms = 0
 	}
 	walk := shared.Input{delta = PHYSICS_DT, move_dir = 3}
 	saw_reversal := false

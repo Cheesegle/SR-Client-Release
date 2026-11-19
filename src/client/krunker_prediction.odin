@@ -8,7 +8,7 @@ import menuui "../menu"
 import glfw "vendor:glfw"
 
 // Sample independently of rendering and sending; wire durations use whole ms.
-// Settings > Experimental > Inputs per second (menuui.INPUT_RATES, default 360).
+// Settings > Experimental > Inputs per second (menuui.INPUT_RATES, default 360; 720 = Krunker's netRate 360).
 KRUNKER_INPUT_RATE_DEFAULT :: 360
 KRUNKER_INPUT_RATE_MAX :: 1000
 g_krunker_input_rate := KRUNKER_INPUT_RATE_DEFAULT
@@ -155,7 +155,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 	predicted_direction := player.direction
 	predicted_position := player.position
 	predicted_weapon := player.weapon
-	reload_timer, swap_timer := player.reload_timer, player.swap_timer
+	reload_timer_ms, swap_timer_ms := player.reload_timer_ms, player.swap_timer_ms
 	did_shoot, burst_count := player.did_shoot, player.burst_count
 	player.position = source.position
 	player.velocity = source.velocity
@@ -204,7 +204,7 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 			player.aim_val, player.aim_time = predicted_aim, predicted_aim_time
 		}
 		if player.weapon == predicted_weapon {
-			player.reload_timer, player.swap_timer = reload_timer, swap_timer
+			player.reload_timer_ms, player.swap_timer_ms = reload_timer_ms, swap_timer_ms
 			player.did_shoot, player.burst_count = did_shoot, burst_count
 		}
 	}

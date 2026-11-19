@@ -209,4 +209,6 @@ end_screen_render :: proc(client: ^Client, now: f64) {
 	if code == 0 { code = 256 }
 	hint := fmt.tprintf("%s  Menu", menuui.binding_label(code))
 	ui_fill_text(ui, muted, hint, (ui.width-ui_measure_text(ui, hint, 24*s))*0.5, ui.height-28*s, 24*s)
+	// Developer builds: testers send this file after their games.
+	when TESTER_EXPORT { tester_export_button(client, ui, ui.width-220*s-32*s, 32*s, 220*s, 52*s) }
 }

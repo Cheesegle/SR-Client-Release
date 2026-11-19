@@ -158,7 +158,7 @@ when ODIN_TEST {
 		testing.expect(t, client.me.position == (shared.Vec3{120, 30, -80}), "camera target must use the server position")
 		testing.expect(t, client.me.mesh != nil && client.fps_scene.mesh_count > 0, "SMG view model must be attached")
 		testing.expect(t, client.mouse_state.locked, "confirmed spawn must leave the menu")
-		testing.expect(t, client.me.swap_timer == 0 && client.me.ammo[0] == 24, "live spawn must raise the weapon and use the current SMG magazine")
+		testing.expect(t, client.me.swap_timer_ms == 0 && client.me.ammo[0] == 24, "live spawn must raise the weapon and use the current SMG magazine")
 		local_mesh := cast(^Player_Mesh)client.me.mesh
 		testing.expect(t, abs(local_mesh.upper_body_anchor.rotation.x - client.me.weapon.y_rotation) < 1e-5,
 			"local upper body must not remain bent by the offline spawn animation")
@@ -171,7 +171,7 @@ when ODIN_TEST {
 		peer := client_find_player(&client, 8)
 		if !testing.expect(t, peer != nil && peer.mesh != nil, "remote player must generate a third person mesh") do return
 		peer_mesh := cast(^Player_Mesh)peer.mesh
-		testing.expect(t, !peer.render_you && peer.swap_timer == 0 && peer.ammo[0] == 50, "remote spawn must raise the current LMG model")
+		testing.expect(t, !peer.render_you && peer.swap_timer_ms == 0 && peer.ammo[0] == 50, "remote spawn must raise the current LMG model")
 		testing.expect(t, abs(peer_mesh.upper_body_anchor.rotation.x - (math.PI/12 + peer.weapon.y_rotation)) < 1e-5,
 			"remote upper body must follow pitch without a frozen swap bend")
 
@@ -212,7 +212,7 @@ when ODIN_TEST {
 		local_source.class_index, local_source.weapon_slot = 3, 0
 		local_source.revision += 1
 		krunker_client_sync_world(&client)
-		testing.expect(t, client.me.swap_timer == 0 && client.me.ammo[0] == 50, "class changes must raise the new weapon with its current magazine")
+		testing.expect(t, client.me.swap_timer_ms == 0 && client.me.ammo[0] == 50, "class changes must raise the new weapon with its current magazine")
 		// Live health changes must reach existing meshes without re-spawning or
 		// disturbing interpolation. Death and same-class respawn must also stop
 		// and restore the remote bar/model together.

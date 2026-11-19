@@ -28,11 +28,11 @@ when ODIN_TEST {
 		shared.game_players_add(&client.game, client.me)
 		shared.player_spawn(client.me, 2)
 		client.me.is_you = true
-		client.me.swap_timer = 0
+		client.me.swap_timer_ms = 0
 		server := shared.player_init(&client.game)
 		defer shared.player_destroy(server)
 		shared.player_spawn(server, 2)
-		server.swap_timer = 0
+		server.swap_timer_ms = 0
 		client.krunker.spawned, client.krunker.bootstrapped = true, true
 		client.krunker.input_sequence = 1
 

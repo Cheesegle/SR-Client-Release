@@ -65,7 +65,7 @@ when ODIN_TEST {
 				shared.player_spawn(player, 0)
 				player.is_you = first_person
 				player.position = {}
-				player.swap_timer = 0
+				player.swap_timer_ms = 0
 				player_generate_meshes(player, first_person)
 				rig := cast(^Player_Mesh)player.mesh
 				if !testing.expect(t, rig != nil && len(rig.arms) > 0 && rig.arms[0].weapon_right != nil, fmt.tprintf("weapon %d %s must load a model", id, weapon.name)) do return

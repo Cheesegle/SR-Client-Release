@@ -144,7 +144,13 @@ asset_sweep_players :: proc(client: ^Client) {
 	menu_render_commands(client.ui, menuui.build(&client.menu, view, {}, client.ui.width, client.ui.height, 0))
 
 	// HUD art that does not depend on the loadout.
-	overlay_scope_render(client.ui)
+	{
+		// The image and the borders, whatever the player's scope settings.
+		hud: menuui.HUD_Settings
+		menuui.scope_value_set(&hud, 0, 1)
+		hud.scope_borders = true
+		overlay_scope_render(client.ui, hud)
+	}
 	if texture, use_source := bullet_hole_texture(); use_source { texture_release(texture) }
 	krunker_client_add_explosion(client, {}, 10)
 	krunker_client_clear_explosions(client)

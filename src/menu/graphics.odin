@@ -238,6 +238,8 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .OBJECTIVE_OPACITY:
 		hud := state.settings_active ? values.hud : view.hud
 		return action.index == 0 ? objective_opacity(hud) : ads_objective_opacity(hud)
+	case .SCOPE_VALUE:
+		return scope_value(state.settings_active ? values.hud : view.hud, int(action.index))
 	}
 	return values.sensitivity
 }

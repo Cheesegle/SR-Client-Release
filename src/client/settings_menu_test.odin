@@ -224,13 +224,13 @@ when ODIN_TEST {
 		shared.player_spawn(player, 4)
 		if !testing.expect(t, player.loadout_size >= 2, "the fixture class has a secondary") { return }
 		shared.player_swap_weapon(player, 1, false, false, false)
-		player.swap_timer = 0
+		player.swap_timer_ms = 0
 		press := shared.Input{delta = 0.003, move_dir = -1, swap = 3}
 		shared.player_proc_input(player, &press, false, false)
 		testing.expect_value(t, player.loadout_index, 0)
-		timer := player.swap_timer
+		timer := player.swap_timer_ms
 		again := shared.Input{delta = 0.003, move_dir = -1, swap = 3}
 		shared.player_proc_input(player, &again, false, false)
-		testing.expect(t, player.loadout_index == 0 && player.swap_timer <= timer, "Primary on the primary does not swap again")
+		testing.expect(t, player.loadout_index == 0 && player.swap_timer_ms <= timer, "Primary on the primary does not swap again")
 	}
 }

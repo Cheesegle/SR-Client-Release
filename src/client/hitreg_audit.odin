@@ -227,6 +227,12 @@ hitreg_audit_tick :: proc(client: ^Client, now: f64) {
 	hitreg_audit_resolve(client, now, false)
 }
 
+// Resolves every waiting shot now (the game ended or SR is closing).
+hitreg_audit_resolve_all :: proc(client: ^Client, now: f64) {
+	when !HITREG_AUDIT { return }
+	if g_hitreg.count > 0 { hitreg_audit_resolve(client, now, true) } else { hitreg_audit_flush() }
+}
+
 // True when a later waiting shot was fired closer to (event time - round trip)
 // than this one, so the confirmation is most likely that shot's.
 hitreg_event_fits_later_shot :: proc(world: ^kproto.Krunker_World_State, event_time, shot_time: f64, index: int) -> bool {
@@ -272,13 +278,15 @@ hitreg_audit_resolve :: proc(client: ^Client, now: f64, all: bool) {
 		if aimed { g_hitreg.predicted += 1 }
 		if server_sid >= 0 { g_hitreg.confirmed += 1 }
 		if aimed == (server_sid >= 0) { g_hitreg.agreed += 1 }
-		fmt.sbprintf(&g_hitreg.lines, "t=%.3f %s aimed=%s fired=%s server=%s target=%d moving=%v speed=%.3f step=%.2f miss=%.2f offsets=%s gap=%.3f ammo=%d spread=%.2f recoil=%.5f recoil_y=%.5f rate=%d ping=%d\n",
+		line := fmt.tprintf("t=%.3f %s aimed=%s fired=%s server=%s target=%d moving=%v speed=%.3f step=%.2f miss=%.2f offsets=%s gap=%.3f ammo=%d spread=%.2f recoil=%.5f recoil_y=%.5f rate=%d ping=%d\n",
 			shot.time, shot.weapon,
 			aimed ? fmt.tprintf("%d%s", shot.aimed_sid, shot.aimed_part == .HEAD ? "H" : "B") : "-",
 			shot.fired_sid >= 0 ? fmt.tprintf("%d%c", shot.fired_sid, rune(shot.fired)) : "-",
 			server_sid >= 0 ? fmt.tprintf("%d%s", server_sid, server_head ? "H" : "B") : "-",
 			aimed ? shot.aimed_sid : shot.nearest_sid, shot.moving, shot.target_speed, shot.target_step,
 			shot.miss < 1e8 ? shot.miss : -1, string(shot.offsets[:]), shot.since_last, shot.ammo_after, shot.spread, shot.recoil_anim, shot.recoil_anim_y, shot.input_rate, shot.ping)
+		strings.write_string(&g_hitreg.lines, line)
+		tester_export_shot(line, shot.weapon, shot.input_rate, aimed, server_sid >= 0)
 		resolved += 1
 	}
 	copy(g_hitreg.pending[:], g_hitreg.pending[resolved:g_hitreg.count])

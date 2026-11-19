@@ -581,7 +581,7 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 	step_half_rotate := -math.cos(2.0 * player.step_chase) * 0.5 * step_mlt
 	aim_val := third_person ? 0.0 : aim_val_mlt
 	aim_lean := (aim_val <= 0.5 ? aim_val : 0.5 - (aim_val - 0.5)) * (player.weapon.aim_lean != 0 ? player.weapon.aim_lean : 0.5)
-	swap_anim := player.swap_timer / player.weapon.swap_time
+	swap_anim := f32(player.swap_timer_ms / shared.weapon_seconds_to_ms(player.weapon.swap_time))
 	left_hand_mlt: f32 = player.left_handed ? -1.0 : 1.0
 
 	weapon_offset := shared.Vec3{
@@ -591,8 +591,8 @@ player_update_meshes :: proc(player: ^shared.Player, is_preview: bool) {
 	}
 
 	reload_anim: f32 = 0
-	if player.reload_timer > 0.0 {
-		reload_anim = 1.0 - player.reload_timer / (player.weapon.reload_time * player.game.config.reload_speed)
+	if player.reload_timer_ms > 0.0 {
+		reload_anim = shared.player_reload_progress(player)
 	}
 	if reload_anim > 0.5 {
 		reload_anim = 1.0 - reload_anim

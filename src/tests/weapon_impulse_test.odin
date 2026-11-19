@@ -78,7 +78,7 @@ test_weapon_impulses :: proc() -> bool {
 		player.loadout[0], player.weapon = weapon_id, game.weapons[weapon_id]
 		player.ammo[0] = player.weapon.ammo
 		player.position, player.velocity = {}, {}
-		player.on_ground, player.swap_timer = true, 0
+		player.on_ground, player.swap_timer_ms = true, 0
 		command := shared.Input{delta = PHYSICS_DT, move_dir = -1, shoot = true, x_dir = -math.PI/2}
 		shared.player_queue_input(player, &command)
 		shared.game_tick(&game, 0, PHYSICS_DT)

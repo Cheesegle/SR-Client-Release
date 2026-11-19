@@ -418,6 +418,67 @@ create_ramp_geo :: proc() -> ^Geometry {
 SPHERE_WIDTH_SEGMENTS :: 12
 SPHERE_HEIGHT_SEGMENTS :: 8
 
+// Krunker's CYLINDER prefab: generateCylinder -> THREE.CylinderGeometry with
+// radiusTop/radiusBottom 1, height 1, `sides || 12` radial segments and both
+// caps, scaled by (min(w, l)/2, h, min(w, l)/2). Built here like the sphere:
+// unit diameter, resting on y = 0, so the object's position is the base and
+// its rotation pivots there (Burg's cart wheels and axles, rotated -90 deg
+// around z, line up only with that pivot). Side UVs wrap once around (u) and
+// run up the height (v); caps use three.js's radial cap UVs.
+CYLINDER_SIDES :: 12
+
+create_cylinder_geo :: proc() -> ^Geometry {
+	if g_cylinder_geometry != nil {
+		return g_cylinder_geometry
+	}
+
+	vertices: [dynamic]Vertex
+	defer delete(vertices)
+	indices: [dynamic]u32
+	defer delete(indices)
+
+	// Side: two rings (top first, as three.js does), one extra seam column.
+	for row in 0 ..= 1 {
+		y: f32 = row == 0 ? 1 : 0
+		for ix in 0 ..= CYLINDER_SIDES {
+			u := f32(ix) / CYLINDER_SIDES
+			theta := u * 2 * math.PI
+			append(&vertices, Vertex{{0.5 * math.sin(theta), y, 0.5 * math.cos(theta)}, {u, 1 - f32(row)}})
+		}
+	}
+	for ix in 0 ..< CYLINDER_SIDES {
+		a := u32(ix)
+		b := u32(CYLINDER_SIDES + 1 + ix)
+		c := u32(CYLINDER_SIDES + 1 + ix + 1)
+		d := u32(ix + 1)
+		append(&indices, a, b, d, b, c, d)
+	}
+
+	// Caps: a centre per segment and a rim, as three.js generateCap.
+	for top in ([2]bool{true, false}) {
+		y: f32 = top ? 1 : 0
+		sign: f32 = top ? 1 : -1
+		centre_start := u32(len(vertices))
+		for _ in 1 ..= CYLINDER_SIDES {
+			append(&vertices, Vertex{{0, y, 0}, {0.5, 0.5}})
+		}
+		rim_start := u32(len(vertices))
+		for ix in 0 ..= CYLINDER_SIDES {
+			theta := f32(ix) / CYLINDER_SIDES * 2 * math.PI
+			cos_t, sin_t := math.cos(theta), math.sin(theta)
+			append(&vertices, Vertex{{0.5 * sin_t, y, 0.5 * cos_t}, {0.5 * cos_t + 0.5, 0.5 * sin_t * sign + 0.5}})
+		}
+		for ix in 0 ..< u32(CYLINDER_SIDES) {
+			centre, rim := centre_start + ix, rim_start + ix
+			if top { append(&indices, rim, rim + 1, centre) } else { append(&indices, rim + 1, rim, centre) }
+		}
+	}
+
+	g_cylinder_geometry = create_geometry(vertices[:], indices[:])
+	g_cylinder_geometry.permanent = true
+	return g_cylinder_geometry
+}
+
 create_sphere_geo :: proc() -> ^Geometry {
 	if g_sphere_geometry != nil {
 		return g_sphere_geometry
@@ -794,6 +855,10 @@ resource_cache_fini :: proc() {
 	if g_sphere_geometry != nil {
 		geometry_destroy(g_sphere_geometry)
 		g_sphere_geometry = nil
+	}
+	if g_cylinder_geometry != nil {
+		geometry_destroy(g_cylinder_geometry)
+		g_cylinder_geometry = nil
 	}
 	gpu_texture_destroy(&g_blank_texture)
 	gpu_texture_destroy(&g_impact_texture)

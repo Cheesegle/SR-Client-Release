@@ -107,7 +107,7 @@ when ODIN_TEST {
 		player := shared.player_init(&game)
 		shared.game_players_add(&game, player)
 		shared.player_spawn(player, 2)
-		player.swap_timer = 0
+		player.swap_timer_ms = 0
 
 		client := Client{bindings = menuui.default_bindings(), scroll_press_time = -1}
 		client.bindings[.JUMP] = {32, menuui.BINDING_SCROLL}

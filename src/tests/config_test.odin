@@ -358,7 +358,7 @@ test_configured_weapon_switch :: proc() -> bool {
 	player := shared.player_init(&game)
 	shared.game_players_add(&game, player)
 	shared.player_spawn(player, 0)
-	player.swap_timer = 0
+	player.swap_timer_ms = 0
 	input := shared.Input{delta = 1.0 / 64.0, move_dir = -1, swap = 1}
 	shared.player_proc_input(player, &input, false, false)
 
@@ -382,7 +382,7 @@ test_famas_burst :: proc() -> bool {
 	player := shared.player_init(&game)
 	shared.game_players_add(&game, player)
 	shared.player_spawn(player, 12)
-	player.swap_timer = 0
+	player.swap_timer_ms = 0
 
 	if player.weapon != game.weapons[14] || player.weapon == nil {
 		fmt.eprintln("Commando did not spawn with Famas")
@@ -493,7 +493,7 @@ test_shot_feedback :: proc() -> bool {
 	player := shared.player_init(&game)
 	shared.game_players_add(&game, player)
 	shared.player_spawn(player)
-	player.swap_timer = 0
+	player.swap_timer_ms = 0
 	player.position = {0, 0, 0}
 	player.direction = {0, -math.PI / 2.0}
 
@@ -551,8 +551,8 @@ test_shot_feedback :: proc() -> bool {
 			game.map_inst.config.model,
 			player.weapon.melee,
 			player.weapon.no_auto,
-			player.swap_timer,
-			player.reloads[player.loadout_index],
+			player.swap_timer_ms,
+			player.reloads_ms[player.loadout_index],
 			player.did_shoot,
 		)
 		return false

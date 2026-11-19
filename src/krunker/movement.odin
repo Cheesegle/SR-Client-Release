@@ -65,6 +65,8 @@ krunker_world_apply_game_config :: proc(state: ^Krunker_World_State, packet: []K
 		case "autoJump": config.auto_jump = krunker_world_bool(entry.value)
 		case "airStrf": config.air_strafe = krunker_world_bool(entry.value)
 		case "throwMel": config.throwable_melees = krunker_world_bool(entry.value)
+		case "chrgWeps": config.charge_weapons = krunker_world_bool(entry.value)
+		case "kCams": config.kill_cams = krunker_world_bool(entry.value)
 		case "noSecondary": config.no_secondaries = krunker_world_bool(entry.value)
 		}
 	}

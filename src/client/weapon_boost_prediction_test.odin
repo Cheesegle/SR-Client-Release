@@ -20,7 +20,7 @@ when ODIN_TEST {
 			shared.player_spawn(player, 4)
 			player.loadout[0], player.weapon = weapon_id, client.game.weapons[weapon_id]
 			player.ammo[0] = player.weapon.ammo
-			player.noclip, player.on_ground, player.swap_timer = false, true, 0
+			player.noclip, player.on_ground, player.swap_timer_ms = false, true, 0
 			player.position, player.velocity = {}, {}
 			initial := kproto.Krunker_World_Player{
 				position = player.position, velocity = player.velocity, on_ground = true,

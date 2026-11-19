@@ -132,7 +132,7 @@ when ODIN_TEST {
 		remote := shared.player_init(&client.game)
 		shared.game_players_add(&client.game, remote)
 		shared.player_spawn(remote, 0)
-		remote.uid, remote.active, remote.swap_timer = 2, true, 0
+		remote.uid, remote.active, remote.swap_timer_ms = 2, true, 0
 		player_generate_meshes(remote, false)
 		scene_add_player_mesh(client.scene, cast(^Player_Mesh)remote.mesh, int(remote.loadout_size))
 
@@ -174,7 +174,7 @@ when ODIN_TEST {
 		you := shared.player_init(&client.game)
 		shared.game_players_add(&client.game, you)
 		shared.player_spawn(you, 0)
-		you.uid, you.active, you.swap_timer, you.is_you = 1, true, 0, true
+		you.uid, you.active, you.swap_timer_ms, you.is_you = 1, true, 0, true
 		player_generate_meshes(you, true)
 		scene_add_player_mesh(client.scene, cast(^Player_Mesh)you.mesh, int(you.loadout_size))
 		you_states := [?]Legs_State{

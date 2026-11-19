@@ -222,6 +222,7 @@ g_cube_geometry:  ^Geometry
 g_plane_geometry: ^Geometry
 g_ramp_geometry:  ^Geometry
 g_sphere_geometry: ^Geometry
+g_cylinder_geometry: ^Geometry
 
 g_blank_texture:  Gpu_Texture
 g_active_texture: Gpu_Texture
