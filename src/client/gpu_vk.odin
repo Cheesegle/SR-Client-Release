@@ -22,11 +22,13 @@ package main
 //   finished (vk_retire). Only resizes, readbacks and shutdown wait;
 //   g_vk_stats counts every wait.
 
+import "base:intrinsics"
 import "base:runtime"
 import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:os"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 import "core:sync"
@@ -453,6 +455,8 @@ Vk_Latency_Probe :: struct {
 	latency_ms:      [dynamic]f64,
 	interval_ms:     [dynamic]f64,
 	gpu_ms:          [dynamic]f64,
+	input_ns:        [GPU_FRAMES_IN_FLIGHT]i64, // arrival of the oldest mouse report the frame read (0: none)
+	mouse_ms:        [dynamic]f64,              // mouse report arrival -> GPU done, frames that read mouse input
 	collect_ms:      f64, // game thread: waiting for the slot's frame (fence, present thread)
 	present_ms:      f64, // game thread: in gpu_present
 	delay_ms, cpu_est_ms, gpu_est_ms: f64, // low-latency pacing, summed per frame
@@ -539,8 +543,8 @@ vk_probe_setup :: proc() {
 	if !g_vk_clock.available { fmt.eprintln("[Probe] calibrated timestamps unavailable; latency probe off"); return }
 	p.enabled = true
 	fmt.printfln("[Probe] latency probe: %.0f s after %.0f s warm-up, present thread %s, low latency %s", p.seconds, p.warmup,
-		os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "0" ? "off" : os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "1" ? "always" : "adaptive",
-		os.get_env("SR_LOW_LATENCY", context.temp_allocator) == "0" ? "off" : "on")
+		os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "0" ? "off" : os.get_env("SR_VK_PRESENT_THREAD", context.temp_allocator) == "1" ? "always" : os.get_env("SR_VK_PRESENT_SPIN", context.temp_allocator) == "1" ? "always, spinning" : "adaptive",
+		os.get_env("SR_LOW_LATENCY", context.temp_allocator) == "0" ? "off" : fmt.tprintf("on, margin %.0f us", g_vk_ll_margin_ns / 1000))
 }
 
 // A window frame starts recording (its slot has been collected).
@@ -551,9 +555,10 @@ vk_probe_frame_start :: proc(slot: int, collect_ms: f64) {
 	now := time.tick_now()
 	if p.first == {} { p.first = now }
 	elapsed := time.duration_seconds(time.tick_diff(p.first, now))
-	if !p.recording && elapsed >= p.warmup { p.recording = true; p.prev_start = now; p.counted = {} }
+	if !p.recording && elapsed >= p.warmup { p.recording = true; p.prev_start = now; p.counted = {}; phase_timing_start(); input_probe_set(true) }
 	p.start[slot] = now
 	p.counted[slot] = false
+	p.input_ns[slot] = 0
 	if !p.recording { return }
 	if elapsed >= p.warmup + p.seconds { vk_probe_finish(); return }
 	p.counted[slot] = true
@@ -572,22 +577,28 @@ vk_probe_frame_done :: proc(slot: int, begin, end: u64) {
 	end_ns, ok := vk_clock_gpu_to_cpu_ns(end)
 	if !ok { return }
 	append(&p.latency_ms, (end_ns - vk_tick_ns(p.start[slot])) / 1e6)
+	if p.input_ns[slot] > 0 { append(&p.mouse_ms, (end_ns - f64(p.input_ns[slot])) / 1e6) }
+}
+
+// The frame being recorded read mouse input that first arrived at `arrival_ns`
+// (input_probe_take); 0 does nothing.
+gpu_probe_note_input :: proc(arrival_ns: i64) {
+	if arrival_ns == 0 || g_gpu_backend != .Vulkan { return }
+	p := &g_vk_probe
+	if !p.recording || !g_vk.recording { return }
+	if p.input_ns[g_vk.slot] == 0 { p.input_ns[g_vk.slot] = arrival_ns }
 }
 
 @(private = "file")
 vk_probe_finish :: proc() {
 	p := &g_vk_probe
 	p.finished = true
+	input_probe_set(false)
 	stats :: proc(values: []f64) -> (avg, p50, p95, p99, worst: f64) {
 		if len(values) == 0 { return }
 		sorted := make([]f64, len(values), context.temp_allocator)
 		copy(sorted, values)
-		for i in 1 ..< len(sorted) { // insertion sort is plenty for a few thousand
-			v := sorted[i]
-			j := i
-			for j > 0 && sorted[j - 1] > v { sorted[j] = sorted[j - 1]; j -= 1 }
-			sorted[j] = v
-		}
+		slice.sort(sorted) // a 30 s run at thousands of FPS is ~200k values
 		for v in sorted { avg += v }
 		avg /= f64(len(sorted))
 		at :: proc(s: []f64, q: f64) -> f64 { return s[min(len(s) - 1, int(q * f64(len(s))))] }
@@ -598,11 +609,18 @@ vk_probe_finish :: proc() {
 	fmt.printfln("[Probe] present thread %s: %d frames, %.1f FPS", g_vk_present_thread.running ? "on" : "off", len(p.interval_ms), i_avg > 0 ? 1000 / i_avg : 0)
 	fmt.printfln("[Probe] frame time ms   avg %.3f  p50 %.3f  p95 %.3f  p99 %.3f  max %.3f", i_avg, i_p50, i_p95, i_p99, i_max)
 	fmt.printfln("[Probe] start->GPU done avg %.3f  p50 %.3f  p95 %.3f  p99 %.3f  max %.3f", l_avg, l_p50, l_p95, l_p99, l_max)
+	if len(p.mouse_ms) > 0 {
+		m_avg, m_p50, m_p95, m_p99, m_max := stats(p.mouse_ms[:])
+		fmt.printfln("[Probe] mouse->GPU done avg %.3f  p50 %.3f  p95 %.3f  p99 %.3f  max %.3f (%d frames with mouse input)", m_avg, m_p50, m_p95, m_p99, m_max, len(p.mouse_ms))
+	} else {
+		fmt.println("[Probe] mouse->GPU done: no mouse input while recording")
+	}
 	g_avg, g_p50, _, g_p99, _ := stats(p.gpu_ms[:])
 	frames := f64(max(1, len(p.interval_ms)))
 	fmt.printfln("[Probe] GPU per frame   avg %.3f  p50 %.3f  p99 %.3f; game thread per frame: slot wait %.3f, gpu_present %.3f", g_avg, g_p50, g_p99, p.collect_ms / frames, p.present_ms / frames)
 	fmt.printfln("[Probe] presented on the game thread %d, on the present thread %d (whole run)", g_vk_present_mode.inline_frames, g_vk_present_mode.thread_frames)
 	fmt.printfln("[Probe] low latency per frame: delay %.3f, CPU estimate %.3f, GPU estimate %.3f", p.delay_ms / frames, p.cpu_est_ms / frames, p.gpu_est_ms / frames)
+	fmt.printfln("[Probe] CPU per frame by phase (ms): %s", phase_timing_report(len(p.interval_ms)))
 	if g_vk.present.window != nil { glfw.SetWindowShouldClose(g_vk.present.window, true) }
 }
 
@@ -636,6 +654,14 @@ Vk_Low_Latency :: struct {
 
 @(private = "file")
 g_vk_ll: Vk_Low_Latency
+
+// How early (besides 5% of a GPU frame) the next frame aims to reach the GPU
+// before the one in flight finishes. 0.1 ms is more than a whole frame's GPU
+// time at thousands of FPS, so the delay rarely applies there; SR_LL_MARGIN_US
+// overrides it to test smaller margins.
+VK_LL_MARGIN_NS :: 100_000.0
+@(private = "file")
+g_vk_ll_margin_ns: f64 = VK_LL_MARGIN_NS
 
 // A window frame finished on the GPU (`begin`, `end`: its timestamps).
 @(private = "file")
@@ -696,7 +722,7 @@ vk_ll_delay :: proc() -> f64 {
 	for v in ll.cpu_ns {
 		if v > slowest { cpu, slowest = slowest, v } else if v > cpu { cpu = v }
 	}
-	margin := 100_000 + 0.05 * gpu // 0.1 ms + 5% of a GPU frame
+	margin := g_vk_ll_margin_ns + 0.05 * gpu // see VK_LL_MARGIN_NS, + 5% of a GPU frame
 	finish := max(ll.last_end_ns, submit_ns) + gpu
 	start := finish - margin - cpu
 	if start <= now { return 0 }
@@ -723,6 +749,7 @@ vk_ll_delay :: proc() -> f64 {
 Vk_Present_Mode :: struct {
 	inline:         bool,
 	forced:         bool, // SR_VK_PRESENT_THREAD=1: every frame on the present thread
+	spin:           bool, // SR_VK_PRESENT_SPIN=1: the present thread spins for the next frame and takes every frame (tested: more FPS, more delay)
 	hold:           int, // frames before the next switch may happen
 	slack_ns:       f64, // set by vk_gpu_frame_ready_delay
 	slack_avg_ns:   f64,
@@ -733,6 +760,8 @@ Vk_Present_Mode :: struct {
 	thread_frames:  int,
 }
 
+VK_PRESENT_SPIN_NS :: 1_000_000
+
 @(private = "file")
 g_vk_present_mode := Vk_Present_Mode{inline = true, hold = 64, inline_cost_ns = 150_000}
 
@@ -741,7 +770,9 @@ vk_present_use_thread :: proc() -> bool {
 	pt := &g_vk_present_thread
 	if !pt.running { return false }
 	pm := &g_vk_present_mode
-	if pm.forced { return true }
+	// A spinning present thread takes a frame within a microsecond, so handing
+	// it over costs no latency and the game thread is free sooner.
+	if pm.forced || pm.spin { return true }
 	slack := pm.slack_ns + g_vk.present.last_wait_ms * 1e6
 	pm.slack_avg_ns += (slack - pm.slack_avg_ns) / 16
 	// Inline wins whenever the game thread has room for most of the present:
@@ -829,6 +860,7 @@ vk_present_thread_start :: proc() {
 		pt.pool = 0
 		return
 	}
+	g_vk_present_mode.spin = os.get_env("SR_VK_PRESENT_SPIN", context.temp_allocator) == "1"
 	pt.thread = thread.create_and_start(vk_present_thread_main, priority = .High)
 	if pt.thread == nil {
 		vk.DestroyCommandPool(g_vk.device, pt.pool, nil)
@@ -893,6 +925,19 @@ vk_present_thread_main :: proc() {
 	pt := &g_vk_present_thread
 	sync.mutex_lock(&pt.lock)
 	for {
+		if !pt.has_job && !pt.stop && g_vk_present_mode.spin {
+			// Spin for the next frame before sleeping: in game it comes within a
+			// fraction of a millisecond, and waking a sleeping thread costs tens
+			// of microseconds before the frame reaches the queue. After 1 ms
+			// without one (menus, a frame cap) it sleeps as before.
+			sync.mutex_unlock(&pt.lock)
+			until := time.tick_now()._nsec + VK_PRESENT_SPIN_NS
+			for i := 0; !sync.atomic_load(&pt.has_job) && !sync.atomic_load(&pt.stop); i += 1 {
+				intrinsics.cpu_relax()
+				if i & 255 == 255 && time.tick_now()._nsec > until { break }
+			}
+			sync.mutex_lock(&pt.lock)
+		}
 		for !pt.has_job && !pt.stop { sync.cond_wait(&pt.cond, &pt.lock) }
 		if !pt.has_job { break } // stopping, nothing left
 		job := pt.job
@@ -1251,6 +1296,7 @@ gpu_vk_init :: proc(window: glfw.WindowHandle = nil) -> bool {
 		g_vk.present.dirty = true
 		vk_present_thread_start()
 		g_vk_ll.enabled = g_vk_clock.available && os.get_env("SR_LOW_LATENCY", context.temp_allocator) != "0"
+		if v, ok := strconv.parse_f64(os.get_env("SR_LL_MARGIN_US", context.temp_allocator)); ok && v >= 0 { g_vk_ll_margin_ns = v * 1000 }
 		vk_probe_setup()
 	}
 	fmt.printfln("[Vulkan] Using %s (%s), Vulkan %s%s", g_vk.device_name, g_vk.vendor_name, g_vk.version_text,
@@ -1343,6 +1389,17 @@ gpu_vk_fini :: proc() {
 }
 
 vk_gpu_backend_name :: proc() -> string { return "Vulkan" }
+
+// Device-local memory (VRAM) in MB, for the tester export; 0 when unknown.
+vk_gpu_vram_mb :: proc() -> u64 {
+	if g_vk.physical == nil { return 0 }
+	total: u64
+	for i in 0 ..< g_vk.memory.memoryHeapCount {
+		heap := g_vk.memory.memoryHeaps[i]
+		if .DEVICE_LOCAL in heap.flags { total = max(total, u64(heap.size)) }
+	}
+	return total / (1024 * 1024)
+}
 
 vk_gpu_device_info :: proc() -> Gpu_Device_Info {
 	return {api = "Vulkan", vendor = g_vk.vendor_name, renderer = g_vk.device_name, version = g_vk.version_text}

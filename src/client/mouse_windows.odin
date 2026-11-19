@@ -57,6 +57,7 @@ native_mouse_sync :: proc(mouse: ^Native_Mouse) {
 native_mouse_accumulate :: proc(mouse: ^Native_Mouse, input: ^win.RAWINPUT) {
 	if input.header.dwType != win.RIM_TYPEMOUSE { return }
 	report := &input.data.mouse
+	input_probe_event()
 	if report.usFlags & win.MOUSE_MOVE_ABSOLUTE == 0 {
 		mouse.x += i64(report.lLastX)
 		mouse.y += i64(report.lLastY)
@@ -481,13 +482,17 @@ client_mouse_delta :: proc(fallback: shared.Vec2) -> shared.Vec2 {
 		active := raw_input_thread_wanted(t.window)
 		raw_input_thread_set_active(t, active)
 		if !active { return fallback }
-		return raw_input_thread_take_delta(t)
+		delta := raw_input_thread_take_delta(t)
+		if delta != {} { gpu_probe_note_input(input_probe_take()) }
+		return delta
 	}
 	mouse := &g_native_mouse
 	if mouse.previous_proc == nil { return fallback }
 	native_mouse_sync(mouse)
 	if !mouse.active { return fallback }
-	return native_mouse_take_delta(mouse)
+	delta := native_mouse_take_delta(mouse)
+	if delta != {} { gpu_probe_note_input(input_probe_take()) }
+	return delta
 }
 
 client_poll_events :: proc() {

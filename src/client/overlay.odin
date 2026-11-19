@@ -162,6 +162,7 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 	// Krunker's HUD (timer and match info, team scores, rounds, leaderboard
 	// and counters, player panel, weapons, ammo, chat, FPS).
 	hud_draw(client)
+	phase_mark(.HUD_CROSSHAIR)
 
 	// Normally fades out for ADS, leaving the scope's own reticle. Always show
 	// and custom opacity can explicitly keep Precision visible over the scope.
@@ -193,10 +194,72 @@ overlay_render :: proc(client: ^Client, delta: f32) {
 // The HUD goes through the interface draw list (ui_box), which batches its
 // boxes and letters into a few draws, so it is drawn every frame on both
 // renderers instead of being cached in an offscreen texture.
+//
+// Building it (text layout, a few hundred boxes) is about a tenth of a frame's
+// CPU work at thousands of FPS, so the built boxes are kept and queued again
+// for up to HUD_CACHE_SECONDS. Anything the HUD shows that matters in a fight
+// (health, ammo, weapon, FPS, size and scale) rebuilds it at once when it
+// changes; everything else (timer, scores, chat, fades) is at most 1 ms old,
+// far under one refresh of any monitor. Not used while typing in chat or with
+// the scoreboard open.
+HUD_CACHE_SECONDS :: 0.001
+
+HUD_Cache_Key :: struct {
+	width, height, scale: f32,
+	font:                 Font_Slot,
+	me:                   ^shared.Player,
+	health:               f32,
+	class_index:          i32,
+	loadout_index:        i32,
+	ammo:                 u32,
+	weapon:               ^shared.Weapon,
+	fps:                  u32,
+	show_fps, in_game:    bool,
+}
+
+g_hud_cache: struct {
+	recording: UI_Recording,
+	key:       HUD_Cache_Key,
+	built_at:  f64,
+}
+
+hud_cache_key :: proc(client: ^Client) -> HUD_Cache_Key {
+	key := HUD_Cache_Key{
+		width = client.ui.width, height = client.ui.height, scale = client.ui.scale, font = g_font_slot,
+		fps = client.fps_value, show_fps = client.show_fps, in_game = client.in_game,
+	}
+	if me := client.me; me != nil {
+		key.me, key.health, key.class_index, key.loadout_index, key.weapon = me, me.health, me.class_index, me.loadout_index, me.weapon
+		if me.loadout_index >= 0 && int(me.loadout_index) < len(me.ammo) { key.ammo = me.ammo[me.loadout_index] }
+	}
+	return key
+}
+
 hud_draw :: proc(client: ^Client) {
+	cache := &g_hud_cache
+	cacheable := !client.scoreboard_open && !chat_typing()
+	now := glfw.GetTime()
+	key: HUD_Cache_Key
+	if cacheable {
+		key = hud_cache_key(client)
+		if ui_record_usable(&cache.recording) && key == cache.key && now - cache.built_at < HUD_CACHE_SECONDS && now >= cache.built_at {
+			ui_record_replay(&cache.recording)
+			return
+		}
+		ui_record_begin(&cache.recording)
+	}
+	phase_mark(.HUD_KRUNKER)
 	krunker_hud_render(client)
+	phase_mark(.HUD_CHAT_FPS)
 	kill_chat_render(client) // Krunker's chat box: chat and kill lines
 	fps_render(client)       // beside the timer, at the same UI Scale
+	phase_mark(.RENDER_OVERLAY)
+	if cacheable {
+		ui_record_end(&cache.recording)
+		cache.key, cache.built_at = key, now
+	} else {
+		cache.recording.valid = false
+	}
 	if client.scoreboard_open {
 		// Tab board, kept clear of the round/objective HUD at the top center.
 		board := client_scoreboard(client)
@@ -205,6 +268,8 @@ hud_draw :: proc(client: ^Client) {
 }
 
 overlay_fini :: proc() {
+	ui_record_free(&g_hud_cache.recording)
+	g_ui_record_generation += 1 // icons below are released
 	kill_feed_fini()
 	objective_hud_fini()
 	for _, icon in weapon_icons {

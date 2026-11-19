@@ -1355,9 +1355,11 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		net_client_poll(client, glfw.GetTime())
 	}
 	if client.krunker.connected {
-		if client.hud_settings.network_thread && client.krunker.handle != nil { krunker_net_thread_start(&client.krunker) }
+		phase_mark(.NETWORK)
+		if menuui.hud_network_thread(client.hud_settings) && client.krunker.handle != nil { krunker_net_thread_start(&client.krunker) }
 		if g_net_thread.running { krunker_ws_poll_threaded(client) } else { krunker_ws_poll(client) }
 		krunker_client_sync_match(client, f64(now))
+		phase_mark(.GAME_LOGIC)
 	}
 	chat_channel_tick(client)
 	round_hud_tick(client)
@@ -1622,9 +1624,11 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	gl_check("render world", per_phase = true)
 
 	// Overlay pass: bars use the world camera for projection only.
+	phase_mark(.HEALTHBARS)
 	gpu_pass_mark(.Interface)
 	player_healthbars_update_visibility(client, now)
 	player_healthbars_render(client)
+	phase_mark(.RENDER_OVERLAY)
 
 	ui_update(client.ui, f32(client.viewport_width), f32(client.viewport_height))
 
@@ -1664,8 +1668,10 @@ client_render_world :: proc(client: ^Client) {
 	// Self shadow: your third-person rig, drawn only into the player shadow map.
 	g_shadow_extra_casters = self_shadow_update(client, quality)
 	gpu_pass_mark(.Shadows)
+	phase_mark(.SHADOWS)
 	shadow_prepare(client.scene, client.game.map_inst, quality, world_target, {0, 0, client.viewport_width, client.viewport_height}, client.camera.position)
 	g_shadow_extra_casters = nil
+	phase_mark(.RENDER_SCENE)
 	saved_fov := client.camera.fov
 	client.camera.fov = client_world_fov(client)
 	gpu_pass_mark(.World)

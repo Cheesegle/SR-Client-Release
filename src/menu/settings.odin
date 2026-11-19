@@ -180,8 +180,21 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 			}
 		}
 		settings_note(state, "Experimental. How often your movement, aim and shots go to the server, as REAL inputs per second. Krunker's own Network Rate numbers are half the real rate: its 360 really sends up to 720, so 720 is exactly what the browser does (SR's default is 360). 1000 is the most Krunker's protocol allows (1 ms per input). Takes effect right away, no restart.")
-		settings_toggle_row(state, "Network thread", "NetworkThread", values.hud.network_thread, {kind = .HUD_TOGGLE, index = 11})
-		settings_note(state, "Reads the game connection on its own thread and answers Krunker's ping the moment it arrives, as the browser does. It does not raise average FPS; it keeps frames smooth when the network spikes and times snapshots by their real arrival. Takes effect right away; switching it off applies from the next match. Turn it off if anything feels wrong.")
+		// Dev build: one choice (fixed clock / network thread / off) until testers confirm it,
+		// then it moves to the normal client. The normal client keeps the Network thread toggle.
+		if SR_DEV {
+			if settings_search_show(state, "Input sending") {
+				if clay.UI(clay.ID("NetModeRow"))(settings_row(state)) {
+					settings_label("Input sending", state.scale)
+					spacer()
+					settings_dropdown_field(state, NET_MODE_LABELS[net_mode_index(values.hud)], "NetMode", .NET_MODE)
+				}
+			}
+			settings_note(state, "Test the default: it may help hit registration. Fixed clock: your inputs are built and sent at exact intervals on their own thread instead of once per frame, so they never wait for a frame (a hitch, a slow PC, recording). It also does everything Network thread does. Network thread: reads the game connection on its own thread and answers Krunker's ping the moment it arrives; inputs still go out with your frames. Off: everything on the game thread, like before. Changes apply from the next match.")
+		} else {
+			settings_toggle_row(state, "Network thread", "NetworkThread", values.hud.network_thread, {kind = .HUD_TOGGLE, index = 11})
+			settings_note(state, "Reads the game connection on its own thread and answers Krunker's ping the moment it arrives, as the browser does. It does not raise average FPS; it keeps frames smooth when the network spikes and times snapshots by their real arrival. Takes effect right away; switching it off applies from the next match. Turn it off if anything feels wrong.")
+		}
 		settings_night(state)
 	}
 }
@@ -289,6 +302,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		hud := defaults.hud
 		hud.hide_ping, hud.manual_respawn, hud.hide_enemy_counter = draft.hud.hide_ping, draft.hud.manual_respawn, draft.hud.hide_enemy_counter
 		hud.hide_leaderboard, hud.hide_chat, hud.network_thread = draft.hud.hide_leaderboard, draft.hud.hide_chat, draft.hud.network_thread
+		hud.input_clock, hud.net_mode = draft.hud.input_clock, draft.hud.net_mode
 		hud.input_rate = draft.hud.input_rate
 		hud.hide_bullet_holes = draft.hud.hide_bullet_holes
 		hud.vrr_cap = defaults.hud.vrr_cap
@@ -309,6 +323,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		draft.audio_volumes = defaults.audio_volumes
 	case .EXPERIMENTAL:
 		draft.hud.network_thread = defaults.hud.network_thread
+		draft.hud.input_clock, draft.hud.net_mode = defaults.hud.input_clock, defaults.hud.net_mode
 		draft.hud.input_rate = defaults.hud.input_rate
 		draft.visuals.night_mode, draft.visuals.night_strength = defaults.visuals.night_mode, defaults.visuals.night_strength
 	}

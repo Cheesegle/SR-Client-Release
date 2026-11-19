@@ -245,9 +245,19 @@ tester_export_section :: proc(client: ^Client, number: int, ending: string) -> s
 	}
 	fmt.sbprintf(&b, "network: prediction corrections %d, decode errors %d, network thread %s (pings answered on it: %d)\n",
 		client.krunker.prediction_corrections - g_export.corrections_start, client.krunker.decode_errors - g_export.decode_errors_start,
-		client.hud_settings.network_thread ? "on" : "off", g_net_thread.po_sent - g_export.pings_answered_start)
+		menuui.hud_network_thread(client.hud_settings) ? "on" : "off", g_net_thread.po_sent - g_export.pings_answered_start)
+	when SR_DEV { fmt.sbprintf(&b, "input sending: %s\n", menuui.NET_MODE_LABELS[menuui.net_mode_index(client.hud_settings)]) }
+	if menuui.hud_input_clock(client.hud_settings) {
+		built, q_sent, unstamped, late := krunker_input_clock_stats(&g_input_clock)
+		fmt.sbprintf(&b, "inputs on a fixed clock: ON (since SR started: commands built %d, q sent %d, sent before the game thread stamped them %d, late shot stamps %d)\n", built, q_sent, unstamped, late)
+	} else {
+		strings.write_string(&b, "inputs on a fixed clock: off\n")
+	}
 	info := gpu_device_info()
-	fmt.sbprintf(&b, "pc: %s | %s | driver %s | %s\n", cpu_model_name(), tester_export_gpu_name(), info.version, tester_export_system_text())
+	cores := g_cpu_physical_cores > 0 ? fmt.tprintf("%d cores / %d threads", g_cpu_physical_cores, os.get_processor_core_count()) : fmt.tprintf("%d threads", os.get_processor_core_count())
+	vram := g_gpu_backend == .Vulkan ? vk_gpu_vram_mb() : 0
+	fmt.sbprintf(&b, "pc: %s (%s) | %s%s | driver %s | %s\n", cpu_model_name(), cores, tester_export_gpu_name(),
+		vram > 0 ? fmt.tprintf(" (%d GB VRAM)", (vram + 512) / 1024) : "", info.version, tester_export_system_text())
 	if len(g_cpu_pinning_text) > 0 { fmt.sbprintf(&b, "cpu pinning: %s\n", g_cpu_pinning_text) }
 	if monitor := glfw.GetPrimaryMonitor(); monitor != nil {
 		mode := glfw.GetVideoMode(monitor)

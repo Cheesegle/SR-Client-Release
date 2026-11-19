@@ -9,12 +9,12 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, HOST, ACCOUN
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, INPUT_RATE, OBJECTIVE_OPACITY, SCOPE_VALUE }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, INPUT_RATE, OBJECTIVE_OPACITY, SCOPE_VALUE, NET_MODE }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 // Krunker's tabs (General, Controls, Display, Render, Game, Sound) plus SR's
 // own Experimental tab. The enum names predate the Krunker layout.
 Settings_Tab :: enum { MAIN, INPUT, VIDEO, VISUALS, GAMEPLAY, AUDIO, EXPERIMENTAL }
-Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, GAME_FPS_LIMIT, DEFAULT_REGION, MSAA, VRR_CAP, INPUT_RATE }
+Settings_Dropdown :: enum { NONE, DISPLAY_MODE, MONITOR, RESOLUTION, TEXTURE_FILTER, ANISOTROPY, CROSSHAIR_TYPE, MENU_FPS_LIMIT, LIGHTING, SHADOW_QUALITY, GAME_FPS_LIMIT, DEFAULT_REGION, MSAA, VRR_CAP, INPUT_RATE, NET_MODE }
 // Stored as "hide" flags so settings files without a key keep the item shown;
 // hide_ping inverts Krunker's showPing (default true) so the zero value matches.
 // hide_kill_feed inverts Krunker's showKills; kill_feed_limit is feedLimit
@@ -31,6 +31,8 @@ HUD_Settings :: struct {
 	hide_chat: bool,          // chat and kill lines, bottom left
 	// Settings > Experimental (kept here so it saves with the HUD flags).
 	network_thread: bool,     // read the network on its own thread
+	input_clock: bool,        // pre-0.51 Dev toggle, replaced by net_mode; kept so old files load
+	net_mode: i32,            // Dev: how inputs go out, NET_MODE_LABELS; 0 (older files) = default (fixed clock)
 	input_rate: i32,          // real inputs per second, one of INPUT_RATES; 0 (older files) = 360
 	hud_scale: f32,           // pre-0.13 HUD size; replaced by ui_scale, kept so old files load
 	// Krunker's UI Scale (scaleUI, 0.1..1, default 0.7); 0 (older files) = default.
@@ -633,6 +635,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .MSAA: index = msaa_index(state.settings_draft.quality.msaa)
 		case .VRR_CAP: index = clamp(state.settings_draft.hud.vrr_cap, 0, len(VRR_CAP_LABELS) - 1)
 		case .INPUT_RATE: index = input_rate_index(state.settings_draft.hud.input_rate)
+		case .NET_MODE: index = net_mode_index(state.settings_draft.hud)
 		case .DEFAULT_REGION: index = clamp(state.settings_draft.hud.default_region - 1, 0, len(KRUNKER_REGIONS) - 1)
 		}
 		state.focus = clay.ID("SettingsOption", u32(index)).id
@@ -775,6 +778,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .MSAA: state.settings_draft.quality.msaa = MSAA_LEVELS[clamp(control.action.index, 0, len(MSAA_LEVELS)-1)]; return {}
 		case .VRR_CAP: state.settings_draft.hud.vrr_cap = clamp(control.action.index, 0, len(VRR_CAP_LABELS) - 1); return {}
 		case .INPUT_RATE: state.settings_draft.hud.input_rate = INPUT_RATES[clamp(control.action.index, 0, len(INPUT_RATES) - 1)]; return {}
+		case .NET_MODE: state.settings_draft.hud.net_mode = clamp(control.action.index, 0, len(NET_MODE_LABELS) - 1) + 1; return {}
 		case .LIGHTING: state.settings_draft.quality.lighting = clamp(control.action.index, 0, 3); return {}
 		case .SHADOW_QUALITY: state.settings_draft.quality.shadow_quality = clamp(control.action.index, 0, 1); return {}
 		case .QUALITY_TOGGLE:
@@ -822,6 +826,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			case 17: state.settings_draft.hud.hide_kill_counter = !state.settings_draft.hud.hide_kill_counter
 			case 18: state.settings_draft.hud.hide_death_counter = !state.settings_draft.hud.hide_death_counter
 			case 19: state.settings_draft.hud.scope_borders = !state.settings_draft.hud.scope_borders
+			case 20: state.settings_draft.hud.input_clock = !state.settings_draft.hud.input_clock
 			}
 			return {}
 		case .RESOLUTION:
@@ -933,7 +938,7 @@ focus_visible :: proc(control: Control, page: Page) {
 	}
 	if page == .HOST { container = "SettingsPanel" }
 	if (page == .SETTINGS || page == .CONTROLS) && (control.slider || control.number || control.action.kind == .SETTINGS_DROPDOWN || control.action.kind == .SETTINGS_NUMBER || control.action.kind == .BIND_KEY || control.action.kind == .UNBIND_KEY || control.action.kind == .HUD_TOGGLE || control.action.kind == .VSYNC || control.action.kind == .FPS || control.action.kind == .VISUAL_RESET || control.action.kind == .VISUAL_TOGGLE || control.action.kind == .QUALITY_TOGGLE || control.action.kind == .ADVANCED_SENSITIVITY || control.action.kind == .INVERT_MOUSE || control.action.kind == .VIEWMODEL_TOGGLE || control.action.kind == .TRAILS_TOGGLE || control.action.kind == .CROSSHAIR_TOGGLE || control.action.kind == .CROSSHAIR_COLOR || control.action.kind == .HITMARKER_TOGGLE || control.action.kind == .DAMAGE_TOGGLE || control.action.kind == .MODS_BROWSE || control.action.kind == .MODS_REMOVE || control.action.kind == .MODS_PASTE || control.action.kind == .CROSSHAIR_IMAGE_PASTE || control.action.kind == .CROSSHAIR_IMAGE_CLEAR || control.action.kind == .HITMARKER_IMAGE_PASTE || control.action.kind == .HITMARKER_IMAGE_CLEAR || control.action.kind == .GRAPHICS_API) { container = "SettingsPanel" }
-	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MSAA || control.action.kind == .VRR_CAP || control.action.kind == .INPUT_RATE || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .GAME_FPS_LIMIT || control.action.kind == .DEFAULT_REGION || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
+	if control.action.kind == .DISPLAY_MODE || control.action.kind == .MONITOR || control.action.kind == .RESOLUTION_SELECT || control.action.kind == .TEXTURE_FILTER || control.action.kind == .ANISOTROPY || control.action.kind == .MSAA || control.action.kind == .VRR_CAP || control.action.kind == .INPUT_RATE || control.action.kind == .NET_MODE || control.action.kind == .MENU_FPS_LIMIT || control.action.kind == .GAME_FPS_LIMIT || control.action.kind == .DEFAULT_REGION || control.action.kind == .LIGHTING || control.action.kind == .SHADOW_QUALITY { container = "SettingsOptions" }
 	if control.action.kind == .SELECT_SECONDARY { container = "SecondaryPicker" }
 	if len(container) == 0 { return }
 	data := clay.GetScrollContainerData(clay.ID(container))
@@ -973,3 +978,24 @@ input_rate_index :: proc(rate: i32) -> i32 {
 }
 
 input_rate_value :: proc(rate: i32) -> i32 { return INPUT_RATES[input_rate_index(rate)] }
+
+// Dev build: one choice for how inputs reach the server (hud.net_mode, 1-based; 0 = default).
+NET_MODE_LABELS := [3]string{"Fixed clock (default)", "Network thread", "Off"}
+
+net_mode_index :: proc(hud: HUD_Settings) -> i32 {
+	if hud.net_mode >= 1 && hud.net_mode <= len(NET_MODE_LABELS) { return hud.net_mode - 1 }
+	return 0
+}
+
+// Whether the network thread runs: Dev uses net_mode (fixed clock needs the thread too),
+// the normal build its Network thread toggle.
+hud_network_thread :: proc(hud: HUD_Settings) -> bool {
+	when SR_DEV { return net_mode_index(hud) <= 1 }
+	return hud.network_thread
+}
+
+// Whether inputs are built and sent on the fixed clock (Dev build only).
+hud_input_clock :: proc(hud: HUD_Settings) -> bool {
+	when SR_DEV { return net_mode_index(hud) == 0 }
+	return false
+}

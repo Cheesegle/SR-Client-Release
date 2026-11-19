@@ -9,6 +9,7 @@ import "core:time"
 import glfw "vendor:glfw"
 import curl "vendor:curl"
 import kproto "../krunker"
+import shared "../shared"
 
 // Optional network thread (Settings > Experimental > Network thread).
 //
@@ -149,6 +150,11 @@ krunker_net_thread_run :: proc(state: ^Krunker_WS_State) {
 	cpu_pin_current_thread_off_game_core() // never on the game thread's core
 	net := &g_net_thread
 	buffer: [16384]byte
+	when SR_DEV {
+		clock_batch: [dynamic]shared.Input
+		clock_retry: [dynamic]shared.Input
+		clock_retry_reset: bool
+	}
 	for !sync.atomic_load(&net.stop) {
 		pings := 0
 		held: Krunker_Net_Inbound
@@ -203,8 +209,62 @@ krunker_net_thread_run :: proc(state: ^Krunker_WS_State) {
 			sync.mutex_unlock(&net.lock)
 			continue // poll again right away
 		}
-		time.sleep(time.Millisecond)
+		// Inputs on a fixed clock (Dev): build commands and send q from here.
+		wait := 0.001
+		when SR_DEV {
+			now := glfw.GetTime()
+			krunker_input_clock_tick(&g_input_clock, now)
+			if len(clock_retry) == 0 {
+				if reset, ok := krunker_input_clock_take_q(&g_input_clock, now, &clock_batch); ok {
+					clock_retry_reset = reset
+					append(&clock_retry, ..clock_batch[:])
+				}
+			}
+			if len(clock_retry) > 0 && state.connected {
+				if krunker_net_send_q(state, clock_retry[:], clock_retry_reset) { clear(&clock_retry) }
+			}
+			// Never spin: polling the socket takes the lock the game thread reads
+			// the inbox with, and sub-millisecond sleeps busy-loop on Windows.
+			// Commands keep their exact clock boundaries (`at`) even when the
+			// thread wakes up to a millisecond late; it builds every one due.
+			wait = max(krunker_input_clock_next_wait(&g_input_clock, glfw.GetTime(), 0.001), 0.001)
+		}
+		time.sleep(time.Duration(wait * 1e9))
 	}
+	when SR_DEV {
+		delete(clock_batch)
+		delete(clock_retry)
+	}
+}
+
+// Fixed-clock mode: send one q from the network thread with the shared packet
+// counter. False when it would block (retry with the same commands).
+@(private = "file")
+krunker_net_send_q :: proc(state: ^Krunker_WS_State, commands: []shared.Input, reset: bool) -> bool {
+	net := &g_net_thread
+	sync.mutex_lock(&net.send_lock)
+	defer sync.mutex_unlock(&net.send_lock)
+	if len(state.pending) > 0 { return false } // control messages first, in order
+	counter := kproto.krunker_msgpack_counter_next(state.ah_num, "q")
+	next_wire: kproto.Krunker_Input_Wire
+	packet, ok := kproto.krunker_input_encode_batch(commands, counter, false, reset, &state.input_wire, &next_wire)
+	if !ok { return true } // nothing sendable; drop
+	defer delete(packet)
+	sent: c.size_t
+	sync.mutex_lock(&net.lock)
+	code := curl.ws_send(state.handle, rawptr(&packet[0]), c.size_t(len(packet)), &sent, 0, curl.WS_BINARY)
+	sync.mutex_unlock(&net.lock)
+	if code == .E_AGAIN && sent == 0 { return false }
+	if code != .E_OK || int(sent) != len(packet) {
+		kproto.network_log("input", fmt.tprintf("ERROR clock q curl=%v sent=%d expected=%d", code, sent, len(packet)))
+		sync.mutex_lock(&net.lock)
+		net.failed = true
+		sync.mutex_unlock(&net.lock)
+		return true
+	}
+	state.ah_num = counter
+	state.input_wire = next_wire
+	return true
 }
 
 // The threaded counterpart of krunker_ws_poll.

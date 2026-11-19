@@ -13,6 +13,7 @@ import "core:strings"
 
 // The pinning result line, kept for the tester export.
 g_cpu_pinning_text: string
+g_cpu_physical_cores: int // 0 when unknown
 
 CPU_MAX_SMT :: 8 // Logical processors per physical core this code tracks.
 

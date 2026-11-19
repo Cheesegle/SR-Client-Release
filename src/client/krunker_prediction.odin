@@ -40,6 +40,8 @@ krunker_client_reset_prediction :: proc(client: ^Client) {
 	client.krunker.input_swap = 0
 	client.krunker.render_sample_ready = false
 	client.krunker.acked_has_ramp_fix = false
+	// Fixed-clock mode: drop the commands not sent yet, keep the ids going.
+	when SR_DEV { if g_net_thread.running { krunker_input_clock_reset(&g_input_clock, -1, false) } }
 }
 
 // One display frame of live input. after_scroll is the frame's command
@@ -64,9 +66,12 @@ krunker_client_predict_input :: proc(client: ^Client, frame: ^shared.Input, now:
 	if frame.swap != 0 { state.input_swap = frame.swap }
 	look := shared.Vec2{clamp(frame.x_dir, -math.PI/2, math.PI/2), frame.y_dir}
 	if !state.bootstrapped || !state.spawned {
+		if krunker_input_clock_active(client) { krunker_input_clock_publish(&g_input_clock, {}) }
 		client.me.direction = look
 		return
 	}
+	// Settings > Experimental > Inputs on a fixed clock (Dev build).
+	if krunker_input_clock_active(client) { return krunker_client_predict_clock(client, frame, after_scroll, look) }
 	if !state.render_sample_ready {
 		state.render_previous = {client.me.position, client.me.aim_val}
 		state.render_current = state.render_previous

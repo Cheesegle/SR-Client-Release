@@ -57,6 +57,9 @@ run in a browser.
   own milliseconds; each class's slide; Infiltrator's knife charge and the
   charge bar; Krunker's scope settings (image and borders off by default, as
   competitive players use them); Krunker's kill cam that turns to your killer
+- **Low delay, high FPS:** about 0.2 ms from reading your input to the GPU
+  finishing the frame, and about 0.4 ms from a mouse movement (9800X3D +
+  RTX 5080, Fullscreen); the HUD is cached so it costs almost nothing per frame
 - **CPU pinning:** the game thread gets a core of its own (on Ryzen X3D chips
   with two dies, a core on the 3D V-Cache die)
 - Reset to defaults
@@ -71,6 +74,7 @@ Full details per version are in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Version | Highlights |
 |---|---|
+| 0.54 | Faster HUD (half its CPU time); more FPS and less delay than 0.47 in Fullscreen and Windowed; mouse delay in the latency probe |
 | 0.47 | Fullscreen/Borderless recommendation under Video mode; the Experimental network thread answers Krunker's ping as soon as it arrives; X3D V-Cache core pinning; same or better FPS and delay than 0.46 in every display mode |
 | 0.46 | Hit registration timers in Krunker's exact milliseconds; class slides; Infiltrator knife charge and charge bar; scope settings; Krunker's kill cam; Burg's cart wheels; inputs-per-second choices 120-1000; red * on settings that need a restart |
 | 0.40 | Browser-exact hit registration; inputs per second; auto-host links |

@@ -168,6 +168,7 @@ ui_atlas_insert :: proc(bitmap: []u8, w, h: i32) -> (texel: [2]i32, ok: bool) {
 
 // Forgets every cached glyph of both fonts (their atlas cells are reused).
 ui_glyph_caches_free :: proc() {
+	g_ui_record_generation += 1 // recorded glyph cells are reused
 	for slot in Font_Slot {
 		for &glyph in g_glyph_caches[slot] { if glyph != nil { free(glyph); glyph = nil } }
 		for _, glyph in g_glyph_extras[slot] { free(glyph) }
@@ -471,6 +472,7 @@ ui_clip_clear :: proc(ui: ^UI) {
 // pixels or clearing.
 ui_flush :: proc() {
 	b := &g_ui_batch
+	g_ui_flushes += 1
 	defer {
 		clear(&b.vertices)
 		clear(&b.indices)
@@ -496,6 +498,89 @@ ui_flush :: proc() {
 		g_draw_calls += 1
 	}
 	gpu_scissor(false)
+}
+
+// ------------------------------------------------------------ recording
+//
+// A recording keeps the boxes a block of UI code queued (its vertices, indices
+// and runs) so a later frame can queue the same boxes again without building
+// them: ui_record_begin, the drawing code, ui_record_end; then ui_record_replay.
+// A recording is dropped if the list was flushed in between (it is incomplete)
+// or the glyph atlas was rebuilt or icons released since (g_ui_record_generation).
+
+g_ui_flushes: u64
+g_ui_record_generation: u32
+
+UI_Recording :: struct {
+	vertices:   [dynamic]UI_Vertex,
+	indices:    [dynamic]u32,
+	commands:   [dynamic]UI_Command,
+	generation: u32,
+	valid:      bool,
+	// While recording: where the block started.
+	start_vertex, start_index, start_command: int,
+	start_flushes: u64,
+	start_clip_on: bool,
+	start_clip:    [4]i32,
+}
+
+// A new run starts at the block (an empty run the block's first box joins), so
+// none of its boxes merge into a run queued before it.
+@(private = "file")
+ui_record_break :: proc() {
+	b := &g_ui_batch
+	append(&b.commands, UI_Command{clip_on = b.clip_on, clip = b.clip, first = u32(len(b.indices))})
+}
+
+ui_record_begin :: proc(r: ^UI_Recording) {
+	b := &g_ui_batch
+	r.valid = false
+	ui_record_break()
+	r.start_vertex, r.start_index, r.start_command = len(b.vertices), len(b.indices), len(b.commands) - 1
+	r.start_flushes, r.start_clip_on, r.start_clip = g_ui_flushes, b.clip_on, b.clip
+}
+
+ui_record_end :: proc(r: ^UI_Recording) {
+	b := &g_ui_batch
+	clear(&r.vertices); clear(&r.indices); clear(&r.commands)
+	if g_ui_flushes != r.start_flushes || b.clip_on != r.start_clip_on || b.clip != r.start_clip { return }
+	append(&r.vertices, ..b.vertices[r.start_vertex:])
+	base := u32(r.start_vertex)
+	for index in b.indices[r.start_index:] { append(&r.indices, index - base) }
+	first := u32(r.start_index)
+	for command in b.commands[r.start_command:] {
+		c := command
+		c.first -= first
+		append(&r.commands, c)
+	}
+	r.generation, r.valid = g_ui_record_generation, true
+}
+
+ui_record_usable :: proc(r: ^UI_Recording) -> bool {
+	b := &g_ui_batch
+	return r.valid && r.generation == g_ui_record_generation && len(r.vertices) <= UI_BATCH_MAX_VERTICES &&
+		b.clip_on == r.start_clip_on && (!b.clip_on || b.clip == r.start_clip)
+}
+
+ui_record_replay :: proc(r: ^UI_Recording) {
+	b := &g_ui_batch
+	if len(b.vertices) + len(r.vertices) > UI_BATCH_MAX_VERTICES { ui_flush() }
+	base_vertex, base_index := u32(len(b.vertices)), u32(len(b.indices))
+	append(&b.vertices, ..r.vertices[:])
+	old_indices, old_commands := len(b.indices), len(b.commands)
+	resize(&b.indices, old_indices + len(r.indices))
+	for index, i in r.indices { b.indices[old_indices + i] = index + base_vertex }
+	resize(&b.commands, old_commands + len(r.commands))
+	for command, i in r.commands {
+		c := command
+		c.first += base_index
+		b.commands[old_commands + i] = c
+	}
+}
+
+ui_record_free :: proc(r: ^UI_Recording) {
+	delete(r.vertices); delete(r.indices); delete(r.commands)
+	r^ = {}
 }
 
 ui_fini :: proc(ui: ^UI) {

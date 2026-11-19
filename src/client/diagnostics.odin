@@ -4,8 +4,10 @@ import "base:runtime"
 import "core:fmt"
 import "core:hash"
 import "core:os"
+import "core:slice"
 import "core:strings"
 import "core:sync"
+import "core:time"
 import gl "vendor:OpenGL"
 
 // Tester diagnostics: cheap, always-on breadcrumbs plus optional GL debug output.
@@ -63,6 +65,14 @@ Phase :: enum u8 {
 	POLL_EVENTS,
 	IDLE_WAIT,
 	SHUTDOWN,
+	NETWORK,
+	GAME_LOGIC,
+	SHADOWS,
+	RENDER_OVERLAY,
+	HEALTHBARS,
+	HUD_KRUNKER,
+	HUD_CHAT_FPS,
+	HUD_CROSSHAIR,
 }
 
 PHASE_NAMES := [Phase]string{
@@ -97,6 +107,14 @@ PHASE_NAMES := [Phase]string{
 	.POLL_EVENTS           = "poll events",
 	.IDLE_WAIT             = "idle frame wait",
 	.SHUTDOWN              = "shutdown",
+	.NETWORK               = "network",
+	.GAME_LOGIC            = "game logic",
+	.SHADOWS               = "shadows",
+	.RENDER_OVERLAY        = "HUD other",
+	.HEALTHBARS            = "healthbars",
+	.HUD_KRUNKER           = "HUD main",
+	.HUD_CHAT_FPS          = "HUD chat + FPS",
+	.HUD_CROSSHAIR         = "HUD crosshair + round",
 }
 
 PHASE_RING_SIZE :: 32
@@ -143,7 +161,43 @@ GL_DEBUG_MAX_LINES :: 4000
 
 g_diag: Diagnostics
 
+// CPU time per phase, only while the latency probe records or the benchmark
+// runs (one predictable branch per mark otherwise).
+g_phase_timing: bool
+g_phase_timing_last: Phase
+g_phase_timing_tick: time.Tick
+g_phase_timing_ns: [Phase]i64
+
+phase_timing_start :: proc "contextless" () {
+	g_phase_timing_ns = {}
+	g_phase_timing_last = .NONE
+	g_phase_timing_tick = time.tick_now()
+	g_phase_timing = true
+}
+
+// "tick 0.012, render scene 0.034, ..." in ms per frame, biggest first.
+phase_timing_report :: proc(frames: int) -> string {
+	g_phase_timing = false
+	Entry :: struct { phase: Phase, ms: f64 }
+	entries := make([dynamic]Entry, context.temp_allocator)
+	for ns, phase in g_phase_timing_ns {
+		if ns > 0 && phase != .NONE { append(&entries, Entry{phase, f64(ns) / 1e6 / f64(max(frames, 1))}) }
+	}
+	slice.sort_by(entries[:], proc(a, b: Entry) -> bool { return a.ms > b.ms })
+	b := strings.builder_make(context.temp_allocator)
+	for e, i in entries {
+		if i > 0 { strings.write_string(&b, ", ") }
+		fmt.sbprintf(&b, "%s %.4f", PHASE_NAMES[e.phase], e.ms)
+	}
+	return strings.to_string(b)
+}
+
 phase_mark :: #force_inline proc "contextless" (phase: Phase) {
+	if g_phase_timing {
+		now := time.tick_now()
+		g_phase_timing_ns[g_phase_timing_last] += i64(time.tick_diff(g_phase_timing_tick, now))
+		g_phase_timing_tick, g_phase_timing_last = now, phase
+	}
 	head := g_diag.phase_head
 	g_diag.phases[head % PHASE_RING_SIZE] = {g_diag.frame, phase}
 	sync.atomic_store_explicit(&g_diag.phase_head, head + 1, .Release)

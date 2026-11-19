@@ -664,6 +664,7 @@ krunker_ws_send_input :: proc(client: ^Client) {
 	state := &client.krunker
 	if !state.connected || !state.spawned || !state.bootstrapped do return
 	state.send_seconds = client.krunker_world.tick_frequency > 0 ? 1 / f64(client.krunker_world.tick_frequency) : KRUNKER_SEND_SECONDS
+	if krunker_input_clock_active(client) do return // the network thread sends q
 	if state.send_elapsed < krunker_send_seconds(state) || len(state.pending) > 0 || len(state.input_commands) == 0 do return
 	krunker_net_send_begin()
 	defer krunker_net_send_end()

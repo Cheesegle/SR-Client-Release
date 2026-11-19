@@ -136,6 +136,7 @@ cpu_logical_query :: proc(allocator := context.allocator) -> [dynamic]Cpu_Logica
 cpu_pinning_apply :: proc() -> string {
 	logical := cpu_logical_query(context.temp_allocator)
 	cores := cpu_cores_from_logical(logical[:], context.temp_allocator)
+	g_cpu_physical_cores = len(cores)
 	pick, ok := cpu_pick_game_core(cores[:])
 	if !ok { return fmt.tprintf("CPU pinning skipped: %d physical cores, none besides core 0 to give the game", len(cores)) }
 	game := cores[pick]

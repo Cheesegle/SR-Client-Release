@@ -1,5 +1,19 @@
 # Changelog
 
+## SR Client 0.54.0
+- **Faster HUD:** the built HUD (timer, scores, leaderboard, player panel,
+  weapons, ammo, chat, FPS) is kept and drawn again for up to 1 ms instead of
+  being rebuilt every frame. Health, ammo, weapon, FPS and window size rebuild
+  it at once; everything else is at most 1 ms old, under one refresh of any
+  monitor. Half the HUD's CPU time per frame.
+- **Measured on a 9800X3D + RTX 5080, standing still on Site:**
+  - Fullscreen: 6905 FPS vs 0.47's 6817, delay 0.216 vs 0.232 ms.
+  - Windowed: 8573 vs 8136 FPS, delay 0.171 vs 0.179 ms.
+  - Delay is from the frame reading input to the GPU finishing it.
+  - Mouse to GPU done: about 0.37 ms (median).
+- **For testers and developers:** SR's latency probe (only when started with
+  SR_LATENCY_PROBE) now also prints mouse delay and CPU time per frame part.
+
 ## SR Client 0.47.0
 - **Display note:** under Video mode: Fullscreen or Borderless recommended;
   Windowed goes through the Windows compositor and adds about 5 ms (measured

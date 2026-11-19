@@ -176,6 +176,7 @@ bench_frame :: proc(client: ^Client, target: ^Bench_Target, frame: int) {
 	client.viewport_width, client.viewport_height = target.width, target.height
 	client.render_target = target.target
 	client_render_world(client)
+	phase_mark(.SWAP_BUFFERS) // frame end: submit
 	gpu_frame_end()
 }
 
@@ -209,11 +210,13 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 	cpu_ms := make([dynamic]f64, context.temp_allocator)
 	gpu_ms := make([dynamic]f64, context.temp_allocator)
 	draw_sum, culled_sum: int
+	phase_timing_start()
 	start := time.tick_now()
 	previous := start
 	frame := 0
 	for time.duration_seconds(time.tick_since(start)) < f64(seconds) {
 		// Waits for the frame GPU_FRAMES_IN_FLIGHT back, like a swap chain.
+		phase_mark(.IDLE_WAIT)
 		gpu_frame_wait()
 		now := time.tick_now()
 		if frame > 0 { append(&frame_ms, time.duration_milliseconds(time.tick_diff(previous, now))) }
@@ -224,9 +227,11 @@ bench_run_config :: proc(client: ^Client, target: ^Bench_Target, config: Bench_C
 		append(&cpu_ms, time.duration_milliseconds(time.tick_since(now)))
 		frame += 1
 	}
+	phase_report := phase_timing_report(frame)
 	gpu_frames_finish()
 	gpu_frames_take(&gpu_ms)
 	result.pass_ms = gpu_pass_times_take()
+	fmt.printfln("[Bench]   CPU per frame by phase (ms): %s", phase_report)
 
 	bench_screenshot(client, target, config.name, map_name)
 

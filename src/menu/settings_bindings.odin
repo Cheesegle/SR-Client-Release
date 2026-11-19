@@ -100,6 +100,7 @@ settings_dropdown_menu :: proc(state: ^State, view: View) {
 	case .GAME_FPS_LIMIT: labels, anchor, action = GAME_FPS_LIMIT_LABELS[:], "GameFpsLimit", .GAME_FPS_LIMIT
 	case .VRR_CAP: labels, anchor, action = VRR_CAP_LABELS[:], "VrrCap", .VRR_CAP
 	case .INPUT_RATE: labels, anchor, action = INPUT_RATE_LABELS[:], "InputRate", .INPUT_RATE
+	case .NET_MODE: labels, anchor, action = NET_MODE_LABELS[:], "NetMode", .NET_MODE
 	case .MSAA:
 		count := 1
 		for level in MSAA_LEVELS[1:] { if level <= view.max_msaa { count += 1 } }
