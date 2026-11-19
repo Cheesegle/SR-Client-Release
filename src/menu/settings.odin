@@ -43,7 +43,14 @@ settings_window :: proc(state: ^State, view: View) {
 					text("*", 20, s, SETTINGS_RESTART_RED)
 					text("= needs a restart", 16, s, SETTINGS_MUTED)
 				}
-				if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = clay.PaddingAll(u16(24*s))}}) { text("SR CLIENT", 16, s, SETTINGS_MUTED) }
+				// The window has a fixed height: with the crosshair preview there is no
+				// room for this label, and the sidebar grew past the window's bottom
+				// border and pushed the footer (Cancel, Save) out of it.
+				if state.settings_tab == .VIDEO {
+					if clay.UI()({layout = {sizing = {height = clay.SizingFixed(24*s)}}}) {}
+				} else {
+					if clay.UI()({layout = {sizing = {width = clay.SizingGrow()}, padding = clay.PaddingAll(u16(24*s))}}) { text("SR CLIENT", 16, s, SETTINGS_MUTED) }
+				}
 			}
 			if clay.UI(clay.ID("SettingsContent"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingGrow()}, layoutDirection = .TopToBottom}}) {
 				if clay.UI(clay.ID("SettingsHeading"))({layout = {sizing = {width = clay.SizingGrow(), height = clay.SizingFixed(80*s)}, padding = {left = u16(32*s), right = u16(32*s)}, childAlignment = {y = .Center}}, backgroundColor = SETTINGS_DARK}) {
@@ -172,14 +179,16 @@ settings_tab_content :: proc(state: ^State, view: View, tab: Settings_Tab) {
 		settings_note(state, "Master volume affects every channel. Set a channel to 0% to mute it.")
 	case .EXPERIMENTAL:
 		settings_section(state, "Network")
-		if settings_search_show(state, "Inputs per second") {
+		if settings_search_show(state, "Network Rate (Hz)") {
 			if clay.UI(clay.ID("InputRateRow"))(settings_row(state)) {
-				settings_label("Inputs per second", state.scale)
+				settings_label("Network Rate (Hz)", state.scale)
 				spacer()
 				settings_dropdown_field(state, INPUT_RATE_LABELS[input_rate_index(values.hud.input_rate)], "InputRate", .INPUT_RATE)
 			}
 		}
-		settings_note(state, "Experimental. How often your movement, aim and shots go to the server, as REAL inputs per second. Krunker's own Network Rate numbers are half the real rate: its 360 really sends up to 720, so 720 is exactly what the browser does (SR's default is 360). 1000 is the most Krunker's protocol allows (1 ms per input). Takes effect right away, no restart.")
+		settings_note(state, "Krunker's Network Rate, with the same choices and the same default (360). Each setting sends exactly what the browser sends on it: how often your movement, aim and shots go to the server. Takes effect right away, no restart.")
+		settings_slider(state, "Lag Compensation", "LagComp", lag_comp(values.hud), 0, 1, {kind = .OBJECTIVE_OPACITY, index = 2}, step = 0.1)
+		settings_note(state, "Krunker's Lag Compensation, same range and default (1). Reduces the appearance of lag: the server uses it to make up for your ping. Sent when you enter the game, like the browser.")
 		// Dev build: one choice (fixed clock / network thread / off) until testers confirm it,
 		// then it moves to the normal client. The normal client keeps the Network thread toggle.
 		if SR_DEV {
@@ -303,7 +312,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 		hud.hide_ping, hud.manual_respawn, hud.hide_enemy_counter = draft.hud.hide_ping, draft.hud.manual_respawn, draft.hud.hide_enemy_counter
 		hud.hide_leaderboard, hud.hide_chat, hud.network_thread = draft.hud.hide_leaderboard, draft.hud.hide_chat, draft.hud.network_thread
 		hud.input_clock, hud.net_mode = draft.hud.input_clock, draft.hud.net_mode
-		hud.input_rate = draft.hud.input_rate
+		hud.input_rate, hud.lag_comp = draft.hud.input_rate, draft.hud.lag_comp
 		hud.hide_bullet_holes = draft.hud.hide_bullet_holes
 		hud.vrr_cap = defaults.hud.vrr_cap
 		hud.hide_kill_counter, hud.hide_death_counter = draft.hud.hide_kill_counter, draft.hud.hide_death_counter
@@ -324,7 +333,7 @@ settings_reset_tab :: proc(draft: ^Settings_Values, defaults: Settings_Values, t
 	case .EXPERIMENTAL:
 		draft.hud.network_thread = defaults.hud.network_thread
 		draft.hud.input_clock, draft.hud.net_mode = defaults.hud.input_clock, defaults.hud.net_mode
-		draft.hud.input_rate = defaults.hud.input_rate
+		draft.hud.input_rate, draft.hud.lag_comp = defaults.hud.input_rate, defaults.hud.lag_comp
 		draft.visuals.night_mode, draft.visuals.night_strength = defaults.visuals.night_mode, defaults.visuals.night_strength
 	}
 }

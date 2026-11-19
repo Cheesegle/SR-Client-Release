@@ -200,6 +200,12 @@ Raw_Input_Thread :: struct {
 	// cursor captured); the input thread adds motion to dx/dy only while it is set.
 	active: bool,
 	dx, dy: i64,
+	// Running totals of the same motion (atomic), never reset: the fixed
+	// clock reads them on the network thread to aim each command with the
+	// motion since the frame (aashten's design).
+	total_x, total_y: i64,
+	// Main thread: the totals already in the last frame's delta.
+	frame_total_x, frame_total_y: i64,
 	// Owned by the input thread.
 	seen_active: bool,
 	mouse: Native_Mouse,
@@ -225,8 +231,8 @@ raw_input_thread_sync :: proc(t: ^Raw_Input_Thread) -> bool {
 // game is not capturing the mouse.
 raw_input_thread_publish :: proc(t: ^Raw_Input_Thread, active: bool) {
 	if active {
-		if t.mouse.x != 0 { sync.atomic_add(&t.dx, t.mouse.x) }
-		if t.mouse.y != 0 { sync.atomic_add(&t.dy, t.mouse.y) }
+		if t.mouse.x != 0 { sync.atomic_add(&t.dx, t.mouse.x); sync.atomic_add(&t.total_x, t.mouse.x) }
+		if t.mouse.y != 0 { sync.atomic_add(&t.dy, t.mouse.y); sync.atomic_add(&t.total_y, t.mouse.y) }
 		t.mouse.x, t.mouse.y = 0, 0
 	} else {
 		native_mouse_reset(&t.mouse)
@@ -248,6 +254,9 @@ raw_input_thread_set_active :: proc(t: ^Raw_Input_Thread, active: bool) {
 raw_input_thread_take_delta :: proc(t: ^Raw_Input_Thread) -> shared.Vec2 {
 	x := sync.atomic_exchange(&t.dx, 0)
 	y := sync.atomic_exchange(&t.dy, 0)
+	// Read after the exchange: motion landing in between is left to the next
+	// frame (never counted twice), only reaching a clock command a frame later.
+	t.frame_total_x, t.frame_total_y = sync.atomic_load(&t.total_x), sync.atomic_load(&t.total_y)
 	return {f32(x), f32(y)}
 }
 
@@ -520,4 +529,18 @@ client_poll_events :: proc() {
 client_wait_events :: proc(timeout: f64) {
 	client_wait_for_message(timeout)
 	client_poll_events()
+}
+
+// Main thread: the raw totals the last frame's mouse delta already includes,
+// and whether raw motion is live (thread running and capturing).
+raw_mouse_frame_totals :: proc() -> (totals: [2]i64, live: bool) {
+	t := &g_raw_input_thread
+	if t.handle == nil || !sync.atomic_load(&t.active) { return }
+	return {t.frame_total_x, t.frame_total_y}, true
+}
+
+// Any thread: the raw totals now.
+raw_mouse_totals_now :: proc "contextless" () -> [2]i64 {
+	t := &g_raw_input_thread
+	return {sync.atomic_load(&t.total_x), sync.atomic_load(&t.total_y)}
 }

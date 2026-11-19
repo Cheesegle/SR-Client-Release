@@ -133,6 +133,15 @@ overlay_weapon_icon :: proc(client: ^Client, weapon_id: i32) -> (Gpu_Texture, ^s
 // The window's UI scale before Krunker's UI Scale (restored after the HUD).
 g_hud_base_scale: f32 = 1
 
+// The chat box alone, at the HUD's scale and font, drawn under the menu.
+overlay_chat_under_menu :: proc(client: ^Client) {
+	g_hud_base_scale = client.ui.scale
+	client.ui.scale = krunker_hud_scale(client)
+	if !client.hud_settings.classic_font { ui_use_font(.GAME) }
+	defer { client.ui.scale = g_hud_base_scale; ui_use_font(.UI) }
+	kill_chat_render(client)
+}
+
 overlay_render :: proc(client: ^Client, delta: f32) {
 	// Settings > Display > UI Scale (Krunker's scaleUI) and Krunker font.
 	g_hud_base_scale = client.ui.scale

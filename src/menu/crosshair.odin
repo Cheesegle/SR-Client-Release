@@ -76,7 +76,9 @@ settings_crosshair_preview :: proc(state: ^State) {
 	s := state.scale
 	state.crosshair_preview = {state.settings_draft.crosshair, state.settings_draft.hitmarker, s}
 	if clay.UI()({layout={sizing={width=clay.SizingGrow()}, layoutDirection=.TopToBottom, padding={left=u16(24*s), right=u16(24*s)}, childGap=u16(8*s)}}) {
-		text("Crosshair and hitmarker preview", 16, s, SETTINGS_MUTED)
+		// One line: the sidebar is too narrow for a longer label, which wrapped
+		// under the preview box.
+		text("Crosshair preview", 16, s, SETTINGS_MUTED)
 		// Clay emits a custom command before an element's own background.
 		// Keep the background on a parent so it cannot cover the reticle.
 		if clay.UI()({layout={sizing={width=clay.SizingGrow(), height=clay.SizingFixed(124*s)}}, backgroundColor={65,75,82,255}, cornerRadius=clay.CornerRadiusAll(4*s)}) {
@@ -125,6 +127,7 @@ settings_crosshair_image_row :: proc(state: ^State) {
 			text(len(url) > 0 ? shorten(url, 34) : "No image set", 16, s, SETTINGS_MUTED)
 		}
 		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(150*s)}}}) { settings_button(state, "Paste link", "CrosshairImagePaste", {kind = .CROSSHAIR_IMAGE_PASTE}) }
+		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(110*s)}}}) { settings_button(state, "Copy link", "CrosshairImageCopy", {kind = .CROSSHAIR_IMAGE_COPY}, enabled = len(url) > 0) }
 		if clay.UI()({layout = {sizing = {width = clay.SizingFixed(110*s)}}}) { settings_button(state, "Clear", "CrosshairImageClear", {kind = .CROSSHAIR_IMAGE_CLEAR}, enabled = len(url) > 0) }
 	}
 }

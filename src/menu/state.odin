@@ -9,7 +9,7 @@ Page :: enum { HOME, SETTINGS, CONTROLS, SESSION, CLASSES, LOADOUT, HOST, ACCOUN
 Lobby_Presentation :: enum { STANDARD, COMPETITIVE }
 // The client owns clipboard access and session changes. The menu emits actions
 // and renders requested selections separately from confirmed lobby state.
-Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, INPUT_RATE, OBJECTIVE_OPACITY, SCOPE_VALUE, NET_MODE }
+Action_Kind :: enum { NONE, PLAY, QUIT, JOIN_LINK, LOGIN, CANCEL_JOIN, FORGET_BROWSER_SESSION, PASTE, COPY_INVITE, LEAVE_SESSION, LOCAL_PRACTICE, SELECT_TEAM, SELECT_CLASS, SELECT_SECONDARY, INSPECT_CLASS, EDIT_INVITE, DISPLAY_MODE, RESOLUTION, SENSITIVITY, FPS, AUDIO_VOLUME, SETTINGS_TAB, SETTINGS_SAVE, SETTINGS_CANCEL, BIND_KEY, UNBIND_KEY, HUD_TOGGLE, VSYNC, MONITOR, SETTINGS_DROPDOWN, RESOLUTION_SELECT, VISUAL_VALUE, VISUAL_TOGGLE, VISUAL_RESET, TEXTURE_FILTER, ANISOTROPY, QUALITY_TOGGLE, LIGHTING, SHADOW_QUALITY, SETTINGS_NUMBER, FOV, ADVANCED_SENSITIVITY, INVERT_MOUSE, VIEWMODEL_VALUE, VIEWMODEL_TOGGLE, TRAILS_TOGGLE, CROSSHAIR_TYPE, CROSSHAIR_VALUE, CROSSHAIR_TOGGLE, CROSSHAIR_COLOR, SETTINGS_IMPORT_OPEN, SETTINGS_IMPORT, SETTINGS_EXPORT, SETTINGS_RESET_OPEN, SETTINGS_RESET, SETTINGS_RESET_CLOSE, SETTINGS_SEARCH, MENU_FPS_LIMIT, NIGHT_STRENGTH, KILL_FEED_LIMIT, HITMARKER_VALUE, HITMARKER_TOGGLE, DAMAGE_VALUE, DAMAGE_TOGGLE, MODS_BROWSE, MODS_REMOVE, MODS_PASTE, CROSSHAIR_IMAGE_PASTE, CROSSHAIR_IMAGE_CLEAR, HUD_SCALE, GAME_FPS_LIMIT, IMPORT_PART, FPS_UPDATE_RATE, HOST_GAME, REFRESH, HITMARKER_IMAGE_PASTE, HITMARKER_IMAGE_CLEAR, HOST_TAB, HOST_MAP, HOST_VALUE, HOST_TOGGLE, HOST_TEAM_SIZE, HOST_CLASS_LIMIT, HOST_TEXT, HOST_CLOSE, HOST_START, DEFAULT_REGION, GRAPHICS_API, MSAA, VRR_CAP, INPUT_RATE, OBJECTIVE_OPACITY, SCOPE_VALUE, NET_MODE, LOGIN_SEND_CODE, LOGIN_CODE, LOGIN_FIELD, LOGIN_PASSWORD, CROSSHAIR_IMAGE_COPY, HITMARKER_IMAGE_COPY }
 Action :: struct { kind: Action_Kind, index: i32, value: f32 }
 // Krunker's tabs (General, Controls, Display, Render, Game, Sound) plus SR's
 // own Experimental tab. The enum names predate the Krunker layout.
@@ -33,7 +33,7 @@ HUD_Settings :: struct {
 	network_thread: bool,     // read the network on its own thread
 	input_clock: bool,        // pre-0.51 Dev toggle, replaced by net_mode; kept so old files load
 	net_mode: i32,            // Dev: how inputs go out, NET_MODE_LABELS; 0 (older files) = default (fixed clock)
-	input_rate: i32,          // real inputs per second, one of INPUT_RATES; 0 (older files) = 360
+	input_rate: i32,          // real inputs per second, one of INPUT_RATES; 0 (never chosen) = 720
 	hud_scale: f32,           // pre-0.13 HUD size; replaced by ui_scale, kept so old files load
 	// Krunker's UI Scale (scaleUI, 0.1..1, default 0.7); 0 (older files) = default.
 	ui_scale: f32,
@@ -61,6 +61,7 @@ HUD_Settings :: struct {
 	// marker's opacity, and while aiming down sights near it. Tenths plus
 	// one, so 0 (older files) is Krunker's default (1 and 0.5).
 	objective_opacity, ads_objective_opacity: i32,
+	lag_comp:                 i32, // Krunker's Lag Compensation 0..1, stored like objective_opacity (0 = default 1)
 	// Krunker's scope settings (Settings > Mods > Scope): scopeOpac (the
 	// scope image), scopeBorders.display / scopeBorderOpac (the bars outside
 	// it) and scopeWidth / scopeHeight (x100 px). Stored as tenths plus one,
@@ -92,6 +93,8 @@ objective_opacity_encode :: proc(value: f32) -> i32 {
 }
 objective_opacity :: proc(settings: HUD_Settings) -> f32 { return objective_opacity_decode(settings.objective_opacity, OBJECTIVE_OPACITY_DEFAULT) }
 ads_objective_opacity :: proc(settings: HUD_Settings) -> f32 { return objective_opacity_decode(settings.ads_objective_opacity, ADS_OBJECTIVE_OPACITY_DEFAULT) }
+LAG_COMP_DEFAULT :: 1 // Krunker's default
+lag_comp :: proc(settings: HUD_Settings) -> f32 { return objective_opacity_decode(settings.lag_comp, LAG_COMP_DEFAULT) }
 SCOPE_OPACITY_DEFAULT :: 0 // SR: no scope image (Krunker's default is 1)
 SCOPE_BORDER_OPACITY_DEFAULT :: 1
 SCOPE_SIZE_DEFAULT :: 6.8 // Krunker scopeWidth/scopeHeight; the image is size*100 px
@@ -304,6 +307,10 @@ State :: struct {
 	last_click_time: f64,
 	// Log out asks for a second click.
 	logout_armed: bool,
+	// Account window: Krunker login with an emailed code (login.odin).
+	login_text: [Login_Field][LOGIN_TEXT_CAPACITY]u8,
+	login_text_length: [Login_Field]int,
+	login_code_sent: bool,
 	focus, pressed: u32,
 	return_focus: u32,
 	loadout_parent: Page,
@@ -502,6 +509,7 @@ interact :: proc(state: ^State, input: Input, view: View) -> Action {
 	}
 	if settings_search_focused(state) { settings_search_input(state, input) }
 	host_text_input(state, input)
+	if action := login_text_input(state, input); action.kind != .NONE { return action }
 	if state.focus == clay.ID("Invite").id {
 		if input.paste && !state.previous.paste { return {kind = .PASTE} }
 		if input.clear_text && state.invite_length > 0 { state.invite_selected = true }
@@ -755,6 +763,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 			// index 0: objOpac, 1: adsObjOpac.
 			if value := control.action.value; value == value {
 				if control.action.index == 0 { state.settings_draft.hud.objective_opacity = objective_opacity_encode(value) }
+				else if control.action.index == 2 { state.settings_draft.hud.lag_comp = objective_opacity_encode(value) }
 				else { state.settings_draft.hud.ads_objective_opacity = objective_opacity_encode(value) }
 			}
 			return {}
@@ -900,7 +909,7 @@ activate :: proc(state: ^State, control: Control) -> Action {
 		case .FPS: state.settings_draft.show_fps = !state.settings_draft.show_fps; return {}
 		}
 	}
-	if control.action.kind == .INSPECT_CLASS || control.action.kind == .EDIT_INVITE { return {} }
+	if control.action.kind == .INSPECT_CLASS || control.action.kind == .EDIT_INVITE || control.action.kind == .LOGIN_FIELD { return {} }
 	// Navigation changes the menu page without dispatching a gameplay action.
 	if control.action.kind == .NONE {
 		previous_page := state.page
@@ -966,15 +975,22 @@ set_invite :: proc(state: ^State, value: string) {
 
 // Settings > Experimental > Inputs per second (real inputs, not the browser's
 // Network Rate number: the browser sends once half its interval has passed, so
-// its Network Rate 360 is up to 720 inputs a second at high FPS). 1000 is the
-// protocol's limit: input durations are whole milliseconds, at least 1.
-INPUT_RATES := [7]i32{120, 240, 360, 480, 720, 840, 1000}
-INPUT_RATE_LABELS := [7]string{"120", "240", "360 (default)", "480", "720 (= Krunker 360)", "840", "1000"}
-INPUT_RATE_DEFAULT :: 360
+// its highest Network Rate, 360, is up to 720 inputs a second at high FPS, and
+// it never sends more). 720 is what a browser on the highest setting does.
+// 360 stays for comparison tests. 120/240/480/840/1000 were removed in 0.55
+// (no Krunker setting matches them; 1000 felt off to testers).
+// 0.57: the choices are Krunker's own Network Rate options with Krunker's own
+// numbers (30, 60, 120, 144, 240, 360; default 360). Each sends what the
+// browser sends on that setting at high FPS: Krunker sends an input once half
+// its interval has passed, so its N really sends up to 2N a second. The
+// stored value stays the REAL rate (2x the label), as before.
+INPUT_RATES := [6]i32{60, 120, 240, 288, 480, 720}
+INPUT_RATE_LABELS := [6]string{"30", "60", "120", "144", "240", "360 (default)"}
+INPUT_RATE_DEFAULT :: 720
 
 input_rate_index :: proc(rate: i32) -> i32 {
 	for value, i in INPUT_RATES { if value == rate { return i32(i) } }
-	return 2 // 0 (older files) or a removed choice (900): 360
+	return len(INPUT_RATES) - 1 // 0 (never chosen) or a removed choice: Krunker 360
 }
 
 input_rate_value :: proc(rate: i32) -> i32 { return INPUT_RATES[input_rate_index(rate)] }

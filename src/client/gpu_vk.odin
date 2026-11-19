@@ -457,6 +457,7 @@ Vk_Latency_Probe :: struct {
 	gpu_ms:          [dynamic]f64,
 	input_ns:        [GPU_FRAMES_IN_FLIGHT]i64, // arrival of the oldest mouse report the frame read (0: none)
 	mouse_ms:        [dynamic]f64,              // mouse report arrival -> GPU done, frames that read mouse input
+	pending_input_ns: i64,                      // mouse read between frames: goes to the next frame recorded
 	collect_ms:      f64, // game thread: waiting for the slot's frame (fence, present thread)
 	present_ms:      f64, // game thread: in gpu_present
 	delay_ms, cpu_est_ms, gpu_est_ms: f64, // low-latency pacing, summed per frame
@@ -558,7 +559,8 @@ vk_probe_frame_start :: proc(slot: int, collect_ms: f64) {
 	if !p.recording && elapsed >= p.warmup { p.recording = true; p.prev_start = now; p.counted = {}; phase_timing_start(); input_probe_set(true) }
 	p.start[slot] = now
 	p.counted[slot] = false
-	p.input_ns[slot] = 0
+	p.input_ns[slot] = p.pending_input_ns
+	p.pending_input_ns = 0
 	if !p.recording { return }
 	if elapsed >= p.warmup + p.seconds { vk_probe_finish(); return }
 	p.counted[slot] = true
@@ -585,7 +587,11 @@ vk_probe_frame_done :: proc(slot: int, begin, end: u64) {
 gpu_probe_note_input :: proc(arrival_ns: i64) {
 	if arrival_ns == 0 || g_gpu_backend != .Vulkan { return }
 	p := &g_vk_probe
-	if !p.recording || !g_vk.recording { return }
+	if !p.recording { return }
+	if !g_vk.recording { // read before the frame began: it goes into the next frame
+		if p.pending_input_ns == 0 { p.pending_input_ns = arrival_ns }
+		return
+	}
 	if p.input_ns[g_vk.slot] == 0 { p.input_ns[g_vk.slot] = arrival_ns }
 }
 

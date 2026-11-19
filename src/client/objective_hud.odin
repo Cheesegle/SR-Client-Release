@@ -66,7 +66,7 @@ objective_marker_icon :: proc(next: bool) -> Gpu_Texture {
 }
 
 // Krunker's globalAlpha for the marker: adsObjectiveOpacity while aiming
-// (aimVal != 1) at a marker in the middle of the screen, else objectiveOpacity.
+// (Krunker's aimVal != 1, SR's aim_val != 0) at a marker in the middle of the screen, else objectiveOpacity.
 objective_marker_alpha :: proc(settings: menuui.HUD_Settings, aiming, near_centre: bool) -> f32 {
 	return aiming && near_centre ? menuui.ads_objective_opacity(settings) : menuui.objective_opacity(settings)
 }
@@ -167,7 +167,9 @@ objective_marker_draw :: proc(client: ^Client, view_projection: shared.Mat4, obj
 	if !visible { return }
 	// Canvas units are ui.scale pixels; the marker is drawn at size/144.
 	k := ui.scale*size/144
-	aiming := client.me.aim_val != 1
+	// Krunker's aimVal != 1 (its 1 is hip fire). SR's aim_val runs the other
+	// way (0 hip, 1 fully aimed), so any aim at all is aim_val != 0.
+	aiming := client.me.aim_val != 0
 	near_centre := screen.x >= 0.45*ui.width && screen.x <= 0.55*ui.width && screen.y >= 0.4*ui.height && screen.y <= 0.6*ui.height
 	alpha := objective_marker_alpha(client.hud_settings, aiming, near_centre)
 	if alpha <= 0 { return }

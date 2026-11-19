@@ -1,10 +1,11 @@
 name: Build SR Client
 
-# Every push builds the client. Pushing a tag like v0.1.0 also publishes a
-# GitHub Release with the installer and portable zip.
+# Every push builds the client. main publishes a GitHub Release per version;
+# the dev branch also builds the developer client and refreshes the
+# "SR Client Dev" pre-release.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -41,6 +42,11 @@ jobs:
       - name: Build
         shell: cmd
         run: build.bat all
+
+      - name: Build developer client (dev branch)
+        if: github.ref == 'refs/heads/dev'
+        shell: cmd
+        run: build.bat dev
 
       - name: Get game files
         shell: pwsh
@@ -80,6 +86,34 @@ jobs:
           Compress-Archive -Path stage\* -DestinationPath "dist\SR-Client-Portable-$env:version.zip"
           Get-ChildItem dist
 
+      - name: Developer zip (dev branch)
+        if: github.ref == 'refs/heads/dev'
+        shell: pwsh
+        run: |
+          # The full portable folder plus sr_client_dev.exe (F3 debug window,
+          # hitboxes, shot rays, tester export). Run sr_client_dev.exe from it.
+          Copy-Item -Recurse stage stage-dev
+          Copy-Item bin\sr_client_dev.exe stage-dev\
+          Compress-Archive -Path stage-dev\* -DestinationPath "dist\SR-Client-Dev-$env:version.zip"
+
+      - name: Release notes for this version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # CHANGELOG.md from "## SR Client <version>" down to the section of
+          # the last published release, so a release lists every change since.
+          $last = (gh release list --repo "${{ github.repository }}" --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName') -replace '^v',''
+          $lines = Get-Content CHANGELOG.md
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -eq "## SR Client ${{ env.version }}") { $start = $i; break } }
+          if ($start -lt 0) { "SR Client ${{ env.version }}" | Set-Content release-notes.md; exit 0 }
+          $end = $lines.Count
+          for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i].StartsWith("## ") -and ($last -eq "" -or $last -eq "${{ env.version }}" -or $lines[$i] -eq "## SR Client $last")) { $end = $i; break }
+          }
+          $lines[$start..($end - 1)] | Set-Content release-notes.md
+
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
@@ -98,11 +132,10 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload "${{ github.ref_name }}" (Get-ChildItem dist\* -Exclude 'SR-Client-Dev-*').FullName --clobber --repo "${{ github.repository }}"
           } else {
-            gh release create "${{ github.ref_name }}" (Get-ChildItem dist\* -Exclude 'SR-Client-Dev-*').FullName --repo "${{ github.repository }}" --title "SR Client ${{ github.ref_name }}" --notes-file CHANGELOG.md
+            gh release create "${{ github.ref_name }}" (Get-ChildItem dist\* -Exclude 'SR-Client-Dev-*').FullName --repo "${{ github.repository }}" --title "SR Client ${{ github.ref_name }}" --notes-file release-notes.md
           }
 
       # Every version on main gets its own GitHub Release v<VERSION>.
-      # This public repository never builds or publishes a developer package.
       - name: Publish release for this version (main)
         if: github.ref == 'refs/heads/main'
         shell: pwsh
@@ -114,6 +147,20 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag (Get-ChildItem dist\* -Exclude 'SR-Client-Dev-*').FullName --clobber --repo "${{ github.repository }}"
           } else {
-            gh release create $tag (Get-ChildItem dist\* -Exclude 'SR-Client-Dev-*').FullName --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "SR Client $tag" --notes-file CHANGELOG.md
+            gh release create $tag (Get-ChildItem dist\* -Exclude 'SR-Client-Dev-*').FullName --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "SR Client $tag" --notes-file release-notes.md
           }
 
+
+      # The dev branch keeps one pre-release, "SR Client Dev", with the newest
+      # developer zip (replaced on every push). It never touches main's releases.
+      - name: Publish Dev pre-release (dev branch)
+        if: github.ref == 'refs/heads/dev'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "dev-latest"
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) { gh release delete $tag --yes --cleanup-tag --repo "${{ github.repository }}" }
+          "Developer build of SR Client ${{ env.version }} from the dev branch (${{ github.sha }}). For testers; see the Dev build section of the README." | Set-Content dev-notes.md
+          gh release create $tag (Get-ChildItem dist\SR-Client-Dev-*).FullName --repo "${{ github.repository }}" --target "${{ github.sha }}" --prerelease --title "SR Client Dev (${{ env.version }})" --notes-file dev-notes.md

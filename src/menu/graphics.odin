@@ -237,6 +237,7 @@ settings_slider_value :: proc(state: ^State, view: View, action: Action) -> f32 
 	case .FPS_UPDATE_RATE: return f32(fps_update_ms(state.settings_active ? values.hud : view.hud))
 	case .OBJECTIVE_OPACITY:
 		hud := state.settings_active ? values.hud : view.hud
+		if action.index == 2 { return lag_comp(hud) }
 		return action.index == 0 ? objective_opacity(hud) : ads_objective_opacity(hud)
 	case .SCOPE_VALUE:
 		return scope_value(state.settings_active ? values.hud : view.hud, int(action.index))

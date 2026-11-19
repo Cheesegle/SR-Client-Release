@@ -50,9 +50,11 @@ run in a browser.
 - Import your Krunker (or Glorp) settings, with switches to skip keybinds,
   sensitivity or sound; settings marked **K** work exactly like Krunker's
 - Uses the dedicated GPU on laptops
-- **Inputs per second** (Settings > Experimental): 120 to 1000 real inputs per
-  second; Krunker's own Network Rate numbers are half the real rate, so 720 is
-  exactly the browser (SR's default is 360)
+- **Network Rate (Hz)** (Settings > Experimental): Krunker's own choices and
+  numbers (30, 60, 120, 144, 240, 360; default 360), each sending exactly what
+  the browser sends on that setting
+- **Lag Compensation** (Settings > Experimental): Krunker's slider 1:1 (0 to 1,
+  default 1), sent to the server where the browser sends it
 - **Weapons 1:1 with Krunker's code:** fire, reload and swap timers in Krunker's
   own milliseconds; each class's slide; Infiltrator's knife charge and the
   charge bar; Krunker's scope settings (image and borders off by default, as
@@ -74,12 +76,25 @@ Full details per version are in [`CHANGELOG.md`](CHANGELOG.md).
 
 | Version | Highlights |
 |---|---|
+| 0.59 | Krunker's Network Rate (Hz) choices and Lag Compensation slider 1:1; hosting works again with Krunker's new login tokens; host from the lobby you're in; login without a browser; movement fixes from Krunker's code; Intel GPUs use Borderless for Fullscreen; chat and Esc while dead |
 | 0.54 | Faster HUD (half its CPU time); more FPS and less delay than 0.47 in Fullscreen and Windowed; mouse delay in the latency probe |
 | 0.47 | Fullscreen/Borderless recommendation under Video mode; the Experimental network thread answers Krunker's ping as soon as it arrives; X3D V-Cache core pinning; same or better FPS and delay than 0.46 in every display mode |
 | 0.46 | Hit registration timers in Krunker's exact milliseconds; class slides; Infiltrator knife charge and charge bar; scope settings; Krunker's kill cam; Burg's cart wheels; inputs-per-second choices 120-1000; red * on settings that need a restart |
 | 0.40 | Browser-exact hit registration; inputs per second; auto-host links |
 | 0.25 | Vulkan renderer on by default with its own CPU core; inputs at the lobby's tick rate; Krunker's sounds 1:1; hardpoint markers and round messages like Krunker |
 | 0.23 | Earliest build on the Releases page: the native client for custom and comp games; the network log is only written when something goes wrong |
+
+## Dev build
+The [`dev`](../../tree/dev) branch tracks the newest work before it reaches a
+normal release. Every push to it builds a **SR Client Dev** pre-release on the
+Releases page (a portable zip; run `sr_client_dev.exe` from it). It plays like
+the normal client and adds tools for testers:
+
+- **F3 window:** FPS and per-phase frame times, hitboxes, shot rays
+- **Input sending:** choose Fixed clock (Dev default), Network thread or Off
+- **Tester export:** one button saves your settings, version and logs
+  (including `hitreg.log`) to Downloads, ready to send
+- It may contain unfinished changes; use the normal release for everyday play.
 
 ## How it works
 - **Same game, same servers.** SR Client connects to Krunker's own game servers

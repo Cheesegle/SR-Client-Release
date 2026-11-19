@@ -20,13 +20,13 @@ import menuui "../menu"
 //   - while a game runs, the section so far is rewritten every 20 seconds to
 //     logs/tester-export-current.txt; if SR is killed or crashes, the next
 //     start adds it to the export as an unfinished game.
-// The end screen's "Export logs" button copies the whole export to the
-// Desktop as SR-Client-test-logs.txt and shows it in Explorer, ready to send.
+// The end screen's "Export logs" button copies the whole export to
+// Downloads as SR-Client-test-logs-<date>_<time>.txt (a new file each time)
+// and shows it in Explorer, ready to send.
 
 TESTER_EXPORT :: HITREG_AUDIT
 TESTER_EXPORT_FILE :: "logs/tester-export.txt"
 TESTER_EXPORT_CURRENT :: "logs/tester-export-current.txt"
-TESTER_EXPORT_DESKTOP_NAME :: "SR-Client-test-logs.txt"
 TESTER_EXPORT_CHECKPOINT :: 20.0 // seconds between in-progress saves
 TESTER_EXPORT_MAX_WEAPONS :: 8
 // Frame times are counted in 0.1 ms bins up to 100 ms (one add per frame, no
@@ -48,6 +48,11 @@ Tester_Export :: struct {
 	weapon_count: int,
 	rates: [len(menuui.INPUT_RATES)]bool,
 	rate_other: bool,
+	// Every server sync of your position (counted as "prediction corrections";
+	// most move you by 0): how far it moved you, and how much predicted input
+	// was still unacknowledged then.
+	syncs, syncs_moved, syncs_over_1, syncs_over_5: int,
+	sync_error_sum, sync_error_max, sync_pending_sum: f64,
 	frames: int,
 	frame_seconds: f64,
 	worst_frame: f64,
@@ -108,6 +113,19 @@ tester_export_shot :: proc(line, weapon: string, input_rate: int, crosshair_on, 
 	known := false
 	for rate, i in menuui.INPUT_RATES { if int(rate) == input_rate { g_export.rates[i] = true; known = true } }
 	if !known { g_export.rate_other = true }
+}
+
+// Every server sync of your own position (krunker_prediction.odin).
+tester_export_sync :: proc(error, pending_ms: f32) {
+	when !TESTER_EXPORT { return }
+	if !g_export.open { return }
+	g_export.syncs += 1
+	if error > 0.01 { g_export.syncs_moved += 1 }
+	if error > 1 { g_export.syncs_over_1 += 1 }
+	if error > 5 { g_export.syncs_over_5 += 1 }
+	g_export.sync_error_sum += f64(error)
+	g_export.sync_error_max = max(g_export.sync_error_max, f64(error))
+	g_export.sync_pending_sum += f64(pending_ms)
 }
 
 // Every frame (developer builds): opens, samples and closes the game.
@@ -225,7 +243,7 @@ tester_export_section :: proc(client: ^Client, number: int, ending: string) -> s
 	fmt.sbprintf(&b, "version: %s (dev)\n", strings.trim_space(SR_VERSION))
 	strings.write_string(&b, "inputs per second:")
 	any_rate := false
-	for seen, i in g_export.rates { if seen { fmt.sbprintf(&b, " %d", menuui.INPUT_RATES[i]); any_rate = true } }
+	for seen, i in g_export.rates { if seen { fmt.sbprintf(&b, " %d (Krunker %d)", menuui.INPUT_RATES[i], menuui.INPUT_RATES[i] / 2); any_rate = true } }
 	if g_export.rate_other { strings.write_string(&b, " other") }
 	if !any_rate && !g_export.rate_other { fmt.sbprintf(&b, " %d (no shots)", g_krunker_input_rate) }
 	strings.write_string(&b, "\n")
@@ -246,6 +264,12 @@ tester_export_section :: proc(client: ^Client, number: int, ending: string) -> s
 	fmt.sbprintf(&b, "network: prediction corrections %d, decode errors %d, network thread %s (pings answered on it: %d)\n",
 		client.krunker.prediction_corrections - g_export.corrections_start, client.krunker.decode_errors - g_export.decode_errors_start,
 		menuui.hud_network_thread(client.hud_settings) ? "on" : "off", g_net_thread.po_sent - g_export.pings_answered_start)
+	if g_export.syncs > 0 {
+		n := f64(g_export.syncs)
+		fmt.sbprintf(&b, "position syncs: %d, moved you %d (%.1f%%), over 1 unit %d, over 5 units %d, avg move %.3f, max %.2f, unacknowledged input avg %.0f ms (rate %d)\n",
+			g_export.syncs, g_export.syncs_moved, 100 * f64(g_export.syncs_moved) / n, g_export.syncs_over_1, g_export.syncs_over_5,
+			g_export.sync_error_sum / n, g_export.sync_error_max, g_export.sync_pending_sum / n, g_krunker_input_rate)
+	}
 	when SR_DEV { fmt.sbprintf(&b, "input sending: %s\n", menuui.NET_MODE_LABELS[menuui.net_mode_index(client.hud_settings)]) }
 	if menuui.hud_input_clock(client.hud_settings) {
 		built, q_sent, unstamped, late := krunker_input_clock_stats(&g_input_clock)
@@ -313,7 +337,7 @@ tester_export_gpu_name :: proc() -> string {
 	return "OpenGL"
 }
 
-// End screen button (developer builds): copy the export to the Desktop.
+// End screen button (developer builds): copy the export to Downloads.
 tester_export_button :: proc(client: ^Client, ui: ^UI, x, y, w, h: f32) {
 	when !TESTER_EXPORT { return }
 	if client.window == nil { return }
@@ -342,13 +366,15 @@ tester_export_click :: proc() {
 		g_export.status, g_export.status_until = "No games saved yet: play a game to the end first", glfw.GetTime() + 8
 		return
 	}
-	target := tester_export_desktop_path()
+	// Local date and time in the name, so a second export never replaces the first.
+	name := fmt.tprintf("SR-Client-test-logs-%s.txt", tester_export_local_stamp())
+	target := tester_export_downloads_path(name)
 	if len(target) == 0 || !tester_export_write(target, string(data), false) {
-		g_export.status, g_export.status_until = "Could not write to the Desktop; the log is in SR's logs folder (tester-export.txt)", glfw.GetTime() + 10
+		g_export.status, g_export.status_until = "Could not write to Downloads; the log is in SR's logs folder (tester-export.txt)", glfw.GetTime() + 10
 		return
 	}
 	games := strings.count(string(data), "=== Game ")
-	g_export.status = fmt.aprintf("%d game(s) exported to your Desktop: %s", games, TESTER_EXPORT_DESKTOP_NAME)
+	g_export.status = fmt.aprintf("%d game(s) exported to Downloads: %s", games, name)
 	g_export.status_until = glfw.GetTime() + 10
 	tester_export_show_in_folder(target)
 }

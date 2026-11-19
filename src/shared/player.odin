@@ -18,6 +18,7 @@ player_init :: proc(game: ^Game) -> ^Player {
 }
 
 player_update_height :: proc(player: ^Player) {
+	player.height_old = player.height // Krunker's updateHeight: heightOld = height first
 	player.height = GAME_CONSTANTS.player_height - player.crouch_val * GAME_CONSTANTS.crouch_distance
 }
 
@@ -423,6 +424,11 @@ player_do_map_collisions :: proc(player: ^Player, input: ^Input, move_dir: f32, 
 
 				progress := clamp(progress_on_line(obj.ramp.start, obj.ramp.end, player_dir), 0.0, 1.0)
 				collision_height := obj.position.y + (obj.scale.y + 0.01) * progress
+				// Krunker: (config.rampFix || map.rampFix) && height - oldY > 3 &&
+				// oldY - bottom < 3 && blockRampSide(obj) skips the ramp.
+				if (player.game.config.ramp_fix || map_inst.ramp_fix) && collision_height - player.last_position.y > GAME_CONSTANTS.climb_height && player.last_position.y - obj.position.y < GAME_CONSTANTS.climb_height && player_block_ramp_side(player, obj) {
+					continue
+				}
 
 				if !has_max_ramp_height {
 					has_max_ramp_height = true
@@ -538,11 +544,43 @@ player_do_map_collisions :: proc(player: ^Player, input: ^Input, move_dir: f32, 
 				player.position.z = obj.position.z - obj.scale.z * 0.5 - player.scale
 				player.velocity.z = 0.0
 			} else if player.last_position.y + player.height <= obj.position.y {
+				// Krunker: stopCrouch, and with headClipFix the previous height when
+				// the crouch was already held by an underside.
+				player.stop_crouch = true
+				head_clip_fix := player.game.config.head_clip_fix
+				player.position.y = obj.position.y - (player.was_stop_crouch && head_clip_fix ? player.height_old : player.height)
+				player.velocity.y = 0.0
+			} else if player.game.config.head_clip_fix && player.last_position.y + player.height_old <= obj.position.y {
+				player.stop_crouch = true
 				player.position.y = obj.position.y - player.height
 				player.velocity.y = 0.0
 			}
 		}
 	}
+}
+
+// Krunker's blockRampSide: with Solid Ramp Sides, a ramp's side is a wall.
+// Its tolerance is the collision padding, not the boxes' 0.00001.
+@(private = "file")
+player_block_ramp_side :: proc(player: ^Player, obj: ^Object) -> bool {
+	pad := GAME_CONSTANTS.collision_padding
+	half_x, half_z := obj.scale.x * 0.5, obj.scale.z * 0.5
+	if player.last_position.x - player.scale >= obj.position.x + half_x - pad {
+		player.position.x = obj.position.x + half_x + player.scale
+		player.velocity.x = 0
+	} else if player.last_position.x + player.scale <= obj.position.x - half_x + pad {
+		player.position.x = obj.position.x - half_x - player.scale
+		player.velocity.x = 0
+	} else if player.last_position.z - player.scale >= obj.position.z + half_z - pad {
+		player.position.z = obj.position.z + half_z + player.scale
+		player.velocity.z = 0
+	} else if player.last_position.z + player.scale <= obj.position.z - half_z + pad {
+		player.position.z = obj.position.z - half_z - player.scale
+		player.velocity.z = 0
+	} else {
+		return false
+	}
+	return true
 }
 
 player_jump :: proc(player: ^Player) {
@@ -905,7 +943,13 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 		}
 	}
 
-	if input.crouch && player.crouch_val < 1.0 && !player.on_ladder {
+	// Krunker: wasStopCrouch = config.headClipFix && stopCrouch; stopCrouch = false;
+	// the crouch only changes when the head did not hit an underside last command.
+	player.was_stop_crouch = player.game != nil && player.game.config.head_clip_fix && player.stop_crouch
+	player.stop_crouch = false
+	if player.was_stop_crouch {
+		// crouch held as it is
+	} else if input.crouch && player.crouch_val < 1.0 && !player.on_ladder {
 		player.crouch_val = min(1.0, player.crouch_val + GAME_CONSTANTS.crouch_speed * delta)
 
 		if player.on_ground {
@@ -922,6 +966,8 @@ player_proc_input :: proc(player: ^Player, input: ^Input, recon, move_lock: bool
 			player.position.y -= GAME_CONSTANTS.crouch_speed * delta
 		}
 	}
+	// Krunker: crouchVal && (crouchVal = crouchVal.round(3)).
+	if player.crouch_val != 0 { player.crouch_val = f32(math.floor(f64(player.crouch_val) * 1000 + 0.5) / 1000) }
 
 	player_update_height(player)
 

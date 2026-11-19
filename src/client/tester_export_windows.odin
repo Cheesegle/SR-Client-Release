@@ -4,15 +4,28 @@ package main
 import "core:fmt"
 import win "core:sys/windows"
 
-// The Desktop folder (also when it is redirected, e.g. to OneDrive).
-tester_export_desktop_path :: proc() -> string {
+// The Downloads folder (also when it is moved, e.g. to another drive).
+tester_export_downloads_path :: proc(name: string) -> string {
 	path: win.LPWSTR
-	folder := win.FOLDERID_Desktop
+	folder := win.FOLDERID_Downloads
 	if win.SHGetKnownFolderPath(&folder, 0, nil, &path) != 0 || path == nil { return "" }
 	defer win.CoTaskMemFree(path)
-	desktop, err := win.wstring_to_utf8(win.wstring(path), -1, context.temp_allocator)
-	if err != nil || len(desktop) == 0 { return "" }
-	return fmt.tprintf("%s\\%s", desktop, TESTER_EXPORT_DESKTOP_NAME)
+	downloads, err := win.wstring_to_utf8(win.wstring(path), -1, context.temp_allocator)
+	if err != nil || len(downloads) == 0 { return "" }
+	return fmt.tprintf("%s\\%s", downloads, name)
+}
+
+// Local date and time for the export file name: 2026-11-19_18-48-05.
+tester_export_local_stamp :: proc() -> string {
+	t: win.SYSTEMTIME
+	GetLocalTime(&t)
+	return fmt.tprintf("%04d-%02d-%02d_%02d-%02d-%02d", t.year, t.month, t.day, t.hour, t.minute, t.second)
+}
+
+foreign import tester_kernel32 "system:Kernel32.lib"
+@(default_calling_convention = "system")
+foreign tester_kernel32 {
+	GetLocalTime :: proc(lpSystemTime: ^win.SYSTEMTIME) ---
 }
 
 // Opens Explorer with the file selected.

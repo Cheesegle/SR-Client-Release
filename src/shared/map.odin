@@ -213,6 +213,9 @@ map_load_from_file :: proc(filename: string) -> (map_ptr: ^Map, ok: bool) {
 	map_inst.raw_data = json_val
 	map_inst.colors = parsed_colors[:]
 
+	// Krunker: map.rampFix = !!data.rampFix.
+	if ramp_fix, has_ramp_fix := root["rampFix"]; has_ramp_fix { map_inst.ramp_fix = json_is_truthy(ramp_fix) }
+
 	if dth, has_dth := root["dthY"]; has_dth {
 		#partial switch v in dth {
 		case json.Float:

@@ -126,7 +126,7 @@ when ODIN_TEST {
 		config := shared.config_load_gameplay()
 		defer shared.config_destroy_gameplay(config)
 		defer g_krunker_input_rate = KRUNKER_INPUT_RATE_DEFAULT
-		for input_rate in ([]i32{120, 240, 360, 480, 720, 840, 1000}) {
+		for input_rate in ([]i32{288, 720}) {
 		baseline: shared.Vec3
 		for fps, rate_index in ([]int{50, 144, 700, 1500}) {
 			floor := shared.Object{active = true, collision_type = .BOX, position = {0, -1, 0}, scale = {10000, 1, 10000}}

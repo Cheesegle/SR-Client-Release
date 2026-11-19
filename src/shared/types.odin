@@ -194,6 +194,8 @@ Map :: struct {
 	// by map_load_from_file. Movement collision scans only these.
 	collision_objects: [dynamic]i32,
 	collision_indexed: bool,
+	// The map's own rampFix (Solid Ramp Sides), as the lobby's config.rampFix.
+	ramp_fix:        bool,
 	min_dim:         Vec3,
 	max_dim:         Vec3,
 	camera_position: Vec3,
@@ -443,6 +445,12 @@ Player :: struct {
 	secondary_id:                    i32,
 	scale:                           f32,
 	height:                          f32,
+	// Krunker's heightOld, stopCrouch and wasStopCrouch: a head that hit an
+	// object's underside keeps the crouch unchanged for the next command when
+	// the lobby has headClipFix.
+	height_old:                      f32,
+	stop_crouch:                     bool,
+	was_stop_crouch:                 bool,
 	speed:                           f32,
 	spread:                          f32,
 	spread_plus:                     f32,
@@ -566,6 +574,10 @@ Game_Config :: struct {
 	no_secondaries:     bool,
 	no_streaks:         bool,
 	disable_borders:    bool,
+	// Krunker headClipFix ("Stop Head Clipping") and rampFix ("Solid Ramp
+	// Sides"): off by default, on by default in competitive lobbies.
+	head_clip_fix:      bool,
+	ramp_fix:           bool,
 	throwable_melees:   bool,
 	charge_weapons:     bool, // Krunker chrgWeps ("Chargable Weapons", default on)
 	kill_cams:          bool, // Krunker kCams ("Kill Cams", default on)

@@ -474,7 +474,14 @@ client_apply_display_settings :: proc(client: ^Client) {
 	monitor_x, monitor_y := glfw.GetMonitorPos(monitor)
 	resolution := DISPLAY_RESOLUTIONS[client.resolution_index]
 
-	switch client.display_mode {
+	display_mode := client.display_mode
+	// Intel integrated GPUs with drivers from before 2025 hang or fail when
+	// switching into exclusive fullscreen (reported by testers across Intel
+	// iGPUs). On them Fullscreen uses the Borderless path at the monitor's own
+	// mode: on Windows 10/11 both present the same way (independent flip), so
+	// FPS and delay are the same. SR_INTEL_FULLSCREEN=1 keeps exclusive mode.
+	if display_mode == .Fullscreen && client_intel_gpu() && os.get_env("SR_INTEL_FULLSCREEN", context.temp_allocator) != "1" { display_mode = .Borderless }
+	switch display_mode {
 	case .Windowed:
 		glfw.SetWindowAttrib(client.window, glfw.DECORATED, 1)
 		x := monitor_x + (mode.width - resolution.width) / 2
@@ -491,6 +498,11 @@ client_apply_display_settings :: proc(client: ^Client) {
 		full_width, full_height, full_refresh_rate := monitor_fullscreen_mode(monitor, client.fullscreen_resolution)
 		glfw.SetWindowMonitor(client.window, monitor, 0, 0, full_width, full_height, full_refresh_rate)
 	}
+}
+
+client_intel_gpu :: proc() -> bool {
+	info := gpu_device_info()
+	return strings.contains(info.vendor, "Intel") || strings.contains(info.renderer, "Intel")
 }
 
 client_set_display_mode :: proc(client: ^Client, display_mode: Display_Mode) {
@@ -1270,6 +1282,8 @@ client_update_freecam :: proc(client: ^Client, mouse_delta: shared.Vec2, delta: 
 }
 
 client_enter_game :: proc(client: ^Client) {
+	// Lag Compensation goes out in the enter packet; tenths exactly, like the browser's parseFloat.
+	g_krunker_lag_comp = f64(i32(menuui.lag_comp(client.hud_settings)*10 + 0.5)) / 10
 	if krunker_client_respawn_remaining(client, glfw.GetTime()) > 0 { return }
 	if (!client.game.ready && !(client.krunker.connected && client.krunker_world.ready)) || (client.me != nil && client.me.active) || client.spawn_pending {
 		return
@@ -1377,7 +1391,7 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 		}
 	}
 
-	editing_settings := client.menu.page == .SETTINGS || client.menu.page == .CONTROLS || client.menu.page == .HOST
+	editing_settings := client.menu.page == .SETTINGS || client.menu.page == .CONTROLS || client.menu.page == .HOST || menuui.login_typing(&client.menu)
 	debug_key := !editing_settings && glfw.GetKey(client.window, glfw.KEY_GRAVE_ACCENT) == glfw.PRESS
 	freecam_key := glfw.GetKey(client.window, glfw.KEY_RIGHT_BRACKET) == glfw.PRESS
 
@@ -1639,6 +1653,9 @@ client_tick :: proc(client: ^Client, now, delta: f32) {
 	if end_screen_visible {
 		end_screen_render(client, glfw.GetTime())
 	} else if !client.mouse_state.locked {
+		// Krunker keeps its chat box on screen under the menu: after Esc on
+		// the death screen you stay dead and can still read the chat and kills.
+		if client.krunker.connected && client.krunker_world.ready { overlay_chat_under_menu(client) }
 		hud_render(client, delta, debug_pointer)
 	} else {
 		overlay_render(client, delta)

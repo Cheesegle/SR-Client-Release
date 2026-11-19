@@ -1,18 +1,159 @@
 # Changelog
 
+## SR Client 0.59.0
+- **Latency probe: mouse delay is counted again.** The mouse is read before
+  the frame's GPU work begins, so the probe dropped almost every reading; a
+  reading now goes to the next frame recorded. Probe only (SR_LATENCY_PROBE);
+  nothing else changes.
+
+## SR Client 0.58.0
+- **Lag Compensation (Settings > Experimental):** Krunker's slider, 1:1: range
+  0 to 1 in 0.1 steps, default 1 ("reduces the appearance of lag"). It goes to
+  the server in the enter packet exactly where and how the browser sends it
+  (before, SR always sent 1).
+
+## SR Client 0.57.0
+- **Network Rate like Krunker's:** Settings > Experimental now shows Krunker's
+  own Network Rate (Hz) choices with Krunker's own numbers: 30, 60, 120, 144,
+  240 and 360 (default 360). Each sends exactly what the browser sends on that
+  setting (Krunker sends once half its interval has passed, so its 360 really
+  sends up to 720 inputs a second; SR does the same). 1000 and the old "real
+  rate" numbers are gone. A saved choice that isn't one of these becomes 360.
+  The Dev export shows both numbers, e.g. "720 (Krunker 360)".
+
+## SR Client 0.56.0
+- **Hosting works again (ho):** Krunker's login service started storing login
+  tokens with quote marks, and SR sent them that way, so Krunker treated SR
+  as a guest ("Invalid User"). Tokens are now passed bare.
+- **Host from where you are (ho):** Start Game while in a lobby or game (e.g.
+  the one you just hosted) creates the new game on that connection, like
+  Krunker's page: no new lobby, no verification.
+- **Login without a browser (ho):** email + password, or a code sent by email,
+  straight to Krunker's login service. SR keeps the login (encrypted, never
+  the password) and renews it itself.
+- **Username / Google login (ho)** still opens Krunker's page once, because
+  Krunker verifies every username login with a CAPTCHA; SR keeps the login
+  afterwards.
+- **Verification (ho):** Krunker asks for it on every new lobby, logged in or
+  not. SR now runs it hidden; the window only appears if Krunker wants a
+  puzzle solved (after 12 s).
+- **Menus (ho):** the mouse wheel scrolls the host page while over a text
+  field; the settings window's Cancel/Save stay inside its border on the
+  Display tab.
+- **Box edges and double boxes:** SR now follows the lobby's movement rules
+  that Krunker turns on in competitive lobbies (head clip fix and ramp fix,
+  plus maps that turn the ramp fix on themselves), and rounds crouching the
+  way Krunker does. Standing on, or crouch-jumping onto, a box edge or a
+  stacked box no longer disagrees with the server there.
+- **Objective marker while aiming:** the ADS opacity now applies while you
+  aim (it was applied the wrong way round), as in Krunker.
+- **Esc while dead:** chat stays on screen under the menu in a live game, so
+  you can stay dead and read chat, as in Krunker.
+- **Copy link** next to Paste link for crosshair and hitmarker images.
+- **Joining:** joining a new link after a failed join, or after a game ended,
+  starts clean (no "Socket error", no restart needed). SR closes the old
+  connection properly, like a browser.
+- **Dev build:**
+  - the tester export goes to Downloads, a new dated file each time
+    (SR-Client-test-logs-<date>.txt), instead of the Desktop
+  - Fixed clock aims each input with the raw mouse motion up to the moment it
+    is sent, not the last frame's
+  - the prediction log also records crouch, ground/wall state, the input rate
+    and the lobby's movement rules, to track any remaining rubberbanding
+- **Inputs per second: 720 is the default, and the choices are 360 and 720.**
+  Krunker's highest Network Rate (360) really sends up to 720 inputs a
+  second, so 720 is what the browser does on that setting; it also had the
+  best reg in tester logs (Famas 91% of hits confirmed vs about 80-85% at
+  360). 120, 240, 480, 840 and 1000 are gone: no Krunker setting matches them,
+  480 had the weakest first shot, and 1000 felt off to testers. Anyone on a
+  removed choice, or who never picked one, gets 720; 360 stays for tests.
+- **Dev export: position syncs.** The "prediction corrections" number counts
+  every position sync from the server, most of which move you by nothing.
+  The export now also shows how many syncs actually moved you, by how much
+  (average, max, over 1 and 5 units) and how much input was still
+  unacknowledged, so input rates can be compared on movement, not just reg.
+- **Releases:** each GitHub release now shows only its own version's notes.
+
+## SR Client 0.55.0
+- **Intel graphics: Fullscreen no longer hangs (needs confirming by an Intel
+  tester):** testers reported that Intel integrated GPUs with drivers from
+  before 2025 hang or fail when switching into exclusive fullscreen. On Intel
+  GPUs, Fullscreen now uses the Borderless path at the monitor's own mode. On
+  Windows 10/11 both present the same way, so FPS and delay are unchanged.
+  Other GPUs are untouched. SR_INTEL_FULLSCREEN=1 keeps exclusive fullscreen
+  (for testing).
+
 ## SR Client 0.54.0
+- **Mouse delay in the latency probe:** while SR_LATENCY_PROBE records, each
+  frame that reads mouse movement is timed from the arrival of the oldest mouse
+  report it used (on the raw input thread) to its last GPU timestamp, printed
+  as "mouse->GPU done" (avg, p50, p95, p99, max). Outside the probe it costs one
+  atomic load per mouse report.
+- **Probe summary prints at once:** its statistics used an insertion sort over
+  ~200k values per run (slow enough that test scripts closing SR cut the
+  summary off); now a normal sort.
+
+## SR Client 0.53.0
+- **Present thread spinning is off again (opt-in with SR_VK_PRESENT_SPIN=1):**
+  tested on 0.52 (Dev, Fullscreen, standing): spinning 7060 FPS with 0.239 ms
+  start->GPU done; the adaptive choice 7088 FPS with 0.210 ms. Adaptive wins
+  both, so it stays the default.
+- **SR_LL_MARGIN_US:** test override for the low-latency margin (default
+  unchanged, 0.1 ms); the probe header prints the margin in use.
+
+## SR Client 0.52.0
+- **Present thread spins for the next frame:** after presenting, the present
+  thread waits up to 1 ms for the next frame by spinning instead of sleeping,
+  so a frame reaches the GPU queue within a microsecond of being handed over
+  (a sleeping thread took tens of microseconds to wake). With that, every
+  frame is handed over in game; the game thread no longer presents some
+  frames itself (0.15 ms each) to save the wake-up. Measured in 0.51: the old
+  adaptive choice traded ~2.5% FPS for 0.027 ms lower delay when the HUD got
+  cheaper; this keeps both. Uses one otherwise idle core while playing; after
+  1 ms without a frame (menus, an FPS cap) it sleeps as before.
+  SR_VK_PRESENT_SPIN=0 restores the old behaviour.
+
+## SR Client 0.51.0
+- **Input sending (Settings > Experimental, Dev build):** the two toggles are
+  now one choice: Fixed clock (default), Network thread, or Off, with what each
+  does explained below it. Fixed clock is on by default because 0.50 tested
+  the same FPS and delay as off (6940 vs 6922 FPS, start->GPU done 0.221 vs
+  0.219 ms, smaller frame spikes). The normal client keeps its Network thread
+  toggle. The Dev export names the mode used.
 - **Faster HUD:** the built HUD (timer, scores, leaderboard, player panel,
-  weapons, ammo, chat, FPS) is kept and drawn again for up to 1 ms instead of
-  being rebuilt every frame. Health, ammo, weapon, FPS and window size rebuild
-  it at once; everything else is at most 1 ms old, under one refresh of any
-  monitor. Half the HUD's CPU time per frame.
-- **Measured on a 9800X3D + RTX 5080, standing still on Site:**
-  - Fullscreen: 6905 FPS vs 0.47's 6817, delay 0.216 vs 0.232 ms.
-  - Windowed: 8573 vs 8136 FPS, delay 0.171 vs 0.179 ms.
-  - Delay is from the frame reading input to the GPU finishing it.
-  - Mouse to GPU done: about 0.37 ms (median).
-- **For testers and developers:** SR's latency probe (only when started with
-  SR_LATENCY_PROBE) now also prints mouse delay and CPU time per frame part.
+  weapons, ammo, chat, FPS) is kept and queued again for up to 1 ms instead of
+  being rebuilt every frame. Health, ammo, weapon, FPS, window size and scale
+  rebuild it at once when they change; everything else is at most 1 ms old,
+  under one refresh of any monitor. Not used while typing in chat or with the
+  scoreboard open. Was about a tenth of a frame's CPU work at ~7000 FPS.
+- **Probe breakdown:** the HUD is split into healthbars, HUD main, HUD chat +
+  FPS, HUD crosshair + round and HUD other in the CPU-per-phase line.
+
+## SR Client 0.50.0
+- **Inputs on a fixed clock (Dev):** fixed a big FPS loss in 0.49 (4.7k instead
+  of ~6.7k). The network thread never paused while the mode was on and kept
+  taking the lock the game thread reads the network inbox with (0.088 ms of
+  waiting per frame). It now sleeps between checks; commands keep their exact
+  clock boundaries.
+
+## SR Client 0.49.0
+- **Inputs on a fixed clock (Settings > Experimental, Dev build only, off by
+  default):** aashten's design adapted to SR. Live input
+  commands are built on the network thread every 1/input-rate seconds, and q
+  is sent from there at the server's send rate, so a slow or stalled frame
+  never moves a command's boundary or its shot time. The game thread
+  publishes keys, buttons and aim each frame, predicts the commands exactly
+  as sent and writes each shot's timing back before it goes out (a command
+  waits at most 50 ms for that). aashten reports it fixes the remaining
+  revolver/SMG reg issue; the note asks testers to try it. Needs the network
+  thread (starts it). The Dev export logs whether it was on and its counters.
+
+## SR Client 0.48.0
+- **CPU time per phase:** the latency probe (SR_LATENCY_PROBE) and the
+  benchmark (--bench) now print where each frame's CPU time goes (network,
+  game logic, shadows, world, viewmodel, healthbars + HUD, submit). Measured
+  only while they run; normal play does one extra branch per phase.
+- **Tester export (Dev build):** also logs CPU cores and threads and GPU memory.
 
 ## SR Client 0.47.0
 - **Display note:** under Video mode: Fullscreen or Borderless recommended;
@@ -27,80 +168,215 @@
 - **CPU pinning on Ryzen X3D with two dies (7950X3D, 9950X3D, 7900X3D...):**
   the game thread goes to a core on the die with the 3D V-Cache (biggest
   L3). CPUs with one L3 size (9800X3D, Intel) pick the same core as before.
+- **Tester export (Dev build):** each game now also logs the median and 1%
+  low FPS, hitches over 50/250 ms, ping spread and jitter, prediction
+  corrections, decode errors, the network thread and pings it answered, GPU
+  driver, Windows version and RAM, CPU pinning, display mode and size,
+  renderer, V-Sync, MSAA, shadows, lighting and the input rate setting.
+  Games are still saved automatically after each game; Export logs copies
+  all of them as one file.
 
 ## SR Client 0.46.0
-- **Inputs per second** (Settings > Experimental): 120, 240, 360 (default),
-  480, 720, 840, 1000. These are real inputs per second; Krunker's own
-  Network Rate numbers are half the real rate (its 360 sends up to 720), which
-  the note under the setting explains.
-- Settings that need a restart are marked with a red *.
-- **Hit registration:** weapon timers (fire cooldown, reload, swap) run in
-  Krunker's own millisecond math, so every shot is allowed on exactly the
-  input where Krunker's server allows it.
-- **Movement:** slides use each class's slide factors like Krunker (Spray N
-  Pray was corrected after every slide).
-- **Shots and hits:** predicted shots pass through players like the
-  browser's; a hitmarker for every hit Krunker reports.
-- **Infiltrator:** the Charge Rifle works like Krunker's (free shots that speed
-  up as it charges, the full-charge blast uses the round), knife throws charge
-  while aiming, with Krunker's charge bar.
-- **Scope:** Krunker's scope settings (Settings > Interface). The scope image
-  and black borders are off by default, as competitive players set them.
+0.44.0 (everything from 0.41-0.44) without the flip presentation experiment:
+in Borderless and Fullscreen NVIDIA already flips SR's frames straight to the
+screen ("Hardware: Legacy Flip", ~0.17 ms to the screen); only Windowed used
+the slow copy. Presentation is exactly as in 0.40.
+- Settings that need a restart are marked with a red * (legend under the
+  tabs): the Vulkan Renderer toggle.
+
+## SR Client 0.45.0
+0.44.0 with the flip presentation opt-in instead of always on, so FPS is
+never lower than before: Settings > Experimental > Flip presentation
+(NVIDIA), off by default. On, the driver flips frames straight to the screen
+(~0.5 ms instead of ~5.6 ms from a finished frame to the screen in
+Borderless) but its flip path roughly halves FPS on an RTX 5080.
+
+## SR Client 0.44.0
+0.43.0 with 360 back as the default: Inputs per second are 120, 240,
+360 (default), 480, 720 (= Krunker's 360), 840 and 1000. Saved 900 moves to
+360.
+
+## SR Client 0.43.0
+0.42.0 plus:
+- **Inputs per second** (Settings > Experimental) are now 120, 240, 480,
+  720, 840 and 1000, with 720 as the default: Krunker's Network Rate numbers
+  are half the real rate (its 360 really sends up to 720), so 720 is exactly
+  the browser. The note under the setting explains this. Saved 360 or 900
+  choices move to 720.
+
+## SR Client 0.42.0
+0.41.0 plus:
+- **Lower display delay on NVIDIA (Vulkan):** SR's window was shown through a
+  Windows GDI copy ("Composed: Copy with GPU GDI" in PresentMon, ~5.6 ms from
+  present to screen). SR now makes a FIFO swapchain once before the
+  uncapped one, which makes NVIDIA's driver use a DXGI flip swap chain
+  (Independent Flip in borderless, flip in fullscreen). SR_VK_FIFO_PRIME=0
+  turns it off for comparisons.
+- Tests: SR_TEST_SPAWN=<n> spawns Local practice at the same spot every run.
+
+## SR Client 0.41.0
+- **Hit registration:** weapon timers (fire cooldown, reload, swap) now run in
+  Krunker's own f64 milliseconds, so every shot is allowed on exactly the
+  input where Krunker's server allows it, also with non-default fire-rate
+  settings. (The big "one input late" bug aashten found was already fixed in
+  SR since 0.30; this removes the last rounding shortcut.)
+- **Movement prediction:** slides use each class's slide factors like Krunker
+  (Spray N Pray slid 2% too far and got corrected every slide).
+- **Predicted shots** pass through players like the browser's, so impact
+  marks no longer appear beside targets.
+- **Hitmarker** for every hit Krunker reports (objects, spectating).
+- **Infiltrator:** Krunker's Charge Rifle works (free shots that speed up as it
+  charges, full-charge blast uses the round), knife throws charge while
+  aiming and overcharge, with Krunker's charge bar.
+- **Scope:** Krunker's scope settings (Settings > Interface): opacity,
+  borders, border opacity, width, height. The scope image and black borders
+  are off by default, as competitive players set them.
 - **Death screen:** Krunker's kill cam: the camera turns to and flies towards
-  your killer, you can look around against a pull, and the killer's name and
-  health stay visible.
-- **Burg:** the cart's wheels and axles are drawn.
+  your killer; you can look around against a pull that grows the further you
+  turn; the killer's name and health stay visible. SR's zoom-in is gone.
+- **Burg:** the cart's wheels and axles are drawn (Krunker's cylinder prefab).
+- **Dev build: test logs.** Every game is saved automatically to
+  logs/tester-export.txt (player, weapons, input rate, ping, FPS, PC, final
+  board, every shot), even when SR is closed or crashes. The end screen's
+  Export logs button copies it to the Desktop as SR-Client-test-logs.txt.
+- Windows startup info shows the real CPU name.
 
 ## SR Client 0.40.0
-Everything since 0.25.0.
+Everything since 0.34 in one build, for public testing:
+- **Inputs per second** (Settings > Experimental): 240, 360 (default), 480,
+  720, 900, 1000. Real inputs per second: the browser's Network Rate 360 sends up
+  to 720 at high FPS; 1000 is the protocol's limit (1 ms per input). Applies
+  right away. Up to 64 inputs per packet (was 32), so 720 and 1000 never
+  build a backlog.
+- **Tournament auto-host links:** `srclient://game?action=host-comp&...`
+  with the same parameters as Glorp's link (mapId, teamSize, team1Name,
+  team2Name, webhook, compRosterT1/T2 or team1Players/team2Players,
+  spectators). The installer registers it; a link opened while SR Client
+  runs is hosted by that window. The Host page has Krunker's Team Rosters.
+- **Custom team names** (from a link or the Host page) now show in the lobby
+  and scoreboard: SR read the wrong key from Krunker's game config.
+- **Primary key** (Krunker's primKey, default T): straight to your primary.
+  Chat is Enter only, as in Krunker. If your chat key was still SR's old
+  default (Enter + T), T moves to Primary once; your own binds are kept.
+- **Hardpoint:** Krunker's Capture marker with its clock, the Next marker in
+  the last 15 s of a rotation, CONTESTED; round countdown and messages,
+  spawn sound (from ho's pre-release 6).
+- **Renderer:** ho's newer Vulkan renderer (about 4-5% more FPS on an RTX
+  5080), low-latency frame start, VRR cap, MSAA.
+- **Hit registration:** shot timing sent exactly like the browser (0.32).
+- **Dev build shot log:** input rate and ping on every shot, and server hits
+  matched to the right shot.
 
-**Hit registration**, each part checked against Krunker's own game code:
-- **Inputs sent byte-for-byte like the browser:** the same packet compression
-  and JavaScript rounding of look angles.
-- **Shot timing exactly like the browser:** the value that tells the server how
-  far back to rewind enemies is sent uncapped (the server clamps it), and a
-  zero is left out, as the browser does.
-- **Shots fire on the same input as the server:** weapon cooldowns end exactly
-  like Krunker's whole-millisecond server timers. Before, many shots fired one
-  input late, and on full auto SR showed less recoil kick than the server had.
-- **Recoil per input, before the shot,** like Krunker's server (it advanced per
-  screen frame, about 3% less during long sprays).
-- **Spread after strafing** like Krunker: server corrections no longer re-count
-  your movement spread.
-- **64-bit frame clock:** frame timing, enemy movement and shot timestamps no
-  longer get steppy after long sessions.
-- **Landing dip on the camera,** like Krunker.
+## SR Client 0.37.0
+0.36.0 plus, in the Dev build's shot log, the input rate and ping on every
+shot line (`rate=360 ping=42`), so games played at 240, 360, 480 and 720 can
+be compared from the logs.
 
-**Inputs per second** (Settings > Experimental): 240, 360 (default), 480, 720,
-900, 1000. These are real inputs per second: the browser's Network Rate 360
-sends up to 720 at high FPS, and 1000 is the most Krunker's protocol allows
-(1 ms per input). Applies right away, no restart. Up to 64 inputs go in one
-packet, so high rates never build a backlog.
+## SR Client 0.36.0
+0.35.0 (0.34 + ho's newer Vulkan renderer) with the input rate as a choice:
+- **Settings > Experimental > Inputs per second: 240, 360 (default), 480,
+  720.** Switches right away, even mid-match; no restart. Every option is
+  within what the browser itself sends.
 
-**Tournament auto-host links:** `srclient://game?action=host-comp&...` with the
-same parameters as Glorp's host link (mapId, teamSize, team1Name, team2Name,
-webhook, compRosterT1/T2 or team1Players/team2Players, spectators). The
-installer registers it; a link opened while SR Client runs is hosted by that
-window. The Host page has Krunker's Team Rosters, and custom team names now
-show in the lobby and scoreboard.
+## SR Client 0.35.0 (performance test only)
+0.34.0 with ho's newer Vulkan renderer (reworked renderer, exact barriers and
+dynamic state, present thread used only when CPU-bound, low-latency frame
+start, parallel pipeline build, MSAA, VRR cap, GPU timing in the F3 window).
+Gameplay and networking are the same as 0.34. Built to measure FPS and delay
+against 0.34 before it goes anywhere else.
 
-**Primary key** (Krunker's primKey, default T): straight to your primary
-weapon. Chat is Enter only, as in Krunker. If your chat key was still SR's old
-default (Enter + T), T moves to Primary once; your own binds are kept.
+## SR Client 0.34.0
+0.33.0 with the input rate as a setting:
+- **Settings > Experimental > "720 inputs per second (off = 360)".** Off (the
+  default) is 360 like 0.32; on is 720 like 0.33. It switches right away, even
+  in a match; no restart.
+- **Dev hit log:** each server hit now goes to the shot that fits its round
+  trip. Before, a missed shot could take the next shot's hit, so fast
+  follow-ups (Desert Eagle, Revolver, automatics) looked lost when they weren't.
 
-**Hardpoint:** Krunker's Capture marker with its clock, the Next marker in the
-last 15 s of a rotation, CONTESTED; Krunker's round countdown and messages and
-the spawn sound. Host game is a page and works from inside a lobby.
+## SR Client 0.33.0
+0.32.0 with 720 inputs per second instead of 360, and nothing else. 720 is the
+most a browser can send (Network Rate 360 at very high FPS), so this matches a
+maxed-out browser player. Test build to compare against 0.32.
 
-**Renderer:** a reworked Vulkan renderer (about 4-8% more FPS and smoother
-worst-case frames on an RTX 5080), low-latency frame start, MSAA (Off to 8x),
-VRR cap for G-SYNC/FreeSync with V-Sync. Turning Vulkan Renderer off runs
-Classic (OpenGL, threads left to Windows, like 0.24).
+## SR Client 0.32.0
+0.30.0 (360 inputs per second; 0.31's 144 is dropped) with one fix, from
+comparing a recorded Glorp session packet by packet:
+- **Shot timing sent exactly like the browser.** Each shot tells the server how
+  far back to rewind enemies. SR capped that value at 1; the browser never caps
+  it (the server clamps it itself). In the recording about 5% of shots were
+  above 1, right after a late server update, so on those shots SR asked for a
+  different rewind than the browser. A zero is now left out, as the browser does.
 
-**Also:** health bars like Krunker's; switching mods replaces every texture.
+## SR Client 0.31.0
+0.30.0 with one change, to compare against 0.30:
+- **Inputs at 144 per second, the browser's default "Network Rate"** (the
+  browser offers 30, 60, 120, 144, 240 and 360). SR sent 360, about 12 inputs
+  per packet; default browsers send about 5. ho found reg works when SR sends
+  far fewer inputs (30 per second, at the cost of choppy movement and aim).
+  144 tests the same idea while staying 1:1 with a default browser: smooth
+  movement and the exact aim at every input. Shooting still matches Krunker's
+  own code on every input at this rate.
 
-The reworked renderer, browser-exact input packets, recoil per input, frame
-clock and Hardpoint markers are by ho (Cheesegle).
+## SR Client 0.30.0
+0.29.0's reg fixes plus one verified fix, without ho's network-thread and
+CPU-pinning changes (kept in git for a separate test later).
+- **Shots fire on the same input as Krunker's server.** SR's weapon cooldown
+  ended 0.0000002 s late from float rounding, so many shots fired one input
+  (2-3 ms) after the server. On full auto SR fell behind the server's shots
+  and showed up to ~0.9 deg less recoil kick than the server really had.
+  Checked side by side against Krunker's own combat code: Revolver, SMG,
+  Assault Rifle and Machine Gun now match on every input.
+- Network thread is back to how it was in 0.28 (optional, Settings >
+  Experimental).
+
+## SR Client 0.29.0
+0.28.0 plus ho's latest reg and timing changes (from his v0.25.0-pre.2), checked
+against Krunker's code and SR's tests:
+- **Inputs sent byte-for-byte like the browser** (same packet compression,
+  JavaScript rounding of look angles).
+- **Network thread always on:** it owns the connection, sends your inputs and
+  answers the server's ping checks the moment they arrive, on its own CPU core.
+  The mouse thread gets its own core too.
+- **64-bit frame clock:** SR's clock lost precision the longer the client was
+  open (0.12 ms steps after ~17 min, 1 ms after ~2.3 h), which made frame
+  timing, enemy movement and shot timestamps steppy. Now exact.
+- **Recoil per input before the shot** (ho's version of the 0.28 fix, also
+  applied to SR's own local games).
+- Shot timing value capped at the enemy pose SR actually draws.
+Not included yet: ho's Vulkan latency changes (they need his earlier Vulkan PR,
+which still fails 7 tests).
+
+## SR Client 0.28.0
+Everything from 0.27.0 stays.
+- **Recoil per input, like Krunker:** in Krunker games your recoil now
+  advances once per input sent (like Krunker's server), at the start of the
+  input before the shot. Before, it advanced per screen frame, which gave
+  about 3% less recoil than the server during long sprays (~0.1 deg by the
+  5th-10th SMG bullet). This time it runs inside the prediction, so recoil
+  and the gun kick stay exactly as strong as before.
+- **Landing dip on the camera, like Krunker:** Krunker tilts your view by
+  0.1 x the landing bob when you land (the bullet doesn't follow it). SR only
+  moved the gun model. Now the camera does it too.
+
+## SR Client 0.27.0
+Everything from 0.26.1 stays.
+- **Spread like Krunker after strafing:** SR re-counted your movement spread
+  every time the server corrected your position, so it thought your spread
+  had settled sooner than the server did after you stopped moving.
+- Developer builds: the hit log also writes, per shot, the time since your
+  previous shot, ammo left, spread and recoil.
+
+## SR Client 0.26.1
+Everything from 0.25 stays. (0.26.0 was a test build; its recoil change is
+undone: recoil works exactly as in 0.25.)
+- **Shot timing** sent exactly like the browser (the server's rewind is no
+  longer cut short after a late snapshot).
+- **Health bars** like Krunker's: no border, see-through backing.
+- **Mods:** switching mods replaces every texture, also ones of a different
+  size and on far-away surfaces.
+- **Classic renderer:** turning Vulkan Renderer off runs OpenGL with the CPU
+  left to Windows, like 0.24.
 
 ## SR Client 0.25.0
 Everything from 0.24 stays.

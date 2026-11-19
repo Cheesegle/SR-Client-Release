@@ -8,8 +8,8 @@ import menuui "../menu"
 import glfw "vendor:glfw"
 
 // Sample independently of rendering and sending; wire durations use whole ms.
-// Settings > Experimental > Inputs per second (menuui.INPUT_RATES, default 360; 720 = Krunker's netRate 360).
-KRUNKER_INPUT_RATE_DEFAULT :: 360
+// Settings > Experimental > Inputs per second (menuui.INPUT_RATES, default 720 = Krunker's netRate 360).
+KRUNKER_INPUT_RATE_DEFAULT :: 720
 KRUNKER_INPUT_RATE_MAX :: 1000
 g_krunker_input_rate := KRUNKER_INPUT_RATE_DEFAULT
 krunker_input_seconds :: #force_inline proc() -> f64 { return 1.0 / f64(g_krunker_input_rate) }
@@ -225,10 +225,16 @@ krunker_client_apply_motion :: proc(client: ^Client, player: ^shared.Player, sou
 		state.render_current.position += correction
 		state.prediction_corrections += 1
 		error := math.sqrt(correction.x*correction.x + correction.y*correction.y + correction.z*correction.z)
+		when TESTER_EXPORT {
+			sync_pending_ms: f32
+			for input in client.predicted_inputs { sync_pending_ms += input.delta * 1000 }
+			tester_export_sync(error, sync_pending_ms)
+		}
 		if error >= 2 || state.prediction_corrections <= 3 || state.prediction_corrections % 30 == 0 {
 			pending_ms: f32
 			for input in client.predicted_inputs { pending_ms += input.delta * 1000 }
-			kproto.network_log("prediction", fmt.tprintf("ack=%d correction=%.3f delta=%v server_position=%v pending_commands=%d pending_ms=%.0f unsent=%d next_seq=%d", source.ack_seq, error, correction, source.position, len(client.predicted_inputs), pending_ms, len(state.input_commands), state.input_sequence))
+			cfg := client.game.config
+			kproto.network_log("prediction", fmt.tprintf("ack=%d correction=%.3f delta=%v server_position=%v pending_commands=%d pending_ms=%.0f unsent=%d next_seq=%d crouch=%.3f on_ground=%v on_wall=%d rate=%d head_clip_fix=%v ramp_fix=%v map_ramp_fix=%v", source.ack_seq, error, correction, source.position, len(client.predicted_inputs), pending_ms, len(state.input_commands), state.input_sequence, player.crouch_val, player.on_ground, player.on_wall, g_krunker_input_rate, cfg.head_clip_fix, cfg.ramp_fix, client.game.map_inst != nil && client.game.map_inst.ramp_fix))
 		}
 	}
 }

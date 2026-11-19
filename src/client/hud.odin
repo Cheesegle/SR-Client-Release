@@ -34,6 +34,10 @@ client_join_invite :: proc(client: ^Client, connect_live: proc(^Client, ^shared.
 		krunker_ws_set_status(client, "That is not a supported Krunker lobby link.")
 		return
 	}
+	// A new join starts clean, as Refresh does: a finished game's end hold
+	// and end screen must not carry over into the next lobby.
+	client.end_hold = false
+	client.end_screen_active, client.end_screen_dismissed = false, false
 	client_leave_session(client, false)
 	shared.join_link_free(&client.join_link)
 	client.join_link = parsed
@@ -176,7 +180,7 @@ hud_render :: proc(client: ^Client, delta: f32, pointer_blocked := false) {
 	}
 	client.binding_event = 0
 	if pointer_blocked { debug_ui_block_menu_input(&input) }
-	if (client.menu.number_edit != .NONE || client.menu.color_edit != 0 || client.menu.import_open || menuui.settings_search_focused(&client.menu) || menuui.host_typing(&client.menu)) && input.paste && !client.menu.previous.paste { input.text = glfw.GetClipboardString(client.window) }
+	if (client.menu.number_edit != .NONE || client.menu.color_edit != 0 || client.menu.import_open || menuui.settings_search_focused(&client.menu) || menuui.host_typing(&client.menu) || menuui.login_typing(&client.menu)) && input.paste && !client.menu.previous.paste { input.text = glfw.GetClipboardString(client.window) }
 	client.menu_scroll = {}
 	client.menu_text_length = 0
 	phase_mark(.MENU_VIEW)

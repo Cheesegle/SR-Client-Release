@@ -53,6 +53,9 @@ krunker_world_apply_game_config :: proc(state: ^Krunker_World_State, packet: []K
 				delete(state.lobby_team_names[index]); state.lobby_team_names[index] = strings.clone(name)
 			}
 		case "fixMov": config.fixed_movement = krunker_world_bool(entry.value)
+		case "headClipFix": config.head_clip_fix = krunker_world_bool(entry.value)
+		case "rampFix": config.ramp_fix = krunker_world_bool(entry.value)
+		case "disableB": config.disable_borders = krunker_world_bool(entry.value)
 		case "strafeSpd": config.strafe_speed = krunker_world_f32(entry.value, 1.2)
 		case "gravMlt": config.gravity_mlt = krunker_world_f32(entry.value, 1)
 		case "jumpMlt": config.jump_mlt = krunker_world_f32(entry.value, 1)

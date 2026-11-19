@@ -72,6 +72,7 @@ settings_hitmarker :: proc(state: ^State) {
 				text(len(url) > 0 ? shorten(url, 34) : "None (bars)", 16, s, SETTINGS_MUTED)
 			}
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(150*s)}}}) { settings_button(state, "Paste link", "HitmarkerImagePaste", {kind = .HITMARKER_IMAGE_PASTE}) }
+			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(110*s)}}}) { settings_button(state, "Copy link", "HitmarkerImageCopy", {kind = .HITMARKER_IMAGE_COPY}, enabled = len(url) > 0) }
 			if clay.UI()({layout = {sizing = {width = clay.SizingFixed(110*s)}}}) { settings_button(state, "Clear", "HitmarkerImageClear", {kind = .HITMARKER_IMAGE_CLEAR}, enabled = len(url) > 0) }
 		}
 	}

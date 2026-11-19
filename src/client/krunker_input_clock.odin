@@ -9,7 +9,7 @@ import menuui "../menu"
 // Inputs on a fixed clock (Settings > Experimental, Dev build): live input
 // commands are built on the network thread every 1/input-rate seconds, so a
 // slow or stalled frame never moves a command's boundary or its shot time.
-// The design follows aashten's KrunkNative-Odin network thread (f649802),
+// The design follows aashten's network thread design,
 // adapted to SR:
 //
 // - Game thread: publishes what it read this frame (keys, buttons, view
@@ -35,6 +35,12 @@ Krunker_Input_Clock_Source :: struct {
 	first, rest: shared.Input,
 	first_pending: bool,
 	look: shared.Vec2,
+	// Raw mouse totals already in look, and radians per raw count (x turns
+	// yaw, y pitch, as client_mouse_rotation). raw_live: aim each command with
+	// the motion since the frame (krunker_input_clock_aim).
+	raw_base: [2]i64,
+	turn: shared.Vec2,
+	raw_live: bool,
 	delta_mlt: f32,
 	move_lock: bool,
 	rate: f64,         // commands per second
@@ -75,7 +81,19 @@ krunker_input_clock_active :: proc(client: ^Client) -> bool {
 
 // One command from base, with the duration, rounded angles and swap exactly
 // as the per-frame path builds them (krunker_client_predict_input).
-krunker_input_clock_build :: proc(c: ^Krunker_Input_Clock, base: shared.Input) -> shared.Input {
+// The view for a command built now: the frame's look turned by the raw mouse
+// motion since that frame, exactly as the game thread turns it (aashten's
+// aashten's input aim). A stalled frame no longer freezes aim.
+krunker_input_clock_aim :: proc(src: ^Krunker_Input_Clock_Source, raw: [2]i64) -> shared.Vec2 {
+	look := src.look
+	if !src.raw_live { return look }
+	dx, dy := f32(raw[0] - src.raw_base[0]), f32(raw[1] - src.raw_base[1])
+	look.x = clamp(look.x - dy * src.turn.y, -math.PI/2, math.PI/2)
+	look.y = look.y - dx * src.turn.x
+	return look
+}
+
+krunker_input_clock_build :: proc(c: ^Krunker_Input_Clock, base: shared.Input, look: shared.Vec2) -> shared.Input {
 	src := &c.source
 	command := base
 	command.seq = c.sequence
@@ -83,8 +101,8 @@ krunker_input_clock_build :: proc(c: ^Krunker_Input_Clock, base: shared.Input) -
 	rounded_ms := math.round(duration_ms)
 	c.remainder_ms = duration_ms - rounded_ms
 	command.delta = f32(rounded_ms) / 1000
-	command.x_dir = f32(kproto.krunker_js_round_to(f64(src.look.x), 3))
-	command.y_dir = f32(kproto.krunker_js_round_to(kproto.krunker_js_mod(f64(src.look.y), kproto.KRUNKER_PI2), 3))
+	command.x_dir = f32(kproto.krunker_js_round_to(f64(look.x), 3))
+	command.y_dir = f32(kproto.krunker_js_round_to(kproto.krunker_js_mod(f64(look.y), kproto.KRUNKER_PI2), 3))
 	if base.swap != 0 { c.swap = base.swap }
 	command.swap = c.swap
 	c.swap = 0
@@ -165,10 +183,11 @@ krunker_input_clock_tick :: proc(c: ^Krunker_Input_Clock, now: f64) -> (built: i
 		return
 	}
 	if now - c.next_at > KRUNKER_INPUT_CLOCK_MAX_CATCH_UP { c.next_at = now - KRUNKER_INPUT_CLOCK_MAX_CATCH_UP }
+	look := krunker_input_clock_aim(&c.source, raw_mouse_totals_now())
 	for now + 1e-7 >= c.next_at {
 		base := c.source.first_pending ? c.source.first : c.source.rest
 		c.source.first_pending = false
-		command := krunker_input_clock_build(c, base)
+		command := krunker_input_clock_build(c, base, look)
 		append(&c.entries, Krunker_Input_Clock_Entry{input = command, at = c.next_at})
 		c.next_at += step
 		built += 1
@@ -309,11 +328,14 @@ krunker_client_predict_clock :: proc(client: ^Client, frame: ^shared.Input, afte
 		first_pending = true,
 		look = look,
 		delta_mlt = client.game.config.delta_mlt,
+		turn = client_mouse_rotation(client, {1, 1}),
 		move_lock = client.krunker_world.move_lock,
 		rate = f64(g_krunker_input_rate),
 		send_seconds = krunker_send_seconds(state),
 	}
 	source.rest.swap = 0 // a swap goes into one command only
+	// Live raw aim only while the mouse turns the view (not freecam).
+	if client.mouse_state.locked && !client.freecam_enabled { source.raw_base, source.raw_live = raw_mouse_frame_totals() }
 	krunker_input_clock_publish(c, source)
 
 	pulled := make([dynamic]Krunker_Input_Clock_Entry, context.temp_allocator)
