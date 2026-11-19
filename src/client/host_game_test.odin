@@ -232,11 +232,11 @@ host_lobby_is_the_emptiest_public_one_in_the_region :: proc(t: ^testing.T) {
 	out := make([dynamic]byte)
 	switch stage {
 	case "generate-token": append(&out, "fixture-validation"); return out, 200, true
-	case "game-list": append(&out, `{"games":[["SIN:two02","sgp",2,8,{"c":0,"v":"fixture"},1]]}`); return out, 200, true
+	case "game-list": append(&out, `{"games":[["NY:two02","us-nj",2,8,{"c":0,"v":"fixture"},1]]}`); return out, 200, true
 	}
 	append(&g_host_lobby_seeks, strings.clone(url))
 	if g_host_lobby_captcha && strings.contains(url, "&game=") { append(&out, `{"error":"CaptchaRequired"}`); return out, 400, true }
-	game := strings.contains(url, "&game=") ? "SIN:two02" : "NY:new01"
+	game := strings.contains(url, "&game=") ? "NY:two02" : "SIN:new01"
 	append(&out, fmt.tprintf(`{{"host":"lobby-x.krunker.io","port":443,"gameId":"%s","clientId":"fixture-client"}}`, game))
 	return out, 200, true
 }
@@ -248,16 +248,17 @@ hosting_starts_from_an_empty_public_lobby_or_falls_back :: proc(t: ^testing.T) {
 	link, _ := shared.join_link_parse("https://krunker.io/"); defer shared.join_link_free(&link)
 	token := "eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.fixture"
 	rejected: bool
-	url, ok, _ := krunker_ws_resolve_invite(&link, token, &rejected, host_lobby_test_http, hosting = true, region = "us-nj", host_lobby_region = "sgp")
-	testing.expect(t, ok && strings.contains(url, "gameId=SIN%3Atwo02"), "the empty public SGP lobby is joined by id")
-	testing.expect(t, len(g_host_lobby_seeks) == 1 && strings.contains(g_host_lobby_seeks[0], "region=sgp") && strings.contains(g_host_lobby_seeks[0], "&game=SIN%3Atwo02"))
+	// region = "sgp" (matchmaker seek region), host_lobby_region = "us-nj" (configured region to find empty lobby in)
+	url, ok, _ := krunker_ws_resolve_invite(&link, token, &rejected, host_lobby_test_http, hosting = true, region = "sgp", host_lobby_region = "us-nj")
+	testing.expect(t, ok && strings.contains(url, "gameId=NY%3Atwo02"), "the empty public local region lobby is joined by id")
+	testing.expect(t, len(g_host_lobby_seeks) == 1 && strings.contains(g_host_lobby_seeks[0], "region=sgp") && strings.contains(g_host_lobby_seeks[0], "&game=NY%3Atwo02"))
 	delete(url)
 	for u in g_host_lobby_seeks { delete(u) }; clear(&g_host_lobby_seeks)
 	g_host_lobby_captcha = true
 	defer g_host_lobby_captcha = false
 	needs_captcha: bool
-	url, ok, _ = krunker_ws_resolve_invite(&link, token, &rejected, host_lobby_test_http, needs_captcha = &needs_captcha, hosting = true, region = "us-nj", host_lobby_region = "sgp")
-	testing.expect(t, ok && strings.contains(url, "gameId=NY%3Anew01"), "a lobby that needs verification falls back to the matchmaker")
-	testing.expect(t, len(g_host_lobby_seeks) == 2 && !strings.contains(g_host_lobby_seeks[1], "&game=") && strings.contains(g_host_lobby_seeks[1], "region=us-nj"), "the fallback asks the matchmaker in the host region")
+	url, ok, _ = krunker_ws_resolve_invite(&link, token, &rejected, host_lobby_test_http, needs_captcha = &needs_captcha, hosting = true, region = "sgp", host_lobby_region = "us-nj")
+	testing.expect(t, ok && strings.contains(url, "gameId=SIN%3Anew01"), "a lobby that needs verification falls back to the matchmaker")
+	testing.expect(t, len(g_host_lobby_seeks) == 2 && !strings.contains(g_host_lobby_seeks[1], "&game=") && strings.contains(g_host_lobby_seeks[1], "region=sgp"), "the fallback asks the matchmaker")
 	delete(url)
 }

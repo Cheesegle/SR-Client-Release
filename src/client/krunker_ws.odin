@@ -296,9 +296,9 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	seek := fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=%s&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s&game=%s", region_encoded, validation_encoded, data_encoded, access_encoded, game_encoded)
 	if hosting { seek = fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=%s&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s", region_encoded, validation_encoded, data_encoded, access_encoded) }
 	if len(host_lobby) > 0 {
-		lobby_region := krunker_ws_url_encode(host_lobby_region); defer delete(lobby_region)
+		matchmaker_region := krunker_ws_url_encode(region); defer delete(matchmaker_region)
 		lobby_game := krunker_ws_url_encode(host_lobby); defer delete(lobby_game)
-		seek = fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=%s&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s&game=%s", lobby_region, validation_encoded, data_encoded, access_encoded, lobby_game)
+		seek = fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=%s&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s&game=%s", matchmaker_region, validation_encoded, data_encoded, access_encoded, lobby_game)
 	}
 	if len(captcha) > 0 {
 		if !accessui.captcha_token_valid(captcha) { return "", false, accessui.status_text("CAPTCHA_BAD_TOKEN") }
@@ -929,8 +929,9 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 			kproto.network_log("captcha", "Using the exact browser-selected WebSocket URL through native libcurl; assigned browser socket was never opened.")
 		} else {
 			hosting := host_game_seeking()
-			region := hosting ? host_region(client).id : "sgp"
-			resolved_url, ok, error_text = krunker_ws_resolve_invite(link, token, &rejected, captcha = proof, needs_captcha = &needs_captcha, hosting = hosting, region = region, host_lobby_region = hosting ? HOST_LOBBY_REGION : "")
+			configured_region := hosting ? host_region(client).id : "sgp"
+			seek_region := hosting ? HOST_LOBBY_REGION : configured_region
+			resolved_url, ok, error_text = krunker_ws_resolve_invite(link, token, &rejected, captcha = proof, needs_captcha = &needs_captcha, hosting = hosting, region = seek_region, host_lobby_region = hosting ? configured_region : "")
 		}
 		url = resolved_url
 		if !ok {
