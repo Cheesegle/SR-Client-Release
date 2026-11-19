@@ -114,41 +114,6 @@ krunker_ws_game_version :: proc(value: json.Value) -> string {
 	return strings.clone("1.0.0")
 }
 
-// Hosting: the emptiest public lobby in region (Krunker's game list entry is
-// [id, region, players, capacity, {c: 0 public / 1 custom, ...}, ...]) with
-// fewer than max_players and room left. "" when none. The caller owns it.
-krunker_ws_host_lobby :: proc(value: json.Value, region: string, max_players: i64) -> string {
-	if object, ok := value.(json.Object); ok {
-		if games, found := object["games"]; found { return krunker_ws_host_lobby(games, region, max_players) }
-		return ""
-	}
-	entries, ok := value.(json.Array)
-	if !ok { return "" }
-	number :: proc(v: json.Value) -> (i64, bool) {
-		#partial switch n in v {
-		case json.Integer: return i64(n), true
-		case json.Float: return i64(n), true
-		}
-		return 0, false
-	}
-	best := ""
-	best_players := max_players
-	for entry in entries {
-		fields, fields_ok := entry.(json.Array)
-		if !fields_ok || len(fields) < 5 { continue }
-		id, id_ok := fields[0].(json.String)
-		game_region, region_ok := fields[1].(json.String)
-		players, players_ok := number(fields[2])
-		capacity, capacity_ok := number(fields[3])
-		metadata, metadata_ok := fields[4].(json.Object)
-		if !id_ok || !region_ok || !players_ok || !capacity_ok || !metadata_ok || string(game_region) != region { continue }
-		custom, custom_ok := number(metadata["c"])
-		if !custom_ok || custom != 0 || players >= best_players || players >= capacity || !accessui.captcha_game_valid(string(id)) { continue }
-		best, best_players = string(id), players
-	}
-	return strings.clone(best)
-}
-
 // SR Client joins custom games only. Krunker's game list marks every listed
 // game with "c": 1 (custom) or "c": 0 (public match). Private lobbies (comp
 // games, bot-hosted games) are not listed at all, so only a game that is
@@ -235,7 +200,7 @@ krunker_ws_log_token_expiry :: proc(token: string) {
 	kproto.network_log("auth", "JWT exp missing; expiry unavailable")
 }
 
-krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejected: ^bool, http: proc(string, string, string, string) -> ([dynamic]byte, i64, bool) = kproto.network_http, captcha: string = "", needs_captcha: ^bool = nil, hosting := false, region := "sgp", host_lobby_region := "") -> (string, bool, string) {
+krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejected: ^bool, http: proc(string, string, string, string) -> ([dynamic]byte, i64, bool) = kproto.network_http, captcha: string = "", needs_captcha: ^bool = nil, hosting := false, region := "sgp") -> (string, bool, string) {
 	rejected^ = false
 	if needs_captcha != nil { needs_captcha^ = false }
 	if len(access) == 0 {
@@ -260,9 +225,6 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	kproto.network_log("generate-token", fmt.tprintf("validation token received; bytes=%d (value redacted)", len(validation_token)))
 	version := strings.clone("1.0.0")
 	defer delete(version)
-	// Hosting: an empty public lobby to create the game from (krunker_ws_host_lobby).
-	host_lobby := ""
-	defer delete(host_lobby)
 	game_list, game_status, game_ok := http("https://matchmaker.krunker.io/game-list?hostname=krunker.io", "GET", "", "game-list")
 	defer delete(game_list)
 	if game_ok && accessui.captcha_required(game_list[:]) { return "", false, krunker_ws_http_failure("matchmaker /game-list", game_status, true, game_list[:]) }
@@ -272,10 +234,6 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 			version = krunker_ws_game_version(value)
 			// Hosting asks for a lobby to create the new custom game from.
 			public := !hosting && krunker_ws_game_is_public(value, link.game_id)
-			if hosting && len(host_lobby_region) > 0 && len(captcha) == 0 {
-				host_lobby = krunker_ws_host_lobby(value, host_lobby_region, HOST_LOBBY_MAX_PLAYERS)
-				kproto.network_log("host", len(host_lobby) > 0 ? fmt.tprintf("hosting from public lobby %s (emptiest in %s with under %d players)", host_lobby, host_lobby_region, HOST_LOBBY_MAX_PLAYERS) : fmt.tprintf("no public %s lobby with under %d players; using the matchmaker", host_lobby_region, HOST_LOBBY_MAX_PLAYERS))
-			}
 			json.destroy_value(value)
 			if public {
 				kproto.network_log("game-list", fmt.tprintf("refused game=%s: listed as a public match", link.game_id))
@@ -295,11 +253,6 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	defer delete(region_encoded)
 	seek := fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=%s&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s&game=%s", region_encoded, validation_encoded, data_encoded, access_encoded, game_encoded)
 	if hosting { seek = fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=%s&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s", region_encoded, validation_encoded, data_encoded, access_encoded) }
-	if len(host_lobby) > 0 {
-		lobby_region := krunker_ws_url_encode(host_lobby_region); defer delete(lobby_region)
-		lobby_game := krunker_ws_url_encode(host_lobby); defer delete(lobby_game)
-		seek = fmt.tprintf("https://matchmaker.krunker.io/seek-game?hostname=krunker.io&region=%s&autoChangeGame=false&validationToken=%s&dataQuery=%s&accessToken=%s&game=%s", lobby_region, validation_encoded, data_encoded, access_encoded, lobby_game)
-	}
 	if len(captcha) > 0 {
 		if !accessui.captcha_token_valid(captcha) { return "", false, accessui.status_text("CAPTCHA_BAD_TOKEN") }
 		kproto.network_log_secret(captcha)
@@ -310,12 +263,6 @@ krunker_ws_resolve_invite :: proc(link: ^shared.Join_Link, access: string, rejec
 	}
 	assignment_body, status, ok := http(seek, "GET", "", "seek-game")
 	defer delete(assignment_body)
-	// The public lobby needed verification or was refused: the matchmaker as
-	// before (a fresh validation token, the host region, maybe verification).
-	if len(host_lobby) > 0 && (!ok || status < 200 || status >= 300 || accessui.captcha_required(assignment_body[:])) {
-		kproto.network_log("host", fmt.tprintf("public lobby %s not available (HTTP %d%s); using the matchmaker", host_lobby, status, accessui.captcha_required(assignment_body[:]) ? ", verification required" : ""))
-		return krunker_ws_resolve_invite(link, access, rejected, http, captcha, needs_captcha, hosting, region)
-	}
 	if !ok || status < 200 || status >= 300 || accessui.captcha_required(assignment_body[:]) || accessui.token_rejected(status, assignment_body[:]) {
 		if needs_captcha != nil { needs_captcha^ = ok && accessui.captcha_required(assignment_body[:]) }
 		rejected^ = ok && accessui.token_rejected(status, assignment_body[:])
@@ -930,7 +877,7 @@ krunker_ws_connect_ready :: proc(client: ^Client, link: ^shared.Join_Link) -> bo
 		} else {
 			hosting := host_game_seeking()
 			region := hosting ? host_region(client).id : "sgp"
-			resolved_url, ok, error_text = krunker_ws_resolve_invite(link, token, &rejected, captcha = proof, needs_captcha = &needs_captcha, hosting = hosting, region = region, host_lobby_region = hosting ? HOST_LOBBY_REGION : "")
+			resolved_url, ok, error_text = krunker_ws_resolve_invite(link, token, &rejected, captcha = proof, needs_captcha = &needs_captcha, hosting = hosting, region = region)
 		}
 		url = resolved_url
 		if !ok {

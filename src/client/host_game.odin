@@ -46,14 +46,6 @@ HOST_NOT_LOGGED_IN :: "Hosting failed: Krunker's game server did not log your ac
 // is logged by opcode, so a failed host shows what Krunker did and did not send.
 HOST_RECV_LOG_LIMIT :: 64
 
-// A fresh host starts from the emptiest public lobby in this region with
-// fewer than HOST_LOBBY_MAX_PLAYERS (Krunker's game list), joined by its id:
-// the matchmaker gives that lobby without verification (checked 2026-11-19).
-// Without one, or if it is refused, the matchmaker picks a lobby as before.
-// The new game is created on that lobby's server.
-HOST_LOBBY_REGION :: "sgp"
-HOST_LOBBY_MAX_PLAYERS :: 6
-
 HOST_IMAGE_DIR :: "img/maps/"
 HOST_BANNER_FILE :: "img/maps/comp_banner.png"
 HOST_IMAGE_HOST :: "https://assets.krunker.io/img/"
@@ -290,7 +282,7 @@ host_game_start :: proc(client: ^Client) {
 	client.join_link = link
 	menuui.set_invite(&client.menu, "")
 	g_host.phase, g_host.queued, g_host.since = .QUEUED, 2, time.now()
-	krunker_ws_set_status(client, "Creating your custom game...")
+	krunker_ws_set_status(client, fmt.tprintf("Creating your custom game (%s)...", host_region(client).name))
 }
 
 // Start Game while connected to a Krunker lobby or game: send custom on that

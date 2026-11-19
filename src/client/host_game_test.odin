@@ -1,8 +1,6 @@
 package main
 
 import "core:encoding/hex"
-import "core:encoding/json"
-import "core:fmt"
 import "core:strings"
 import "core:testing"
 import menuui "../menu"
@@ -205,59 +203,4 @@ krunker_account_login_message_matches_the_page :: proc(t: ^testing.T) {
 	out := make([]byte, len(payload) + 2, context.temp_allocator)
 	copy(out, payload)
 	return out
-}
-
-@(test)
-host_lobby_is_the_emptiest_public_one_in_the_region :: proc(t: ^testing.T) {
-	list := `{"games":[["SIN:full1",  "sgp", 8, 8, {"c":0}, 1],
-	                   ["SIN:busy5",  "sgp", 5, 8, {"c":0}, 1],
-	                   ["SIN:cust0",  "sgp", 0, 8, {"c":1}, 1],
-	                   ["NY:empty0",  "us-nj", 0, 8, {"c":0}, 1],
-	                   ["SIN:two02",  "sgp", 2, 8, {"c":0}, 1],
-	                   ["SIN:six06",  "sgp", 6, 8, {"c":0}, 1]], "totalPlayerCount": 21}`
-	value, err := json.parse_string(list, parse_integers = true)
-	if !testing.expect(t, err == .None) { return }
-	defer json.destroy_value(value)
-	best := krunker_ws_host_lobby(value, "sgp", 6); defer delete(best)
-	testing.expect_value(t, best, "SIN:two02") // public, sgp, fewest players under 6
-	none := krunker_ws_host_lobby(value, "sgp", 2); defer delete(none)
-	testing.expect_value(t, none, "")          // nothing under 2 players: the matchmaker
-	other := krunker_ws_host_lobby(value, "jb-hnd", 6); defer delete(other)
-	testing.expect_value(t, other, "")
-}
-
-@(private = "file") g_host_lobby_seeks: [dynamic]string
-@(private = "file") g_host_lobby_captcha: bool
-@(private = "file") host_lobby_test_http :: proc(url, method, body, stage: string) -> ([dynamic]byte, i64, bool) {
-	out := make([dynamic]byte)
-	switch stage {
-	case "generate-token": append(&out, "fixture-validation"); return out, 200, true
-	case "game-list": append(&out, `{"games":[["SIN:two02","sgp",2,8,{"c":0,"v":"fixture"},1]]}`); return out, 200, true
-	}
-	append(&g_host_lobby_seeks, strings.clone(url))
-	if g_host_lobby_captcha && strings.contains(url, "&game=") { append(&out, `{"error":"CaptchaRequired"}`); return out, 400, true }
-	game := strings.contains(url, "&game=") ? "SIN:two02" : "NY:new01"
-	append(&out, fmt.tprintf(`{{"host":"lobby-x.krunker.io","port":443,"gameId":"%s","clientId":"fixture-client"}}`, game))
-	return out, 200, true
-}
-
-@(test)
-hosting_starts_from_an_empty_public_lobby_or_falls_back :: proc(t: ^testing.T) {
-	defer kproto.network_log_clear_secrets()
-	defer { for u in g_host_lobby_seeks { delete(u) }; delete(g_host_lobby_seeks); g_host_lobby_seeks = {} }
-	link, _ := shared.join_link_parse("https://krunker.io/"); defer shared.join_link_free(&link)
-	token := "eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9.fixture"
-	rejected: bool
-	url, ok, _ := krunker_ws_resolve_invite(&link, token, &rejected, host_lobby_test_http, hosting = true, region = "us-nj", host_lobby_region = "sgp")
-	testing.expect(t, ok && strings.contains(url, "gameId=SIN%3Atwo02"), "the empty public SGP lobby is joined by id")
-	testing.expect(t, len(g_host_lobby_seeks) == 1 && strings.contains(g_host_lobby_seeks[0], "region=sgp") && strings.contains(g_host_lobby_seeks[0], "&game=SIN%3Atwo02"))
-	delete(url)
-	for u in g_host_lobby_seeks { delete(u) }; clear(&g_host_lobby_seeks)
-	g_host_lobby_captcha = true
-	defer g_host_lobby_captcha = false
-	needs_captcha: bool
-	url, ok, _ = krunker_ws_resolve_invite(&link, token, &rejected, host_lobby_test_http, needs_captcha = &needs_captcha, hosting = true, region = "us-nj", host_lobby_region = "sgp")
-	testing.expect(t, ok && strings.contains(url, "gameId=NY%3Anew01"), "a lobby that needs verification falls back to the matchmaker")
-	testing.expect(t, len(g_host_lobby_seeks) == 2 && !strings.contains(g_host_lobby_seeks[1], "&game=") && strings.contains(g_host_lobby_seeks[1], "region=us-nj"), "the fallback asks the matchmaker in the host region")
-	delete(url)
 }
